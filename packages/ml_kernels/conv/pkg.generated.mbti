@@ -4,6 +4,8 @@ package "matrixlt/ml_kernels/conv"
 // Values
 pub fn im2col_2d_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
 
+pub fn im2col_2d_nhwc_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
+
 // Errors
 
 // Types and methods

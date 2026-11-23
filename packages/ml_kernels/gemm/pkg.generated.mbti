@@ -2,6 +2,8 @@
 package "matrixlt/ml_kernels/gemm"
 
 // Values
+pub fn matmul_2d_prepacked_nchw_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float]?, Int32, FixedArray[Float], Int32, Int32) -> Unit
+
 pub fn matmul_2d_prepacked_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float], Int32, Int32) -> Unit
 
 pub fn matmul_2d_scalar_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
@@ -9,6 +11,8 @@ pub fn matmul_2d_scalar_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, 
 pub fn matmul_2d_simd_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
 
 pub fn pack_matrix_b_f32(FixedArray[Float], Int32, Int32, Int32) -> PackedMatrixB
+
+pub fn pack_matrix_b_transposed_f32(FixedArray[Float], Int32, Int32, Int32) -> PackedMatrixB
 
 // Errors
 

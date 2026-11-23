@@ -84,6 +84,44 @@ pub fn pack_matrix_b_f32(
 }
 
 ///|
+/// 将行主序存储的转置矩阵 `B^T[N, K]`（如 `Gemm(trans_b=true)` 或 `Conv` 权重 `[C_out_g, K]`）
+/// 一步转置并打包为 16 字节对齐的 `PackedMatrixB(K, N)`，避免中间转置缓冲区分配。
+pub fn pack_matrix_b_transposed_f32(
+  b_t : FixedArray[Float],
+  b_offset : Int32,
+  n : Int32,
+  k : Int32,
+) -> PackedMatrixB {
+  let n_pad = (n + 3) / 4 * 4
+  let row_bytes = n_pad * 4
+  let packed = FixedArray::make(k * row_bytes, b'\x00')
+  let zero : Float = 0.0
+
+  for p = 0; p < k; p = p + 1 {
+    let dst_row = p * row_bytes
+    let mut j = 0
+    while j + 4 <= n {
+      let v = @v128.f32x4_const(
+        b_t[b_offset + j * k + p],
+        b_t[b_offset + (j + 1) * k + p],
+        b_t[b_offset + (j + 2) * k + p],
+        b_t[b_offset + (j + 3) * k + p],
+      )
+      @v128.v128_store(packed, dst_row + j * 4, v)
+      j = j + 4
+    }
+    if j < n {
+      let f0 = b_t[b_offset + j * k + p]
+      let f1 = if j + 1 < n { b_t[b_offset + (j + 1) * k + p] } else { zero }
+      let f2 = if j + 2 < n { b_t[b_offset + (j + 2) * k + p] } else { zero }
+      let v = @v128.f32x4_const(f0, f1, f2, zero)
+      @v128.v128_store(packed, dst_row + j * 4, v)
+    }
+  }
+  { data: packed, k, n, n_pad, }
+}
+
+///|
 /// 返回预打包矩阵的逻辑维度 `(K, N)`。
 pub fn PackedMatrixB::dims(self : PackedMatrixB) -> (Int32, Int32) {
   (self.k, self.n)
@@ -113,6 +151,119 @@ fn store_v128_clamped(
     if col + 2 < n {
       out[row_off + col + 2] = @v128.f32x4_extract_lane(v, 2)
     }
+  }
+}
+
+///|
+/// 从可选通道偏置数组加载 `[col .. col+4)` 的 V128 初始累加向量（无偏置时返回全 0 向量）。
+fn load_bias_v128(
+  bias : FixedArray[Float]?,
+  bias_offset : Int32,
+  col : Int32,
+  n : Int32,
+) -> V128 {
+  let zero : Float = 0.0
+  match bias {
+    None => @v128.f32x4_splat(zero)
+    Some(b) =>
+      if col + 4 <= n {
+        let base = bias_offset + col
+        @v128.f32x4_const(b[base], b[base + 1], b[base + 2], b[base + 3])
+      } else {
+        let f0 = if col < n { b[bias_offset + col] } else { zero }
+        let f1 = if col + 1 < n { b[bias_offset + col + 1] } else { zero }
+        let f2 = if col + 2 < n { b[bias_offset + col + 2] } else { zero }
+        @v128.f32x4_const(f0, f1, f2, zero)
+      }
+  }
+}
+
+///|
+/// 将 4 个连续空间位置（`row .. row+3`）在 4 个输出通道（`col .. col+3`）上的累加结果
+/// 直接转置写回 NCHW 布局 `out[out_offset + ch * m + row .. +3]`（每通道连续 4 次顺序写入）。
+fn store_v128_4rows_nchw(
+  out : FixedArray[Float],
+  out_offset : Int32,
+  m : Int32,
+  row : Int32,
+  col : Int32,
+  n : Int32,
+  v0 : V128,
+  v1 : V128,
+  v2 : V128,
+  v3 : V128,
+) -> Unit {
+  if col + 4 <= n {
+    let r0 = out_offset + col * m + row
+    out[r0] = @v128.f32x4_extract_lane(v0, 0)
+    out[r0 + 1] = @v128.f32x4_extract_lane(v1, 0)
+    out[r0 + 2] = @v128.f32x4_extract_lane(v2, 0)
+    out[r0 + 3] = @v128.f32x4_extract_lane(v3, 0)
+
+    let r1 = r0 + m
+    out[r1] = @v128.f32x4_extract_lane(v0, 1)
+    out[r1 + 1] = @v128.f32x4_extract_lane(v1, 1)
+    out[r1 + 2] = @v128.f32x4_extract_lane(v2, 1)
+    out[r1 + 3] = @v128.f32x4_extract_lane(v3, 1)
+
+    let r2 = r1 + m
+    out[r2] = @v128.f32x4_extract_lane(v0, 2)
+    out[r2 + 1] = @v128.f32x4_extract_lane(v1, 2)
+    out[r2 + 2] = @v128.f32x4_extract_lane(v2, 2)
+    out[r2 + 3] = @v128.f32x4_extract_lane(v3, 2)
+
+    let r3 = r2 + m
+    out[r3] = @v128.f32x4_extract_lane(v0, 3)
+    out[r3 + 1] = @v128.f32x4_extract_lane(v1, 3)
+    out[r3 + 2] = @v128.f32x4_extract_lane(v2, 3)
+    out[r3 + 3] = @v128.f32x4_extract_lane(v3, 3)
+  } else {
+    if col < n {
+      let r0 = out_offset + col * m + row
+      out[r0] = @v128.f32x4_extract_lane(v0, 0)
+      out[r0 + 1] = @v128.f32x4_extract_lane(v1, 0)
+      out[r0 + 2] = @v128.f32x4_extract_lane(v2, 0)
+      out[r0 + 3] = @v128.f32x4_extract_lane(v3, 0)
+    }
+    if col + 1 < n {
+      let r1 = out_offset + (col + 1) * m + row
+      out[r1] = @v128.f32x4_extract_lane(v0, 1)
+      out[r1 + 1] = @v128.f32x4_extract_lane(v1, 1)
+      out[r1 + 2] = @v128.f32x4_extract_lane(v2, 1)
+      out[r1 + 3] = @v128.f32x4_extract_lane(v3, 1)
+    }
+    if col + 2 < n {
+      let r2 = out_offset + (col + 2) * m + row
+      out[r2] = @v128.f32x4_extract_lane(v0, 2)
+      out[r2 + 1] = @v128.f32x4_extract_lane(v1, 2)
+      out[r2 + 2] = @v128.f32x4_extract_lane(v2, 2)
+      out[r2 + 3] = @v128.f32x4_extract_lane(v3, 2)
+    }
+  }
+}
+
+///|
+/// 将单个空间位置 `row` 在最多 4 个输出通道上的累加结果写回 NCHW 输出缓冲。
+fn store_v128_1row_nchw(
+  out : FixedArray[Float],
+  out_offset : Int32,
+  m : Int32,
+  row : Int32,
+  col : Int32,
+  n : Int32,
+  v : V128,
+) -> Unit {
+  if col < n {
+    out[out_offset + col * m + row] = @v128.f32x4_extract_lane(v, 0)
+  }
+  if col + 1 < n {
+    out[out_offset + (col + 1) * m + row] = @v128.f32x4_extract_lane(v, 1)
+  }
+  if col + 2 < n {
+    out[out_offset + (col + 2) * m + row] = @v128.f32x4_extract_lane(v, 2)
+  }
+  if col + 3 < n {
+    out[out_offset + (col + 3) * m + row] = @v128.f32x4_extract_lane(v, 3)
   }
 }
 
@@ -270,6 +421,163 @@ pub fn matmul_2d_prepacked_simd_f32(
     }
 
     jc = jc + nc
+  }
+}
+
+///|
+/// 面向预打包 2D 卷积的专用 V128 SIMD GEMM 内核：
+/// 计算 `out_nchw[N, M] = (A[M, K] @ packed_b[K, N])^T + bias[N]`，其中：
+/// - `A[M, K]` 为 `im2col_2d_nhwc_f32` 生成的转置感受野矩阵（`M = out_spatial`）；
+/// - `packed_b[K, N]` 为模型加载期一次性预打包的静态卷积权重 `W_g^T[K, C_out_g]`；
+/// - 可选 `bias` 直接融合为 V128 累加器初值，消除独立 bias 加法遍历；
+/// - 结果直接按 NCHW 通道优先顺序写回 `out`，无需中间转置缓冲。
+pub fn matmul_2d_prepacked_nchw_simd_f32(
+  a : FixedArray[Float],
+  a_offset : Int32,
+  packed_b : PackedMatrixB,
+  bias : FixedArray[Float]?,
+  bias_offset : Int32,
+  out : FixedArray[Float],
+  out_offset : Int32,
+  m : Int32,
+) -> Unit {
+  let k = packed_b.k
+  let n = packed_b.n
+  let n_pad = packed_b.n_pad
+  if m == 0 || n == 0 {
+    return
+  }
+  if k == 0 {
+    let zero : Float = 0.0
+    for ch = 0; ch < n; ch = ch + 1 {
+      let bv = match bias {
+        Some(b) => b[bias_offset + ch]
+        None => zero
+      }
+      let ch_base = out_offset + ch * m
+      for i = 0; i < m; i = i + 1 {
+        out[ch_base + i] = bv
+      }
+    }
+    return
+  }
+
+  let b_packed = packed_b.data
+  let b_row_bytes = n_pad * 4
+
+  // 外层按 8 通道面板遍历：bias 加载外提、当前 8 列 B 微面板常驻 L1、同时按通道顺序流式写回 NCHW 输出
+  let mut j = 0
+  while j + 8 <= n_pad {
+    let init0 = load_bias_v128(bias, bias_offset, j, n)
+    let init1 = load_bias_v128(bias, bias_offset, j + 4, n)
+    let b_col_off = j * 4
+
+    let mut i = 0
+    while i + 4 <= m {
+      let a_r0 = a_offset + i * k
+      let a_r1 = a_r0 + k
+      let a_r2 = a_r1 + k
+      let a_r3 = a_r2 + k
+
+      let mut c00 = init0
+      let mut c01 = init1
+      let mut c10 = init0
+      let mut c11 = init1
+      let mut c20 = init0
+      let mut c21 = init1
+      let mut c30 = init0
+      let mut c31 = init1
+
+      let mut b_ptr = b_col_off
+      for p = 0; p < k; p = p + 1 {
+        let bv0 = @v128.v128_load(b_packed, b_ptr)
+        let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
+        let av0 = @v128.f32x4_splat(a[a_r0 + p])
+        let av1 = @v128.f32x4_splat(a[a_r1 + p])
+        let av2 = @v128.f32x4_splat(a[a_r2 + p])
+        let av3 = @v128.f32x4_splat(a[a_r3 + p])
+
+        c00 = @v128.f32x4_relaxed_madd(av0, bv0, c00)
+        c01 = @v128.f32x4_relaxed_madd(av0, bv1, c01)
+        c10 = @v128.f32x4_relaxed_madd(av1, bv0, c10)
+        c11 = @v128.f32x4_relaxed_madd(av1, bv1, c11)
+        c20 = @v128.f32x4_relaxed_madd(av2, bv0, c20)
+        c21 = @v128.f32x4_relaxed_madd(av2, bv1, c21)
+        c30 = @v128.f32x4_relaxed_madd(av3, bv0, c30)
+        c31 = @v128.f32x4_relaxed_madd(av3, bv1, c31)
+        b_ptr = b_ptr + b_row_bytes
+      }
+
+      store_v128_4rows_nchw(out, out_offset, m, i, j, n, c00, c10, c20, c30)
+      store_v128_4rows_nchw(out, out_offset, m, i, j + 4, n, c01, c11, c21, c31)
+      i = i + 4
+    }
+
+    while i < m {
+      let a_r = a_offset + i * k
+      let mut c0 = init0
+      let mut c1 = init1
+      let mut b_ptr = b_col_off
+      for p = 0; p < k; p = p + 1 {
+        let av = @v128.f32x4_splat(a[a_r + p])
+        let bv0 = @v128.v128_load(b_packed, b_ptr)
+        let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
+        c0 = @v128.f32x4_relaxed_madd(av, bv0, c0)
+        c1 = @v128.f32x4_relaxed_madd(av, bv1, c1)
+        b_ptr = b_ptr + b_row_bytes
+      }
+      store_v128_1row_nchw(out, out_offset, m, i, j, n, c0)
+      store_v128_1row_nchw(out, out_offset, m, i, j + 4, n, c1)
+      i = i + 1
+    }
+
+    j = j + 8
+  }
+
+  // 尾部不足 8 通道的 4 通道面板
+  while j + 4 <= n_pad {
+    let init0 = load_bias_v128(bias, bias_offset, j, n)
+    let b_col_off = j * 4
+
+    let mut i = 0
+    while i + 4 <= m {
+      let a_r0 = a_offset + i * k
+      let a_r1 = a_r0 + k
+      let a_r2 = a_r1 + k
+      let a_r3 = a_r2 + k
+
+      let mut c0 = init0
+      let mut c1 = init0
+      let mut c2 = init0
+      let mut c3 = init0
+      let mut b_ptr = b_col_off
+      for p = 0; p < k; p = p + 1 {
+        let bv = @v128.v128_load(b_packed, b_ptr)
+        c0 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r0 + p]), bv, c0)
+        c1 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r1 + p]), bv, c1)
+        c2 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r2 + p]), bv, c2)
+        c3 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r3 + p]), bv, c3)
+        b_ptr = b_ptr + b_row_bytes
+      }
+      store_v128_4rows_nchw(out, out_offset, m, i, j, n, c0, c1, c2, c3)
+      i = i + 4
+    }
+
+    while i < m {
+      let a_r = a_offset + i * k
+      let mut c0 = init0
+      let mut b_ptr = b_col_off
+      for p = 0; p < k; p = p + 1 {
+        let av = @v128.f32x4_splat(a[a_r + p])
+        let bv = @v128.v128_load(b_packed, b_ptr)
+        c0 = @v128.f32x4_relaxed_madd(av, bv, c0)
+        b_ptr = b_ptr + b_row_bytes
+      }
+      store_v128_1row_nchw(out, out_offset, m, i, j, n, c0)
+      i = i + 1
+    }
+
+    j = j + 4
   }
 }
 

@@ -8,6 +8,10 @@ import {
 // Values
 pub fn im2col_2d_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
 
+pub fn im2col_2d_nhwc_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
+
+pub fn matmul_2d_prepacked_nchw_simd_f32(FixedArray[Float], Int32, @gemm.PackedMatrixB, FixedArray[Float]?, Int32, FixedArray[Float], Int32, Int32) -> Unit
+
 pub fn matmul_2d_prepacked_simd_f32(FixedArray[Float], Int32, @gemm.PackedMatrixB, FixedArray[Float], Int32, Int32) -> Unit
 
 pub fn matmul_2d_scalar_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
@@ -17,6 +21,8 @@ pub fn matmul_2d_simd_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Fi
 pub fn pack_f32_to_bytes(FixedArray[Float]) -> FixedArray[Byte]
 
 pub fn pack_matrix_b_f32(FixedArray[Float], Int32, Int32, Int32) -> @gemm.PackedMatrixB
+
+pub fn pack_matrix_b_transposed_f32(FixedArray[Float], Int32, Int32, Int32) -> @gemm.PackedMatrixB
 
 // Errors
 
