@@ -14,6 +14,8 @@ keywords = [ "onnx", "inference", "ml", "simd", "v128", "wasm", "native" ]
 
 preferred_target = "native"
 
+supported_targets = "+all"
+
 description = "Pure-MoonBit cross-platform ONNX inference engine with typed IR, graph optimizations, and V128 SIMD kernels"
 
 import {

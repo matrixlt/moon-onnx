@@ -23,6 +23,8 @@ keywords = [
 
 preferred_target = "native"
 
+supported_targets = "+all"
+
 description = "Format-agnostic typed neural network computation graph IR, topological validator, and graph optimizer for MoonBit"
 
 import {

@@ -14,6 +14,8 @@ keywords = [ "onnx", "protobuf", "parser", "ml", "wasm", "native" ]
 
 preferred_target = "native"
 
+supported_targets = "+all"
+
 description = "Official ONNX Protobuf bindings, pure-memory model loader, TensorProto decoder, and inspector for MoonBit"
 
 import {

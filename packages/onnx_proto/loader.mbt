@@ -247,7 +247,15 @@ pub fn load_model_from_bytes(bytes : Bytes) -> OnnxModel raise ModelError {
   let proto_model = @schema.ModelProto::read(reader) catch {
     e => raise ParseError("failed to decode ONNX ModelProto: \{e}")
   }
+  load_model_from_proto(proto_model)
+}
 
+///|
+/// 从已构造或反序列化的 `@schema.ModelProto` 构建高层 `OnnxModel`。
+/// 便于模型转换工具与单元测试在内存中直接构造模型，无需落盘或手动编码 Protobuf。
+pub fn load_model_from_proto(
+  proto_model : @schema.ModelProto,
+) -> OnnxModel raise ModelError {
   let graph = match proto_model.graph {
     Some(g) => g
     None => raise MissingGraph("ONNX ModelProto does not contain a graph")

@@ -1,3 +1,7 @@
 import {
   "moonbitlang/protobuf" @lib,
 }
+
+options(
+  warnings: "-2",
+)

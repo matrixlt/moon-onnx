@@ -1,104 +1,130 @@
 ///|
-/// 端到端集成测试：在 Scalar 与 V128 SIMD 双后端下验证 MNIST MLP 与 MNIST CNN 均与 ONNX Runtime 严格对齐。
-test "end-to-end MNIST MLP and CNN match ORT on Scalar and V128 SIMD backends" {
-  let backends = [@session.Scalar, @session.Simd]
-  for i = 0; i < backends.length(); i = i + 1 {
-    let backend = backends[i]
-
-    let mlp = @session.Session::from_file(
-      "../../tests/fixtures/mnist_mlp.onnx",
-      backend~,
-    )
-    let mlp_in = @session.load_f32_file(
-      "../../tests/fixtures/mnist_mlp_input.f32",
-      [1, 1, 28, 28],
-    )
-    let mlp_gold = @session.load_f32_file(
-      "../../tests/fixtures/mnist_mlp_golden.f32",
-      [1, 10],
-    )
-    let mlp_out = mlp.run_single(mlp_in)
-    assert_true(
-      @session.max_abs_diff_f32(mlp_out, mlp_gold) <= (1.0e-5 : Float),
-    )
-    let (mlp_pred, _) = mlp_out.argmax_f32()
-    let (mlp_ort, _) = mlp_gold.argmax_f32()
-    assert_eq(mlp_pred, mlp_ort)
-
-    let cnn = @session.Session::from_file(
-      "../../tests/fixtures/mnist_cnn.onnx",
-      backend~,
-    )
-    let cnn_in = @session.load_f32_file(
-      "../../tests/fixtures/mnist_cnn_input.f32",
-      [1, 1, 28, 28],
-    )
-    let cnn_gold = @session.load_f32_file(
-      "../../tests/fixtures/mnist_cnn_golden.f32",
-      [1, 10],
-    )
-    let cnn_out = cnn.run_single(cnn_in)
-    assert_true(
-      @session.max_abs_diff_f32(cnn_out, cnn_gold) <= (1.0e-5 : Float),
-    )
-    let (cnn_pred, _) = cnn_out.argmax_f32()
-    let (cnn_ort, _) = cnn_gold.argmax_f32()
-    assert_eq(cnn_pred, cnn_ort)
+/// 构造纯内存微型 CNN 计算图（`Conv -> Relu -> MaxPool -> Flatten -> MatMul -> Add`），
+/// 用于在无外部文件依赖下完整验证 Scalar/SIMD 对齐、静态权重预打包、`RunProfile` 与 `BufferPool` 100% 复用。
+fn build_mini_cnn_graph() -> @nn_ir.IrGraph raise {
+  let conv_w = @tensor.Tensor::from_f32(
+    [8, 2, 3, 3],
+    FixedArray::makei(8 * 2 * 3 * 3, fn(i) {
+      Float::from_int(i % 13 - 6) * (0.0625 : Float)
+    }),
+  )
+  let conv_b = @tensor.Tensor::from_f32(
+    [8],
+    FixedArray::makei(8, fn(i) { Float::from_int(i - 4) * (0.1 : Float) }),
+  )
+  // 经过 [1, 2, 6, 6] -> Conv(pad=1, 8ch) -> [1, 8, 6, 6] -> MaxPool(2x2, s=2) -> [1, 8, 3, 3] -> Flatten [1, 72]
+  let fc_w = @tensor.Tensor::from_f32(
+    [72, 4],
+    FixedArray::makei(72 * 4, fn(i) {
+      Float::from_int(i % 17 - 8) * (0.03125 : Float)
+    }),
+  )
+  let fc_b = @tensor.Tensor::from_f32_array([4], [0.1, -0.2, 0.3, -0.1])
+  {
+    name: "mini_cnn_in_memory",
+    inputs: ["x"],
+    outputs: ["logits"],
+    initializers: Map([
+      ("conv.w", conv_w),
+      ("conv.b", conv_b),
+      ("fc.w", fc_w),
+      ("fc.b", fc_b),
+    ]),
+    nodes: [
+      {
+        name: "conv1",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([3, 3]),
+          strides=[1, 1],
+          pads=[1, 1, 1, 1],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+        ),
+        inputs: ["x", "conv.w", "conv.b"],
+        outputs: ["c1"],
+      },
+      { name: "relu1", op: @nn_ir.Relu, inputs: ["c1"], outputs: ["r1"], },
+      {
+        name: "pool1",
+        op: @nn_ir.MaxPool(
+          kernel_shape=[2, 2],
+          strides=[2, 2],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          ceil_mode=false,
+          auto_pad=@nn_ir.NotSet,
+        ),
+        inputs: ["r1"],
+        outputs: ["p1"],
+      },
+      {
+        name: "flat1",
+        op: @nn_ir.Flatten(axis=1),
+        inputs: ["p1"],
+        outputs: ["f1"],
+      },
+      {
+        name: "matmul1",
+        op: @nn_ir.MatMul,
+        inputs: ["f1", "fc.w"],
+        outputs: ["mm"],
+      },
+      {
+        name: "add1",
+        op: @nn_ir.Add,
+        inputs: ["mm", "fc.b"],
+        outputs: ["logits"],
+      },
+    ],
   }
 }
 
 ///|
-/// 验证 SIMD 会话自动缓存 MatMul/Gemm/Conv 静态预打包权重、`run_single_profiled` 剖析报告，
-/// 以及连续推理下 `BufferPool` 100% 零未命中复用且不污染先前返回的输出张量。
-test "Session caches PackedMatrixB/PackedConvWeight static weights and achieves 100% BufferPool reuse" {
-  let mlp_simd = @session.Session::from_file(
-    "../../tests/fixtures/mnist_mlp.onnx",
-    backend=@session.Simd,
-  )
-  // MNIST MLP 包含 3 个全连接 Gemm 权重，均应在初始化期预打包
-  assert_eq(mlp_simd.packed_weight_count(), 3)
-  assert_eq(mlp_simd.packed_conv_weight_count(), 0)
+/// 验证微型 CNN 在 Scalar 与 V128 SIMD 后端数值一致、自动预打包 Conv/MatMul 权重，
+/// 并在连续推理中实现 `BufferPool` 100% 复用且不污染历史输出张量。
+test "Session mini-CNN matches Scalar vs Simd, prepacks Conv/MatMul weights, and reuses BufferPool" {
+  let graph = build_mini_cnn_graph()
+  let sess_scalar = @session.Session::from_graph(graph, backend=@session.Scalar)
+  let sess_simd = @session.Session::from_graph(graph, backend=@session.Simd)
 
-  let cnn_simd = @session.Session::from_file(
-    "../../tests/fixtures/mnist_cnn.onnx",
-    backend=@session.Simd,
-  )
-  // MNIST CNN 包含 1 个全连接 MatMul 权重 + 2 个 Conv 静态权重
-  assert_eq(cnn_simd.packed_weight_count(), 3)
-  assert_eq(cnn_simd.packed_conv_weight_count(), 2)
+  // 包含 1 个 Conv 静态权重 + 1 个 MatMul 静态权重
+  assert_eq(sess_simd.packed_weight_count(), 2)
+  assert_eq(sess_simd.packed_conv_weight_count(), 1)
+  assert_eq(sess_scalar.packed_weight_count(), 0)
 
-  let cnn_in = @session.load_f32_file(
-    "../../tests/fixtures/mnist_cnn_input.f32",
-    [1, 1, 28, 28],
+  let inp = @tensor.Tensor::from_f32(
+    [1, 2, 6, 6],
+    FixedArray::makei(2 * 6 * 6, fn(i) {
+      Float::from_int(i % 19 - 9) * (0.125 : Float)
+    }),
   )
-  let cnn_gold = @session.load_f32_file(
-    "../../tests/fixtures/mnist_cnn_golden.f32",
-    [1, 10],
-  )
-  // 第 1 次前向推理：冷启动填充 BufferPool
-  let (out1, profile) = cnn_simd.run_single_profiled(cnn_in)
-  assert_eq(out1.shape(), [1, 10])
-  assert_eq(profile.ops.length(), 9)
+  let ref_out = sess_scalar.run_single(inp)
+  let (out1, profile) = sess_simd.run_single_profiled(inp)
+  assert_eq(out1.shape(), [1, 4])
+  assert_eq(profile.ops.length(), 6)
   assert_true(profile.total_us >= 0.0)
   assert_true(profile.format_table().contains("Conv"))
-  let stats_after_1 = cnn_simd.pool_stats()
+  assert_true(@session.max_abs_diff_f32(out1, ref_out) <= (1.0e-5 : Float))
+
+  let stats_after_1 = sess_simd.pool_stats()
   assert_true(stats_after_1.misses > 0)
   assert_true(stats_after_1.pooled_f32_buffers > 0)
 
-  // 第 2 次前向推理：全部中间张量与 Conv im2col 工作区应 100% 命中 BufferPool（零新增 miss）
-  let out2 = cnn_simd.run_single(cnn_in)
-  let stats_after_2 = cnn_simd.pool_stats()
+  // 第 2 次前向推理：全部中间张量与 im2col 工作区应 100% 命中 BufferPool（零新增 miss）
+  let out2 = sess_simd.run_single(inp)
+  let stats_after_2 = sess_simd.pool_stats()
   assert_eq(stats_after_2.misses, stats_after_1.misses)
   assert_true(stats_after_2.hits > stats_after_1.hits)
 
   // 用全零输入执行第 3 次推理，验证 out1/out2 结果未被后续池复用篡改
-  let zero_in = @tensor.Tensor::zeros_f32([1, 1, 28, 28])
-  let _out3 = cnn_simd.run_single(zero_in)
-  assert_true(@session.max_abs_diff_f32(out1, cnn_gold) <= (1.0e-5 : Float))
-  assert_true(@session.max_abs_diff_f32(out2, cnn_gold) <= (1.0e-5 : Float))
+  let zero_in = @tensor.Tensor::zeros_f32([1, 2, 6, 6])
+  let _out3 = sess_simd.run_single(zero_in)
+  assert_true(@session.max_abs_diff_f32(out1, ref_out) <= (1.0e-5 : Float))
+  assert_true(@session.max_abs_diff_f32(out2, ref_out) <= (1.0e-5 : Float))
 
-  cnn_simd.clear_pool()
-  assert_eq(cnn_simd.pool_stats().pooled_f32_buffers, 0)
+  sess_simd.clear_pool()
+  assert_eq(sess_simd.pool_stats().pooled_f32_buffers, 0)
 }
 
 ///|

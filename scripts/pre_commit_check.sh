@@ -27,6 +27,7 @@ for target in wasm wasm-gc js; do
     -p matrixlt/ml_kernels/conv \
     -p matrixlt/nn_ir \
     -p matrixlt/nn_ir/opt \
+    -p matrixlt/onnx/frontend \
     -p matrixlt/onnx/ops
 done
 

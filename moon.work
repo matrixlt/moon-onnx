@@ -6,4 +6,5 @@ members = [
   "./packages/onnx",
   "./apps/cli",
   "./benchmarks",
+  "./tests",
 ]

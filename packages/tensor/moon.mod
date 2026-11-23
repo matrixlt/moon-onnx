@@ -14,4 +14,6 @@ keywords = [ "tensor", "ndarray", "ml", "inference", "simd", "wasm", "native" ]
 
 preferred_target = "native"
 
+supported_targets = "+all"
+
 description = "Zero-dependency, cross-platform N-dimensional Tensor library for MoonBit inference and numerical computing"

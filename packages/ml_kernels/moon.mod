@@ -24,4 +24,6 @@ keywords = [
 
 preferred_target = "native"
 
+supported_targets = "+all"
+
 description = "Portable pure-MoonBit V128 SIMD GEMM, vecmath, and im2col numerical kernels (zero FFI, 4-target)"
