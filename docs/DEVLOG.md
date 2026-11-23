@@ -124,3 +124,14 @@
 - 将 `gemm_fn` 抽离为回调参数，确保 Phase 3 接入 `V128` SIMD GEMM 时卷积算子自动共享加速能力、零重复逻辑。
 - 实现 `maxpool_2d_f32`、`avgpool_2d_f32`（支持 `ceil_mode` / `count_include_pad`）与推理态 `batch_norm_f32`（每通道预计算等效仿射系数）。
 - 累计 23 项测试全部通过。
+
+---
+
+## 2026-11-23 · Phase 2（Commit 12）：MNIST CNN 端到端对齐 ONNX Runtime
+
+- 在 `src/runtime/session.mbt` 中接入 `Conv`、`MaxPool`、`AveragePool`、`BatchNormalization`，至此 `IrGraph` 的 18 个强类型 `Op` 变体已全部穷尽匹配，无未实现分支。
+- **MNIST CNN（11 节点，对齐 ONNX Model Zoo MNIST-12 结构）端到端差分测试结果**：
+  - 预测类别：`0`（与 ORT 完全一致，logit=`2.5831244`）
+  - 最大绝对误差（`max_abs_diff`）：**`1.1920929e-6`**（远优于 `1e-5` 验收标准）
+  - 累计 24 项测试全部通过。
+- **Phase 2（标量推理闭环与 MNIST 端到端正确性对齐）全部达成。**

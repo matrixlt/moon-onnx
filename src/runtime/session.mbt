@@ -221,10 +221,46 @@ fn eval_node(
         let c = optional_tensor(env, n, ins, 2)
         @ops.gemm_f32(a, b, c, alpha~, beta~, trans_a~, trans_b~)
       }
-      other =>
-        raise UnsupportedOp(
-          "node '\{n}' op '\{other.name()}' is not yet wired into runtime",
+      @ir.Conv(strides~, pads~, dilations~, group~, auto_pad~, ..) => {
+        let x = require_tensor(env, n, ins, 0)
+        let w = require_tensor(env, n, ins, 1)
+        let b = optional_tensor(env, n, ins, 2)
+        @ops.conv2d_f32(x, w, b, strides, pads, dilations, group, auto_pad)
+      }
+      @ir.MaxPool(
+        kernel_shape~,
+        strides~,
+        pads~,
+        dilations~,
+        ceil_mode~,
+        auto_pad~,
+      ) => {
+        let x = require_tensor(env, n, ins, 0)
+        @ops.maxpool_2d_f32(
+          x, kernel_shape, strides, pads, dilations, ceil_mode, auto_pad,
         )
+      }
+      @ir.AveragePool(
+        kernel_shape~,
+        strides~,
+        pads~,
+        ceil_mode~,
+        count_include_pad~,
+        auto_pad~,
+      ) => {
+        let x = require_tensor(env, n, ins, 0)
+        @ops.avgpool_2d_f32(
+          x, kernel_shape, strides, pads, ceil_mode, count_include_pad, auto_pad,
+        )
+      }
+      @ir.BatchNormalization(epsilon~) => {
+        let x = require_tensor(env, n, ins, 0)
+        let scale = require_tensor(env, n, ins, 1)
+        let bias = require_tensor(env, n, ins, 2)
+        let mean = require_tensor(env, n, ins, 3)
+        let variance = require_tensor(env, n, ins, 4)
+        @ops.batch_norm_f32(x, scale, bias, mean, variance, epsilon~)
+      }
     }
   } catch {
     MissingTensor(msg) => raise MissingTensor(msg)
