@@ -1,0 +1,7 @@
+import {
+  "moonbitlang/core/v128",
+}
+
+options(
+  warn_list: "-14",
+)

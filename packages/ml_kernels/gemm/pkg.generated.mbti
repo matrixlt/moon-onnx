@@ -1,0 +1,26 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/ml_kernels/gemm"
+
+// Values
+pub fn matmul_2d_prepacked_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float], Int32, Int32) -> Unit
+
+pub fn matmul_2d_scalar_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
+
+pub fn matmul_2d_simd_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
+
+pub fn pack_matrix_b_f32(FixedArray[Float], Int32, Int32, Int32) -> PackedMatrixB
+
+// Errors
+
+// Types and methods
+pub struct PackedMatrixB {
+  data : FixedArray[Byte]
+  k : Int32
+  n : Int32
+  n_pad : Int32
+}
+pub fn PackedMatrixB::dims(Self) -> (Int32, Int32)
+
+// Type aliases
+
+// Traits

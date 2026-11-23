@@ -1,0 +1,295 @@
+///|
+/// 标量核心矩阵乘法内核：计算 `out[M, N] = a[M, K] @ b[K, N]`（行主序连续缓冲区）。
+/// 采用 `i-k-j` 循环顺序，保证内层循环对 `b` 与 `out` 均为顺序连续访存，
+/// 作为全平台标量回退路径及数值正确性黄金基准。
+pub fn matmul_2d_scalar_f32(
+  a : FixedArray[Float],
+  a_offset : Int32,
+  b : FixedArray[Float],
+  b_offset : Int32,
+  out : FixedArray[Float],
+  out_offset : Int32,
+  m : Int32,
+  k : Int32,
+  n : Int32,
+) -> Unit {
+  let zero : Float = 0.0
+  for i = 0; i < m * n; i = i + 1 {
+    out[out_offset + i] = zero
+  }
+  for i = 0; i < m; i = i + 1 {
+    let a_row = a_offset + i * k
+    let out_row = out_offset + i * n
+    for p = 0; p < k; p = p + 1 {
+      let a_ip = a[a_row + p]
+      if a_ip == zero {
+        continue
+      }
+      let b_row = b_offset + p * n
+      for j = 0; j < n; j = j + 1 {
+        out[out_row + j] = out[out_row + j] + a_ip * b[b_row + j]
+      }
+    }
+  }
+}
+
+///|
+/// 预打包后的右矩阵 `B[K, N]`（按 4 列 / 16 字节对齐存储在小端序 `FixedArray[Byte]` 中）。
+/// 面向推理引擎静态权重场景：模型加载期打包一次，运行期反复复用，彻底消除每次推理的打包拷贝开销。
+pub struct PackedMatrixB {
+  data : FixedArray[Byte]
+  k : Int32
+  n : Int32
+  /// 向上对齐到 4 的倍数的列宽，保证热循环每次 `v128_load` 均无越界分支
+  n_pad : Int32
+}
+
+///|
+/// 将行主序矩阵 `B[K, N]` 打包为 16 字节对齐的 `PackedMatrixB`。
+pub fn pack_matrix_b_f32(
+  b : FixedArray[Float],
+  b_offset : Int32,
+  k : Int32,
+  n : Int32,
+) -> PackedMatrixB {
+  let n_pad = (n + 3) / 4 * 4
+  let row_bytes = n_pad * 4
+  let packed = FixedArray::make(k * row_bytes, b'\x00')
+  let zero : Float = 0.0
+
+  for p = 0; p < k; p = p + 1 {
+    let src_row = b_offset + p * n
+    let dst_row = p * row_bytes
+    let mut j = 0
+    while j + 4 <= n {
+      let v = @v128.f32x4_const(
+        b[src_row + j],
+        b[src_row + j + 1],
+        b[src_row + j + 2],
+        b[src_row + j + 3],
+      )
+      @v128.v128_store(packed, dst_row + j * 4, v)
+      j = j + 4
+    }
+    if j < n {
+      // 尾部不足 4 列的部分以 0.0 补齐至一个完整 V128 向量
+      let f0 = b[src_row + j]
+      let f1 = if j + 1 < n { b[src_row + j + 1] } else { zero }
+      let f2 = if j + 2 < n { b[src_row + j + 2] } else { zero }
+      let v = @v128.f32x4_const(f0, f1, f2, zero)
+      @v128.v128_store(packed, dst_row + j * 4, v)
+    }
+  }
+  { data: packed, k, n, n_pad, }
+}
+
+///|
+/// 返回预打包矩阵的逻辑维度 `(K, N)`。
+pub fn PackedMatrixB::dims(self : PackedMatrixB) -> (Int32, Int32) {
+  (self.k, self.n)
+}
+
+///|
+/// 将单个 V128 累加器写回输出矩阵行 `out[row_off + col ..]`，自动裁剪超过 `n` 的尾部通道。
+fn store_v128_clamped(
+  out : FixedArray[Float],
+  row_off : Int32,
+  col : Int32,
+  n : Int32,
+  v : V128,
+) -> Unit {
+  if col + 4 <= n {
+    out[row_off + col] = @v128.f32x4_extract_lane(v, 0)
+    out[row_off + col + 1] = @v128.f32x4_extract_lane(v, 1)
+    out[row_off + col + 2] = @v128.f32x4_extract_lane(v, 2)
+    out[row_off + col + 3] = @v128.f32x4_extract_lane(v, 3)
+  } else {
+    if col < n {
+      out[row_off + col] = @v128.f32x4_extract_lane(v, 0)
+    }
+    if col + 1 < n {
+      out[row_off + col + 1] = @v128.f32x4_extract_lane(v, 1)
+    }
+    if col + 2 < n {
+      out[row_off + col + 2] = @v128.f32x4_extract_lane(v, 2)
+    }
+  }
+}
+
+///|
+/// 使用已预打包的 `PackedMatrixB` 执行 `NC = 64` 列分块 + `4×8` 寄存器分块 `V128` SIMD GEMM。
+///
+/// 核心微内核设计（参考 BLIS / GotoBLAS）：
+/// - 主循环每步处理 4 行 A × 8 列 B，在寄存器中维护 8 个 `V128` 累加器；
+/// - 每次 K 步进仅需 2 次 `v128_load` + 4 次 `f32x4_splat` 即可完成 8 条 `f32x4_relaxed_madd`
+///   （32 次浮点乘加），整个 K 归约过程中对输出矩阵 C 零写回；
+/// - 自动处理 `4×4` 边列块与 `< 4` 行尾部（典型如 Batch=1 全连接层）。
+pub fn matmul_2d_prepacked_simd_f32(
+  a : FixedArray[Float],
+  a_offset : Int32,
+  packed_b : PackedMatrixB,
+  out : FixedArray[Float],
+  out_offset : Int32,
+  m : Int32,
+) -> Unit {
+  let k = packed_b.k
+  let n = packed_b.n
+  let n_pad = packed_b.n_pad
+  if m == 0 || n == 0 {
+    return
+  }
+  if k == 0 {
+    let zero : Float = 0.0
+    for idx = 0; idx < m * n; idx = idx + 1 {
+      out[out_offset + idx] = zero
+    }
+    return
+  }
+
+  let b_packed = packed_b.data
+  let b_row_bytes = n_pad * 4
+  let zero_vec = @v128.f32x4_splat((0.0 : Float))
+
+  // 列分块宽度 NC = 64（16 个 V128 向量），使当前 B 面板常驻 L1/L2 缓存
+  let nc = 64
+  let mut jc = 0
+  while jc < n_pad {
+    let j_end = if jc + nc < n_pad { jc + nc } else { n_pad }
+
+    // --- 主循环：每次处理 4 行 A ---
+    let mut i = 0
+    while i + 4 <= m {
+      let a_r0 = a_offset + i * k
+      let a_r1 = a_r0 + k
+      let a_r2 = a_r1 + k
+      let a_r3 = a_r2 + k
+      let c_r0 = out_offset + i * n
+      let c_r1 = c_r0 + n
+      let c_r2 = c_r1 + n
+      let c_r3 = c_r2 + n
+
+      let mut j = jc
+      while j + 8 <= j_end {
+        let mut c00 = zero_vec
+        let mut c01 = zero_vec
+        let mut c10 = zero_vec
+        let mut c11 = zero_vec
+        let mut c20 = zero_vec
+        let mut c21 = zero_vec
+        let mut c30 = zero_vec
+        let mut c31 = zero_vec
+
+        let mut b_ptr = j * 4
+        for p = 0; p < k; p = p + 1 {
+          let bv0 = @v128.v128_load(b_packed, b_ptr)
+          let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
+          let av0 = @v128.f32x4_splat(a[a_r0 + p])
+          let av1 = @v128.f32x4_splat(a[a_r1 + p])
+          let av2 = @v128.f32x4_splat(a[a_r2 + p])
+          let av3 = @v128.f32x4_splat(a[a_r3 + p])
+
+          c00 = @v128.f32x4_relaxed_madd(av0, bv0, c00)
+          c01 = @v128.f32x4_relaxed_madd(av0, bv1, c01)
+          c10 = @v128.f32x4_relaxed_madd(av1, bv0, c10)
+          c11 = @v128.f32x4_relaxed_madd(av1, bv1, c11)
+          c20 = @v128.f32x4_relaxed_madd(av2, bv0, c20)
+          c21 = @v128.f32x4_relaxed_madd(av2, bv1, c21)
+          c30 = @v128.f32x4_relaxed_madd(av3, bv0, c30)
+          c31 = @v128.f32x4_relaxed_madd(av3, bv1, c31)
+          b_ptr = b_ptr + b_row_bytes
+        }
+
+        store_v128_clamped(out, c_r0, j, n, c00)
+        store_v128_clamped(out, c_r0, j + 4, n, c01)
+        store_v128_clamped(out, c_r1, j, n, c10)
+        store_v128_clamped(out, c_r1, j + 4, n, c11)
+        store_v128_clamped(out, c_r2, j, n, c20)
+        store_v128_clamped(out, c_r2, j + 4, n, c21)
+        store_v128_clamped(out, c_r3, j, n, c30)
+        store_v128_clamped(out, c_r3, j + 4, n, c31)
+        j = j + 8
+      }
+
+      while j + 4 <= j_end {
+        let mut c0 = zero_vec
+        let mut c1 = zero_vec
+        let mut c2 = zero_vec
+        let mut c3 = zero_vec
+        let mut b_ptr = j * 4
+        for p = 0; p < k; p = p + 1 {
+          let bv = @v128.v128_load(b_packed, b_ptr)
+          c0 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r0 + p]), bv, c0)
+          c1 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r1 + p]), bv, c1)
+          c2 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r2 + p]), bv, c2)
+          c3 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r3 + p]), bv, c3)
+          b_ptr = b_ptr + b_row_bytes
+        }
+        store_v128_clamped(out, c_r0, j, n, c0)
+        store_v128_clamped(out, c_r1, j, n, c1)
+        store_v128_clamped(out, c_r2, j, n, c2)
+        store_v128_clamped(out, c_r3, j, n, c3)
+        j = j + 4
+      }
+      i = i + 4
+    }
+
+    // --- 尾部不足 4 行的剩余行（典型如 Batch=1 全连接层）---
+    while i < m {
+      let a_r = a_offset + i * k
+      let c_r = out_offset + i * n
+      let mut j = jc
+      while j + 8 <= j_end {
+        let mut c0 = zero_vec
+        let mut c1 = zero_vec
+        let mut b_ptr = j * 4
+        for p = 0; p < k; p = p + 1 {
+          let av = @v128.f32x4_splat(a[a_r + p])
+          let bv0 = @v128.v128_load(b_packed, b_ptr)
+          let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
+          c0 = @v128.f32x4_relaxed_madd(av, bv0, c0)
+          c1 = @v128.f32x4_relaxed_madd(av, bv1, c1)
+          b_ptr = b_ptr + b_row_bytes
+        }
+        store_v128_clamped(out, c_r, j, n, c0)
+        store_v128_clamped(out, c_r, j + 4, n, c1)
+        j = j + 8
+      }
+      while j + 4 <= j_end {
+        let mut c0 = zero_vec
+        let mut b_ptr = j * 4
+        for p = 0; p < k; p = p + 1 {
+          let av = @v128.f32x4_splat(a[a_r + p])
+          let bv = @v128.v128_load(b_packed, b_ptr)
+          c0 = @v128.f32x4_relaxed_madd(av, bv, c0)
+          b_ptr = b_ptr + b_row_bytes
+        }
+        store_v128_clamped(out, c_r, j, n, c0)
+        j = j + 4
+      }
+      i = i + 1
+    }
+
+    jc = jc + nc
+  }
+}
+
+///|
+/// 即时打包版 `V128` SIMD 矩阵乘法：`out[M, N] = a[M, K] @ b[K, N]`。
+/// 适用于动态矩阵 B（如卷积 `im2col` 展开后的临时矩阵或 Attention Q@K^T）。
+pub fn matmul_2d_simd_f32(
+  a : FixedArray[Float],
+  a_offset : Int32,
+  b : FixedArray[Float],
+  b_offset : Int32,
+  out : FixedArray[Float],
+  out_offset : Int32,
+  m : Int32,
+  k : Int32,
+  n : Int32,
+) -> Unit {
+  if m == 0 || n == 0 {
+    return
+  }
+  let packed_b = pack_matrix_b_f32(b, b_offset, k, n)
+  matmul_2d_prepacked_simd_f32(a, a_offset, packed_b, out, out_offset, m)
+}

@@ -1,16 +1,16 @@
-# MoonBit build & cache artifacts
-/_build
-/target
-/.mooncakes
+# MoonBit build & cache artifacts (root and nested workspace members)
+_build/
+target/
+.mooncakes/
 *.mi
 *.core
 
 # Python virtualenv & caches
-/.venv
+.venv/
 __pycache__/
 *.pyc
 
 # Generated test outputs & temp files
-/tmp/
+tmp/
 *.tmp
 .DS_Store

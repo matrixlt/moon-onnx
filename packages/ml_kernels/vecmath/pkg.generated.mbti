@@ -1,0 +1,31 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/ml_kernels/vecmath"
+
+// Values
+pub fn add_bytes_v128(FixedArray[Byte], FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
+
+pub fn add_f32_v128(FixedArray[Float], FixedArray[Float], FixedArray[Float], Int32) -> Unit
+
+pub fn mul_bytes_v128(FixedArray[Byte], FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
+
+pub fn mul_f32_v128(FixedArray[Float], FixedArray[Float], FixedArray[Float], Int32) -> Unit
+
+pub fn pack_f32_to_bytes(FixedArray[Float]) -> FixedArray[Byte]
+
+pub fn relu_bytes_v128(FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
+
+pub fn relu_f32_v128(FixedArray[Float], FixedArray[Float], Int32) -> Unit
+
+pub fn sub_bytes_v128(FixedArray[Byte], FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
+
+pub fn sub_f32_v128(FixedArray[Float], FixedArray[Float], FixedArray[Float], Int32) -> Unit
+
+pub fn unpack_bytes_to_f32(FixedArray[Byte], Int32) -> FixedArray[Float]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
