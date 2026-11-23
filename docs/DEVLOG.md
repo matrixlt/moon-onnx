@@ -104,3 +104,14 @@
 - 实现缓存友好型 `i-k-j` 循环顺序的 `matmul_2d_raw_f32` 内核，抽离为独立可替换的原始矩阵乘接口，便于 Phase 3 直接对比与接入 `V128` 分块 SIMD 内核。
 - 实现完整 ONNX `gemm_f32`（支持 `transA`、`transB`、`alpha`、`beta` 及可选偏置 `C` 广播）与 `matmul_f32`（支持 2D、1D 向量点积与任意高维 Batch 广播）。
 - 累计 19 项测试全部通过。
+
+---
+
+## 2026-11-23 · Phase 2（Commit 10）：实现 `Session` 执行引擎并跑通 MNIST MLP 端到端对齐
+
+- 新增 `src/runtime`：`Session`（支持 `from_file` / `from_bytes` / `from_model` / `from_graph`）、`BackendKind`（`Scalar` / `Simd`）、`.f32` 原始张量加载器与 `max_abs_diff_f32` 数值校验器。
+- 扩展 Native CLI `src/cli`：新增 `run <model.onnx> <input.f32> [golden.f32] [--backend=scalar|simd]` 子命令。
+- **首个真实模型端到端验证结果（`mnist_mlp.onnx` vs ONNX Runtime 1.32.0）**：
+  - 预测类别：`9`（与 ORT 完全一致，概率 `0.495124`）
+  - 最大绝对误差（`max_abs_diff`）：**`1.1920929e-7`**（达到单精度浮点 1 ULP 精度）
+  - 累计 20 项测试全部通过。

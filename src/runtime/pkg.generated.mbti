@@ -1,0 +1,50 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "local/moon_onnx/src/runtime"
+
+import {
+  "local/moon_onnx/src/ir",
+  "local/moon_onnx/src/model",
+  "local/moon_onnx/src/tensor",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn load_f32_file(String, Array[Int32]) -> @tensor.Tensor raise RuntimeError
+
+pub fn max_abs_diff_f32(@tensor.Tensor, @tensor.Tensor) -> Float raise RuntimeError
+
+// Errors
+#derive(Eq, @debug.Debug)
+pub(all) suberror RuntimeError {
+  ModelErr(String)
+  IrErr(String)
+  TensorErr(String)
+  MissingTensor(String)
+  UnsupportedOp(String)
+}
+pub impl Show for RuntimeError
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) enum BackendKind {
+  Scalar
+  Simd
+}
+pub impl Show for BackendKind
+
+pub struct Session {
+  graph : @ir.IrGraph
+  backend : BackendKind
+}
+pub fn Session::backend(Self) -> BackendKind
+pub fn Session::from_bytes(Bytes, backend? : BackendKind) -> Self raise RuntimeError
+pub fn Session::from_file(String, backend? : BackendKind) -> Self raise RuntimeError
+pub fn Session::from_graph(@ir.IrGraph, backend? : BackendKind) -> Self
+pub fn Session::from_model(@model.OnnxModel, backend? : BackendKind) -> Self raise RuntimeError
+pub fn Session::graph(Self) -> @ir.IrGraph
+pub fn Session::run(Self, Map[String, @tensor.Tensor]) -> Map[String, @tensor.Tensor] raise RuntimeError
+pub fn Session::run_single(Self, @tensor.Tensor) -> @tensor.Tensor raise RuntimeError
+
+// Type aliases
+
+// Traits
