@@ -10,6 +10,12 @@ pub fn add_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.T
 
 pub fn flatten_op(@tensor.Tensor, axis? : Int32) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn gemm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, alpha? : Float, beta? : Float, trans_a? : Bool, trans_b? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn matmul_2d_raw_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
+
+pub fn matmul_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn mul_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn relu_f32(@tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError

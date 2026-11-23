@@ -96,3 +96,11 @@
 - 实现 `reshape_op`（解析 Int64 形状张量，支持非连续输入自动连续化）、`flatten_op`、`transpose_op`（空 `perm` 按 ONNX 规范默认反转全部维度）。
 - 实现 `squeeze_op` / `unsqueeze_op`，同时兼容 Opset < 13（属性传轴）与 Opset >= 13（第二输入张量传轴）。
 - 累计 17 项测试全部通过。
+
+---
+
+## 2026-11-23 · Phase 2（Commit 9）：实现 `MatMul` 与 `Gemm` 标量内核（`src/ops/linalg.mbt`）
+
+- 实现缓存友好型 `i-k-j` 循环顺序的 `matmul_2d_raw_f32` 内核，抽离为独立可替换的原始矩阵乘接口，便于 Phase 3 直接对比与接入 `V128` 分块 SIMD 内核。
+- 实现完整 ONNX `gemm_f32`（支持 `transA`、`transB`、`alpha`、`beta` 及可选偏置 `C` 广播）与 `matmul_f32`（支持 2D、1D 向量点积与任意高维 Batch 广播）。
+- 累计 19 项测试全部通过。
