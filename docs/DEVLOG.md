@@ -40,3 +40,12 @@
 
 - **问题**：默认参数运行 `protoc-gen-mbt@0.3.0` 时，插件会开启 `json=true`，对 `onnx.proto` 中两处 `repeated bytes` 字段（`AttributeProto.strings` 与 `TensorProto.string_data`）生成了 `@lib.base64_encode(Array[Bytes])`，触发 MoonBit 编译错误（`base64_encode` 期望单个 `Bytes`）。
 - **解决**：ONNX 模型解析仅依赖二进制 Protobuf，在 `--mbt_opt` 中显式指定 `json=false`，同时在生成脚本中移除多余的 `moonbitlang/core/json` 导入。重新生成后 `moon check --target native` 与 `moon test --target native` 0 错误通过。
+
+---
+
+## 2026-11-23 · Phase 1（Commit 3）：实现核心张量模块 `src/tensor`
+
+- 实现 `Tensor` 视图模型（`data` + `offset` + `shape` + `strides` + `dtype`）与非装箱 `FixedArray` 存储（`Float32`/`Float64`/`Int64`/`Int32`/`Bool`）。
+- 实现行主序步长计算、多维/线性下标映射、NumPy/ONNX 多向广播形状与虚拟步长（步长置 0 零拷贝广播）。
+- 实现 `contiguous`、`reshape`（支持 ONNX `-1` 自动推导与 `0` 复制维度）、`transpose`（零拷贝）、`flatten`、`squeeze`、`unsqueeze`、`argmax_f32` 与 `summary`。
+- 遵循 MoonBit 0.10.22 规范采用 `derive(Debug, Eq)` + 显式 `Show` 实现，消除全部废弃 API 警告；`src/tensor` 6 项核心单元测试全部通过。
