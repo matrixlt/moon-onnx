@@ -1,0 +1,25 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "local/moon_onnx/src/ops"
+
+import {
+  "local/moon_onnx/src/tensor",
+}
+
+// Values
+pub fn add_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn mul_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn relu_f32(@tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn softmax_f32(@tensor.Tensor, Int32) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn sub_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

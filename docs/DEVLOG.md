@@ -80,3 +80,11 @@
 - 实现 `lower_model`：解析 ONNX 动态 `AttributeProto`（兼容 `Softmax` 在 Opset < 13 / >= 13 的默认轴差异与 `auto_pad` 枚举），自动检测缺失输入引用。
 - 实现稳定 Kahn 拓扑排序 `topo_sort_nodes` 与环路检测（`CyclicGraph`）。
 - 通过真实 `mnist_mlp.onnx` 与 `mnist_cnn.onnx` Lowering 测试、乱序重排测试与环检测测试（累计 12 项测试全部通过）。
+
+---
+
+## 2026-11-23 · Phase 2（Commit 7）：实现逐元素、多向广播与激活算子（`src/ops/elementwise.mbt`）
+
+- 实现 `add_f32`、`sub_f32`、`mul_f32`：覆盖同形状连续快速路径、2D+1D 偏置快速路径与基于虚拟广播步长的任意阶 NumPy/ONNX 多向广播通用路径。
+- 实现 `relu_f32` 与数值稳定版 `softmax_f32`（支持任意正负轴，先减最大值并在 `Double` 精度累计指数和避免溢出错差）。
+- 新增单元测试覆盖 4D+3D CNN 通道偏置广播、2D+1D 偏置广播与大数值 Softmax 稳定性（累计 15 项测试全部通过）。
