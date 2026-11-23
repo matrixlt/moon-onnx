@@ -71,3 +71,12 @@
 - 实现 Native CLI `src/cli`（采用 `moonbitlang/core/env` 替代旧版 `x/sys` 保持 0 警告）。
 - 实测 `moon run src/cli --target native -- inspect` 成功解析两份真实 `.onnx` 文件，准确还原 IR Version、Opset 17、输入输出签名、全部 `raw_data` 权重张量形状与节点连接拓扑。
 - **Phase 1（ONNX 模型解析与检视器）全部达成。**
+
+---
+
+## 2026-11-23 · Phase 2（Commit 6）：强类型计算图 IR 与拓扑排序（`src/ir`）
+
+- 定义强类型算子 ADT `Op`（覆盖 MNIST MLP/CNN 及常用视觉算子共 18 种）与结构化错误 `IrError`。
+- 实现 `lower_model`：解析 ONNX 动态 `AttributeProto`（兼容 `Softmax` 在 Opset < 13 / >= 13 的默认轴差异与 `auto_pad` 枚举），自动检测缺失输入引用。
+- 实现稳定 Kahn 拓扑排序 `topo_sort_nodes` 与环路检测（`CyclicGraph`）。
+- 通过真实 `mnist_mlp.onnx` 与 `mnist_cnn.onnx` Lowering 测试、乱序重排测试与环检测测试（累计 12 项测试全部通过）。

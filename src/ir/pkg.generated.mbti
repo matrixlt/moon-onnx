@@ -1,0 +1,74 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "local/moon_onnx/src/ir"
+
+import {
+  "local/moon_onnx/src/model",
+  "local/moon_onnx/src/tensor",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn lower_model(@model.OnnxModel) -> IrGraph raise IrError
+
+pub fn topo_sort_nodes(Array[IrNode], Array[String], Map[String, @tensor.Tensor]) -> Array[IrNode] raise IrError
+
+// Errors
+#derive(Eq, @debug.Debug)
+pub(all) suberror IrError {
+  UnsupportedOp(String)
+  InvalidAttribute(String)
+  MissingInput(String)
+  CyclicGraph(String)
+  InvalidGraph(String)
+}
+pub impl Show for IrError
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) enum AutoPad {
+  NotSet
+  SameUpper
+  SameLower
+  Valid
+}
+
+pub(all) struct IrGraph {
+  name : String
+  inputs : Array[String]
+  outputs : Array[String]
+  initializers : Map[String, @tensor.Tensor]
+  nodes : Array[IrNode]
+}
+
+pub(all) struct IrNode {
+  name : String
+  op : Op
+  inputs : Array[String]
+  outputs : Array[String]
+}
+
+pub(all) enum Op {
+  Add
+  Sub
+  Mul
+  Relu
+  Identity
+  Softmax(axis~ : Int32)
+  Flatten(axis~ : Int32)
+  Reshape(allowzero~ : Bool)
+  Transpose(perm~ : Array[Int32])
+  Squeeze(axes~ : Array[Int32]?)
+  Unsqueeze(axes~ : Array[Int32]?)
+  Constant(value~ : @tensor.Tensor)
+  MatMul
+  Gemm(alpha~ : Float, beta~ : Float, trans_a~ : Bool, trans_b~ : Bool)
+  Conv(kernel_shape~ : Array[Int32]?, strides~ : Array[Int32], pads~ : Array[Int32], dilations~ : Array[Int32], group~ : Int32, auto_pad~ : AutoPad)
+  MaxPool(kernel_shape~ : Array[Int32], strides~ : Array[Int32], pads~ : Array[Int32], dilations~ : Array[Int32], ceil_mode~ : Bool, auto_pad~ : AutoPad)
+  AveragePool(kernel_shape~ : Array[Int32], strides~ : Array[Int32], pads~ : Array[Int32], ceil_mode~ : Bool, count_include_pad~ : Bool, auto_pad~ : AutoPad)
+  BatchNormalization(epsilon~ : Float)
+}
+pub fn Op::name(Self) -> String
+
+// Type aliases
+
+// Traits
