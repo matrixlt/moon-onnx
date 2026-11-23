@@ -135,3 +135,15 @@
   - 最大绝对误差（`max_abs_diff`）：**`1.1920929e-6`**（远优于 `1e-5` 验收标准）
   - 累计 24 项测试全部通过。
 - **Phase 2（标量推理闭环与 MNIST 端到端正确性对齐）全部达成。**
+
+---
+
+## 2026-11-23 · Phase 3（Commit 13）：实现图优化 Pass 管线（`src/opt`）
+
+- 新增 `src/opt/optimize.mbt`，实现 5 个确定性图优化 Pass：
+  1. **Constant Lifting**：将 `Constant` 节点静态张量直接提升为 Initializer。
+  2. **Identity Elimination**：重写下游张量别名并剔除冗余 `Identity` 节点。
+  3. **Conv + BatchNormalization 静态折叠**：在 `Double` 精度下将推理态 BN 参数合并入卷积核与偏置，单测验证与未融合结果误差 `< 1e-5`。
+  4. **Conv + 通道偏置 Add 折叠**：针对 ONNX Model Zoo MNIST 常见导出形态，将 `Conv(x, W) -> Add(c, bias[C_out, 1, 1])` 合并为带偏置单节点 `Conv`，使 `mnist_cnn.onnx` 从 **11 节点缩减为 9 节点**。
+  5. **Dead Code Elimination (DCE)**：基于拓扑序反向标记消除不可达死节点。
+- 将 `optimize_graph` 默认接入 `Session`（提供 `optimize? : Bool = true` 开关），优化后 `mnist_cnn.onnx` 依然与 ONNX Runtime 保持完全一致（累计 27 项测试全部通过）。

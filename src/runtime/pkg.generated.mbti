@@ -37,10 +37,10 @@ pub struct Session {
   backend : BackendKind
 }
 pub fn Session::backend(Self) -> BackendKind
-pub fn Session::from_bytes(Bytes, backend? : BackendKind) -> Self raise RuntimeError
-pub fn Session::from_file(String, backend? : BackendKind) -> Self raise RuntimeError
+pub fn Session::from_bytes(Bytes, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
+pub fn Session::from_file(String, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::from_graph(@ir.IrGraph, backend? : BackendKind) -> Self
-pub fn Session::from_model(@model.OnnxModel, backend? : BackendKind) -> Self raise RuntimeError
+pub fn Session::from_model(@model.OnnxModel, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::graph(Self) -> @ir.IrGraph
 pub fn Session::run(Self, Map[String, @tensor.Tensor]) -> Map[String, @tensor.Tensor] raise RuntimeError
 pub fn Session::run_single(Self, @tensor.Tensor) -> @tensor.Tensor raise RuntimeError

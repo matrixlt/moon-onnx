@@ -53,12 +53,19 @@ pub struct Session {
 }
 
 ///|
-/// 从已解析的 OnnxModel 构建推理会话。
+/// 从已解析的 OnnxModel 构建推理会话（默认启用图优化 Pass）。
 pub fn Session::from_model(
   m : @model.OnnxModel,
   backend~ : BackendKind = Scalar,
+  optimize~ : Bool = true,
 ) -> Session raise RuntimeError {
-  let graph = @ir.lower_model(m) catch { e => raise IrErr("\{e}") }
+  let raw_graph = @ir.lower_model(m) catch { e => raise IrErr("\{e}") }
+  let graph = if optimize {
+    let (opt_g, _) = @opt.optimize_graph(raw_graph)
+    opt_g
+  } else {
+    raw_graph
+  }
   { graph, backend, }
 }
 
@@ -67,11 +74,12 @@ pub fn Session::from_model(
 pub fn Session::from_bytes(
   bytes : Bytes,
   backend~ : BackendKind = Scalar,
+  optimize~ : Bool = true,
 ) -> Session raise RuntimeError {
   let m = @model.load_model_from_bytes(bytes) catch {
     e => raise ModelErr("\{e}")
   }
-  Session::from_model(m, backend~)
+  Session::from_model(m, backend~, optimize~)
 }
 
 ///|
@@ -79,11 +87,12 @@ pub fn Session::from_bytes(
 pub fn Session::from_file(
   path : String,
   backend~ : BackendKind = Scalar,
+  optimize~ : Bool = true,
 ) -> Session raise RuntimeError {
   let m = @model.load_model_from_file(path) catch {
     e => raise ModelErr("\{e}")
   }
-  Session::from_model(m, backend~)
+  Session::from_model(m, backend~, optimize~)
 }
 
 ///|

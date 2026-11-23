@@ -3,5 +3,6 @@ import {
   "local/moon_onnx/src/tensor",
   "local/moon_onnx/src/model",
   "local/moon_onnx/src/ir",
+  "local/moon_onnx/src/opt",
   "local/moon_onnx/src/ops",
 }
