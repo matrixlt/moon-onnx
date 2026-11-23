@@ -1,0 +1,7 @@
+import {
+  "moonbitlang/core/env",
+  "local/moon_onnx" @engine,
+  "local/moon_onnx/src/model",
+}
+
+pkgtype(kind: "executable")

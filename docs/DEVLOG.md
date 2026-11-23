@@ -60,3 +60,14 @@
   - 自动回退支持 `float_data` / `double_data` / `int64_data` / `int32_data` 等类型化 repeated 字段。
 - 自动过滤旧版 ONNX 导出模型中重复出现在 `graph.input` 中的 Initializer 项。
 - 提供 `OnnxModel::format_summary()` 人类可读模型摘要输出；完成 `TensorProto` 解码及 `ModelProto` 二进制序列化/反序列化闭环测试（累计 9 项测试全部通过，自写代码 0 警告）。
+
+---
+
+## 2026-11-23 · Phase 1（Commit 5）：Native CLI `inspect` 与 MNIST Fixture 验证
+
+- 新增 `scripts/gen_mnist_fixtures.py`，利用 Python `onnx` + `onnxruntime` 生成两套通过 `onnx.checker` 严格校验的真实模型及黄金参考数据：
+  - `tests/fixtures/mnist_mlp.onnx`（211 KB，52,650 参数，7 节点：Flatten / Gemm / Relu / Softmax）
+  - `tests/fixtures/mnist_cnn.onnx`（24.8 KB，5,996 参数，11 节点：对齐 ONNX Model Zoo MNIST-12 的双层 Conv / Add / Relu / MaxPool / Reshape / MatMul / Add）
+- 实现 Native CLI `src/cli`（采用 `moonbitlang/core/env` 替代旧版 `x/sys` 保持 0 警告）。
+- 实测 `moon run src/cli --target native -- inspect` 成功解析两份真实 `.onnx` 文件，准确还原 IR Version、Opset 17、输入输出签名、全部 `raw_data` 权重张量形状与节点连接拓扑。
+- **Phase 1（ONNX 模型解析与检视器）全部达成。**
