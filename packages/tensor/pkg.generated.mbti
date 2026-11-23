@@ -33,6 +33,21 @@ pub(all) suberror TensorError {
 pub impl Show for TensorError
 
 // Types and methods
+pub struct BufferPool {
+  f32_buckets : Map[Int32, Array[FixedArray[Float]]]
+  byte_buckets : Map[Int32, Array[FixedArray[Byte]]]
+  mut hits : Int32
+  mut misses : Int32
+  max_per_bucket : Int32
+}
+pub fn BufferPool::acquire_bytes(Self, Int32) -> FixedArray[Byte]
+pub fn BufferPool::acquire_f32(Self, Int32) -> FixedArray[Float]
+pub fn BufferPool::clear(Self) -> Unit
+pub fn BufferPool::new(max_per_bucket? : Int32) -> Self
+pub fn BufferPool::release_bytes(Self, FixedArray[Byte]) -> Unit
+pub fn BufferPool::release_f32(Self, FixedArray[Float]) -> Unit
+pub fn BufferPool::stats(Self) -> PoolStats
+
 #derive(Eq, @debug.Debug)
 pub(all) enum DType {
   Float32
@@ -44,6 +59,34 @@ pub(all) enum DType {
 pub fn DType::byte_size(Self) -> Int32
 pub fn DType::short_name(Self) -> String
 pub impl Show for DType
+
+#derive(Eq, @debug.Debug)
+pub(all) struct PoolStats {
+  hits : Int32
+  misses : Int32
+  pooled_f32_buffers : Int32
+  pooled_byte_buffers : Int32
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum SymDim {
+  Static(Int32)
+  Sym(String)
+  Unknown
+}
+pub fn SymDim::resolve(Self, Map[String, Int32]) -> Int32?
+pub fn SymDim::to_label(Self) -> String
+
+#derive(Eq, @debug.Debug)
+pub struct SymShape {
+  dims : Array[SymDim]
+}
+pub fn SymShape::format(Self) -> String
+pub fn SymShape::from_dims(Array[SymDim]) -> Self
+pub fn SymShape::from_static(Array[Int32]) -> Self
+pub fn SymShape::is_fully_static(Self) -> Bool
+pub fn SymShape::rank(Self) -> Int32
+pub fn SymShape::resolve(Self, Map[String, Int32]) -> Array[Int32] raise TensorError
 
 pub struct Tensor {
   data : TensorData
@@ -60,6 +103,7 @@ pub fn Tensor::flatten(Self, axis? : Int32) -> Self raise TensorError
 pub fn Tensor::from_bool(Array[Int32], FixedArray[Bool]) -> Self raise TensorError
 pub fn Tensor::from_f32(Array[Int32], FixedArray[Float]) -> Self raise TensorError
 pub fn Tensor::from_f32_array(Array[Int32], Array[Float]) -> Self raise TensorError
+pub fn Tensor::from_f32_bytes_le(Array[Int32], Bytes) -> Self raise TensorError
 pub fn Tensor::from_f64(Array[Int32], FixedArray[Double]) -> Self raise TensorError
 pub fn Tensor::from_i32(Array[Int32], FixedArray[Int32]) -> Self raise TensorError
 pub fn Tensor::from_i64(Array[Int32], FixedArray[Int64]) -> Self raise TensorError
@@ -77,6 +121,7 @@ pub fn Tensor::squeeze(Self, Array[Int32]?) -> Self raise TensorError
 pub fn Tensor::strides(Self) -> Array[Int32]
 pub fn Tensor::summary(Self) -> String
 pub fn Tensor::to_f32_buffer(Self) -> FixedArray[Float] raise TensorError
+pub fn Tensor::to_f32_bytes_le(Self) -> FixedArray[Byte] raise TensorError
 pub fn Tensor::to_i64_buffer(Self) -> FixedArray[Int64] raise TensorError
 pub fn Tensor::transpose(Self, Array[Int32]) -> Self raise TensorError
 pub fn Tensor::unsqueeze(Self, Array[Int32]) -> Self raise TensorError
