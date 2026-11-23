@@ -115,3 +115,12 @@
   - 预测类别：`9`（与 ORT 完全一致，概率 `0.495124`）
   - 最大绝对误差（`max_abs_diff`）：**`1.1920929e-7`**（达到单精度浮点 1 ULP 精度）
   - 累计 20 项测试全部通过。
+
+---
+
+## 2026-11-23 · Phase 2（Commit 11）：实现 `Conv2D`、`MaxPool`、`AveragePool` 与 `BatchNormalization`（`src/ops/nn.mbt`）
+
+- 实现基于 `im2col + 可插拔 GEMM` 的 2D 卷积 `conv2d_f32_with_gemm` / `conv2d_f32`，支持 `strides`、`pads`、`dilations`、`group`（含分组与深度可分离卷积）、`auto_pad`（`NOTSET`/`VALID`/`SAME_UPPER`/`SAME_LOWER`）以及可选偏置 `B`。
+- 将 `gemm_fn` 抽离为回调参数，确保 Phase 3 接入 `V128` SIMD GEMM 时卷积算子自动共享加速能力、零重复逻辑。
+- 实现 `maxpool_2d_f32`、`avgpool_2d_f32`（支持 `ceil_mode` / `count_include_pad`）与推理态 `batch_norm_f32`（每通道预计算等效仿射系数）。
+- 累计 23 项测试全部通过。
