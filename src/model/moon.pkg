@@ -1,0 +1,10 @@
+import {
+  "moonbitlang/protobuf",
+  "moonbitlang/x/fs",
+  "local/moon_onnx/src/proto_gen" @proto,
+  "local/moon_onnx/src/tensor",
+}
+
+import {
+  "local/moon_onnx/src/proto_gen",
+} for "test"

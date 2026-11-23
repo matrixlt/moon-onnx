@@ -49,7 +49,7 @@ pub impl Show for DType with fn output(self, logger) {
 ///|
 /// 将整数形状数组格式化为 `[d0, d1, ...]` 字符串，供日志、摘要与错误信息使用。
 pub fn format_shape(shape : Array[Int32]) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   buf.write_char('[')
   for i = 0; i < shape.length(); i = i + 1 {
     if i > 0 {

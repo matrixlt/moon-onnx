@@ -49,3 +49,14 @@
 - 实现行主序步长计算、多维/线性下标映射、NumPy/ONNX 多向广播形状与虚拟步长（步长置 0 零拷贝广播）。
 - 实现 `contiguous`、`reshape`（支持 ONNX `-1` 自动推导与 `0` 复制维度）、`transpose`（零拷贝）、`flatten`、`squeeze`、`unsqueeze`、`argmax_f32` 与 `summary`。
 - 遵循 MoonBit 0.10.22 规范采用 `derive(Debug, Eq)` + 显式 `Show` 实现，消除全部废弃 API 警告；`src/tensor` 6 项核心单元测试全部通过。
+
+---
+
+## 2026-11-23 · Phase 1（Commit 4）：实现 ONNX 模型加载器与 `TensorProto` 权重解码（`src/model`）
+
+- 封装 `src/proto_gen`，实现跨平台 `load_model_from_bytes`（纯内存解析，Wasm/JS/Native 通用）与 Native 端 `load_model_from_file`。
+- 实现 `decode_tensor_proto`：
+  - 优先解码小端序 `raw_data` 二进制权重（通过 `Float::reinterpret_from_uint` 与 `UInt64::reinterpret_as_double` 零拷贝位重解释）。
+  - 自动回退支持 `float_data` / `double_data` / `int64_data` / `int32_data` 等类型化 repeated 字段。
+- 自动过滤旧版 ONNX 导出模型中重复出现在 `graph.input` 中的 Initializer 项。
+- 提供 `OnnxModel::format_summary()` 人类可读模型摘要输出；完成 `TensorProto` 解码及 `ModelProto` 二进制序列化/反序列化闭环测试（累计 9 项测试全部通过，自写代码 0 警告）。
