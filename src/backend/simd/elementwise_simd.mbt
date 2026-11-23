@@ -104,7 +104,8 @@ pub fn relu_bytes_v128(
   while i + 4 <= count {
     let off = i * 4
     let v = @v128.v128_load(src, off)
-    @v128.v128_store(out, off, @v128.f32x4_max(v, zero_vec))
+    // 使用 f32x4_pmax(0.0, v) 直接映射硬件 MAXPS/FMAX，避免 f32x4_max 的 IEEE NaN 分支回退开销
+    @v128.v128_store(out, off, @v128.f32x4_pmax(zero_vec, v))
     i = i + 4
   }
   let zero : Float = 0.0
@@ -264,7 +265,7 @@ pub fn relu_f32_simd(
   let mut i = 0
   while i + 4 <= n {
     let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
-    let vr = @v128.f32x4_max(vx, zero_vec)
+    let vr = @v128.f32x4_pmax(zero_vec, vx)
     out[i] = @v128.f32x4_extract_lane(vr, 0)
     out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
     out[i + 2] = @v128.f32x4_extract_lane(vr, 2)

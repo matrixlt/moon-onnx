@@ -171,3 +171,41 @@
   - `mnist_mlp.onnx`：`max_abs_diff = 1.1920929e-7`（PASS）
   - `mnist_cnn.onnx`：`max_abs_diff = 1.1920929e-6`（PASS）
   - 累计 32 项测试全部通过。
+
+---
+
+## 2026-11-23 · Phase 3（Commit 16）：性能基准测试、二次调优与四端跨平台验证报告
+
+### 1. 基准测试驱动的两项关键优化发现
+
+首轮 Release Benchmark 暴露出两处极具价值的底层性能洞察，并随即完成优化验证：
+
+1. **`f32x4_max` vs `f32x4_pmax`（75.9× 差距）**：
+   - 首轮测得 `relu_bytes_v128`（使用 `f32x4_max`）在 `n=65536` 上耗时高达 `549.05 µs`（反比标量慢 9 倍），原因是 IEEE-754 严格 NaN 传播语义的 `f32x4_max` 未直接映射为单条硬件指令。
+   - 切换为 `@v128.f32x4_pmax(zero_vec, v)` 后，耗时骤降至 **`7.23 µs`**（相对 `f32x4_max` 提速 **75.9×**，相对标量 `55.29 µs` 提速 **7.65×**）。
+2. **`Gemm(trans_b=true)` 静态权重预转置（MNIST MLP 提速 5×+）**：
+   - 首轮测得 MNIST MLP（`batch=1`）在 Scalar / SIMD 下分别耗时 `224.71 µs` / `214.14 µs`，瓶颈在于每次推理都在运行期重复转置 52,650 个静态权重。
+   - 在 `src/opt/optimize.mbt` 新增 **Pass 5：静态 `Gemm(trans_b=true)` 权重预转置**，加载期一次性转置为 `[K, N]` 后，MNIST MLP 延迟骤降至 **`44.13 µs`（Scalar）** / **`34.70 µs`（SIMD）**。
+3. **内存布局启示（`FixedArray[Float]` vs `FixedArray[Byte]`）**：
+   - 逐元素 `Add (n=65536)` 在 `FixedArray[Float]` 上用 `f32x4_const`/`extract_lane` 拼装向量时为 `52.38 µs`（几乎无加速），而基于 `FixedArray[Byte]` 直接 `v128_load` + `f32x4_add` + `v128_store` 仅为 **`8.49 µs`（6.37× 加速）**。未来若将 `Tensor` 底层统一为 16 字节对齐的 `FixedArray[Byte]`，逐元素算子也可在端到端全链路直接吃满 6~7× SIMD 加速。
+
+### 2. Native Release 实测基准数据（`moon bench --target native --release`）
+
+| 测试项 | Scalar 基线 | MoonBit `V128` SIMD | 相对 Scalar 加速比 | 备注 |
+| :--- | ---: | ---: | ---: | :--- |
+| `Add` (`n=65536`, `FixedArray[Byte]`) | 54.04 µs | **8.49 µs** | **6.37×** | 零转换 `v128_load`/`store` |
+| `Relu` (`n=65536`, `FixedArray[Byte]`) | 55.29 µs | **7.23 µs** | **7.65×** | 使用 `f32x4_pmax` |
+| `GEMM 64×64×64` | 205.74 µs | **21.63 µs** | **9.51×** | `4x8` 寄存器分块 + `relaxed_madd` |
+| `GEMM 128×128×128` | 1.48 ms | **164.09 µs** | **9.02×** | ~25.6 GFLOP/s（单线程纯 MoonBit） |
+| `GEMM 256×256×256` | 11.26 ms | **1.23 ms** | **9.15×** | ~27.3 GFLOP/s（单线程纯 MoonBit） |
+| **E2E MNIST MLP** (`[1,1,28,28]`) | 44.13 µs | **34.70 µs** | **1.27×** | 相对优化前 224.71 µs 累计 **6.48×**；单线程 ORT 参考 7.56 µs |
+| **E2E MNIST CNN** (`[1,1,28,28]`) | 722.90 µs (未优化) / 650.14 µs (已优化) | **195.55 µs** | **3.70×** (vs 未优化) / **3.32×** (vs 优化标量) | 单线程 >5,100 inf/s；单线程 ORT 参考 30.85 µs |
+
+### 3. 四端跨平台编译与运行验证
+
+| 目标平台 | `moon check`（全仓库） | 核心 + `V128` SIMD 单元测试（`tensor`/`ops`/`simd`） |
+| :--- | :---: | :---: |
+| **`native`** | PASS（0 errors） | **32 / 32 PASS**（含端到端 MNIST MLP & CNN ORT 对齐） |
+| **`wasm`** | PASS（0 errors） | **20 / 20 PASS** |
+| **`wasm-gc`** | PASS（0 errors） | **20 / 20 PASS** |
+| **`js`** | PASS（0 errors） | **20 / 20 PASS** |

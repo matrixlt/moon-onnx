@@ -18,6 +18,7 @@ pub(all) struct OptStats {
   eliminated_identities : Int32
   folded_conv_bn : Int32
   folded_conv_bias : Int32
+  pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }
 

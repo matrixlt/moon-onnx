@@ -1,0 +1,7 @@
+import {
+  "moonbitlang/core/bench",
+  "local/moon_onnx/src/tensor",
+  "local/moon_onnx/src/ops",
+  "local/moon_onnx/src/backend/simd",
+  "local/moon_onnx/src/runtime",
+} for "test"

@@ -6,6 +6,7 @@ pub(all) struct OptStats {
   eliminated_identities : Int32
   folded_conv_bn : Int32
   folded_conv_bias : Int32
+  pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }
 
@@ -391,6 +392,49 @@ fn pass_dce(
 }
 
 ///|
+/// Pass 5：静态 Gemm(trans_b=true) 权重预转置。
+/// PyTorch 导出的全连接层权重通常以 [N, K] + transB=1 形式存储；
+/// 在加载期一次性预转置为连续 [K, N] 布局并置 trans_b=false，可消除每次推理的 O(K*N) 转置复制开销。
+fn pass_pretranspose_gemm_weights(
+  nodes : Array[@ir.IrNode],
+  initializers : Map[String, @tensor.Tensor],
+) -> (Array[@ir.IrNode], Int32) {
+  let kept : Array[@ir.IrNode] = []
+  let mut count = 0
+  for i = 0; i < nodes.length(); i = i + 1 {
+    let node = nodes[i]
+    match node.op {
+      @ir.Gemm(alpha~, beta~, trans_a~, trans_b~) if trans_b &&
+        node.inputs.length() >= 2 =>
+        match initializers.get(node.inputs[1]) {
+          Some(w_t) if w_t.rank() == 2 =>
+            try {
+              let wt = w_t.transpose([1, 0]).contiguous()
+              let new_w_name = "\{node.inputs[1]}__pretransposed_\{i}"
+              initializers[new_w_name] = wt
+              let new_inputs = node.inputs.copy()
+              new_inputs[1] = new_w_name
+              kept.push({
+                name: node.name,
+                op: @ir.Gemm(alpha~, beta~, trans_a~, trans_b=false),
+                inputs: new_inputs,
+                outputs: node.outputs.copy(),
+              })
+              count = count + 1
+              continue
+            } catch {
+              _ => ()
+            }
+          _ => ()
+        }
+      _ => ()
+    }
+    kept.push(node)
+  }
+  (kept, count)
+}
+
+///|
 /// 对 IrGraph 执行完整图优化管线，返回优化后的新 IrGraph 与各 Pass 统计信息。
 pub fn optimize_graph(graph : @ir.IrGraph) -> (@ir.IrGraph, OptStats) {
   let initializers = clone_initializers(graph.initializers)
@@ -406,20 +450,24 @@ pub fn optimize_graph(graph : @ir.IrGraph) -> (@ir.IrGraph, OptStats) {
     initializers,
     graph.outputs,
   )
-  let (n5, eliminated_dead_nodes) = pass_dce(n4, graph.outputs)
+  let (n5, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(
+    n4, initializers,
+  )
+  let (n6, eliminated_dead_nodes) = pass_dce(n5, graph.outputs)
 
   let optimized : @ir.IrGraph = {
     name: graph.name,
     inputs: graph.inputs.copy(),
     outputs: graph.outputs.copy(),
     initializers,
-    nodes: n5,
+    nodes: n6,
   }
   let stats : OptStats = {
     lifted_constants,
     eliminated_identities,
     folded_conv_bn,
     folded_conv_bias,
+    pretransposed_gemm_weights,
     eliminated_dead_nodes,
   }
   (optimized, stats)
