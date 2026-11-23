@@ -1,0 +1,107 @@
+///|
+/// 测试 Constant 提升、Identity 消除与 DCE 死节点清除。
+test "optimize_graph lifts constants, eliminates identity and dead nodes" {
+  let c_val = @tensor.Tensor::from_f32_array([2], [1.0, 2.0])
+  let g : @nn_ir.IrGraph = {
+    name: "opt_basic",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: Map([]),
+    nodes: [
+      {
+        name: "c0",
+        op: @nn_ir.Constant(value=c_val),
+        inputs: [],
+        outputs: ["c"],
+      },
+      { name: "id0", op: @nn_ir.Identity, inputs: ["x"], outputs: ["x_id"], },
+      { name: "dead", op: @nn_ir.Relu, inputs: ["x_id"], outputs: ["unused"], },
+      { name: "add0", op: @nn_ir.Add, inputs: ["x_id", "c"], outputs: ["y"], },
+    ],
+  }
+
+  let (opt_g, stats) = @opt.optimize_graph(g)
+  assert_eq(stats.lifted_constants, 1)
+  assert_eq(stats.eliminated_identities, 1)
+  assert_eq(stats.eliminated_dead_nodes, 1)
+  assert_eq(opt_g.nodes.length(), 1)
+  assert_eq(opt_g.nodes[0].inputs, ["x", "c"])
+  assert_true(opt_g.initializers.contains("c"))
+}
+
+///|
+/// 测试 Conv + BatchNormalization 静态折叠及静态 Gemm(trans_b=true) 权重预转置。
+test "optimize_graph folds Conv+BN, Conv+bias, and pre-transposes Gemm weights" {
+  let w_conv = @tensor.Tensor::from_f32_array([2, 1, 2, 2], [
+    1.0, 2.0, 3.0, 4.0, -1.0, -2.0, 0.5, 1.5,
+  ])
+  let scale = @tensor.Tensor::from_f32_array([2], [2.0, 0.5])
+  let bias = @tensor.Tensor::from_f32_array([2], [0.5, -1.0])
+  let mean = @tensor.Tensor::from_f32_array([2], [1.0, 2.0])
+  let variance = @tensor.Tensor::from_f32_array([2], [4.0, 1.0])
+  let w_fc = @tensor.Tensor::from_f32_array([3, 2], [
+    1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+  ])
+
+  let inits : Map[String, @tensor.Tensor] = Map([
+    ("w_conv", w_conv),
+    ("s", scale),
+    ("b", bias),
+    ("m", mean),
+    ("v", variance),
+    ("w_fc", w_fc),
+  ])
+  let g : @nn_ir.IrGraph = {
+    name: "conv_bn_gemm",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: inits,
+    nodes: [
+      {
+        name: "conv0",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([2, 2]),
+          strides=[1, 1],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+        ),
+        inputs: ["x", "w_conv"],
+        outputs: ["c0"],
+      },
+      {
+        name: "bn0",
+        op: @nn_ir.BatchNormalization(epsilon=(0.0 : Float)),
+        inputs: ["c0", "s", "b", "m", "v"],
+        outputs: ["c1"],
+      },
+      {
+        name: "gemm0",
+        op: @nn_ir.Gemm(
+          alpha=(1.0 : Float),
+          beta=(1.0 : Float),
+          trans_a=false,
+          trans_b=true,
+        ),
+        inputs: ["c1", "w_fc"],
+        outputs: ["y"],
+      },
+    ],
+  }
+
+  let (opt_g, stats) = @opt.optimize_graph(g)
+  assert_eq(stats.folded_conv_bn, 1)
+  assert_eq(stats.pretransposed_gemm_weights, 1)
+  assert_eq(opt_g.nodes.length(), 2)
+
+  // ch0: factor = 2.0 / sqrt(4.0) = 1.0, fused_b[0] = (0 - 1) * 1 + 0.5 = -0.5
+  let fused_b = opt_g.initializers.get(opt_g.nodes[0].inputs[2]).unwrap()
+  assert_eq(fused_b.get_f32([0]), (-0.5 : Float))
+  // ch1: factor = 0.5 / sqrt(1.0) = 0.5, fused_b[1] = (0 - 2) * 0.5 - 1.0 = -2.0
+  assert_eq(fused_b.get_f32([1]), (-2.0 : Float))
+
+  // Gemm 权重从 [3, 2] 预转置为 [2, 3]
+  let pt_w = opt_g.initializers.get(opt_g.nodes[1].inputs[1]).unwrap()
+  assert_eq(pt_w.shape(), [2, 3])
+}

@@ -10,7 +10,9 @@ target/
 __pycache__/
 *.pyc
 
-# Generated test outputs & temp files
+# Local dev logs, scratch & temporary files (do not commit to library repo)
+docs/DEVLOG.md
+*.log
 tmp/
 *.tmp
 .DS_Store

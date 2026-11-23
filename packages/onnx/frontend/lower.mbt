@@ -1,0 +1,344 @@
+///|
+/// 在节点的 AttributeProto 列表中按名称查找属性。
+fn find_attr(
+  attrs : Array[@schema.AttributeProto],
+  target_name : String,
+) -> @schema.AttributeProto? {
+  for i = 0; i < attrs.length(); i = i + 1 {
+    match attrs[i].name {
+      Some(n) if n == target_name => return Some(attrs[i])
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+/// 读取整数属性（Int64 -> Int），缺失时返回默认值。
+fn get_attr_int(
+  attrs : Array[@schema.AttributeProto],
+  name : String,
+  default_val : Int32,
+) -> Int32 {
+  match find_attr(attrs, name) {
+    Some(a) =>
+      match a.i {
+        Some(v) => v.to_int()
+        None => default_val
+      }
+    None => default_val
+  }
+}
+
+///|
+/// 读取浮点属性，缺失时返回默认值。
+fn get_attr_float(
+  attrs : Array[@schema.AttributeProto],
+  name : String,
+  default_val : Float,
+) -> Float {
+  match find_attr(attrs, name) {
+    Some(a) =>
+      match a.f {
+        Some(v) => v
+        None => default_val
+      }
+    None => default_val
+  }
+}
+
+///|
+/// 读取整数列表属性，缺失时返回 None。
+fn get_attr_ints_opt(
+  attrs : Array[@schema.AttributeProto],
+  name : String,
+) -> Array[Int32]? {
+  match find_attr(attrs, name) {
+    Some(a) => {
+      let out = Array::make(a.ints.length(), 0)
+      for i = 0; i < a.ints.length(); i = i + 1 {
+        out[i] = a.ints[i].to_int()
+      }
+      Some(out)
+    }
+    None => None
+  }
+}
+
+///|
+/// 将 ONNX 属性中常用的 ASCII 字节串（如 "NOTSET"、"SAME_UPPER"）转为 String。
+fn bytes_ascii_to_string(raw : Bytes) -> String {
+  let buf = StringBuilder()
+  for i = 0; i < raw.length(); i = i + 1 {
+    buf.write_char(Int32::unsafe_to_char(raw[i].to_int()))
+  }
+  buf.to_string()
+}
+
+///|
+/// 读取字节串类型的字符串属性。
+fn get_attr_string(
+  attrs : Array[@schema.AttributeProto],
+  name : String,
+  default_val : String,
+) -> String {
+  match find_attr(attrs, name) {
+    Some(a) =>
+      match a.s {
+        Some(raw) => bytes_ascii_to_string(raw)
+        None => default_val
+      }
+    None => default_val
+  }
+}
+
+///|
+/// 解析 ONNX `auto_pad` 属性字符串为强类型 `@nn_ir.AutoPad`。
+fn parse_auto_pad(
+  attrs : Array[@schema.AttributeProto],
+  node_name : String,
+) -> @nn_ir.AutoPad raise @nn_ir.IrError {
+  let raw = get_attr_string(attrs, "auto_pad", "NOTSET")
+  match raw {
+    "" | "NOTSET" => @nn_ir.NotSet
+    "SAME_UPPER" => @nn_ir.SameUpper
+    "SAME_LOWER" => @nn_ir.SameLower
+    "VALID" => @nn_ir.Valid
+    other =>
+      raise @nn_ir.InvalidAttribute(
+        "node '\{node_name}': unsupported auto_pad value '\{other}'",
+      )
+  }
+}
+
+///|
+/// 将单个 ONNX `NodeProto` Lowering 为格式无关的强类型 `@nn_ir.IrNode`。
+fn lower_node(
+  node : @schema.NodeProto,
+  idx : Int32,
+  opset_version : Int64,
+) -> @nn_ir.IrNode raise @nn_ir.IrError {
+  let op_type = match node.op_type {
+    Some(s) => s
+    None => raise @nn_ir.InvalidGraph("node at index \{idx} has empty op_type")
+  }
+  let node_name = match node.name {
+    Some(s) if s != "" => s
+    _ => "\{op_type}_\{idx}"
+  }
+  let attrs = node.attribute
+
+  let op : @nn_ir.Op = match op_type {
+    "Add" => @nn_ir.Add
+    "Sub" => @nn_ir.Sub
+    "Mul" => @nn_ir.Mul
+    "Relu" => @nn_ir.Relu
+    "Identity" => @nn_ir.Identity
+    "MatMul" => @nn_ir.MatMul
+    "Softmax" => {
+      // ONNX 规范：Opset < 13 默认 axis = 1；Opset >= 13 默认 axis = -1
+      let default_axis = if opset_version > 0 && opset_version < 13 {
+        1
+      } else {
+        -1
+      }
+      @nn_ir.Softmax(axis=get_attr_int(attrs, "axis", default_axis))
+    }
+    "Flatten" => @nn_ir.Flatten(axis=get_attr_int(attrs, "axis", 1))
+    "Reshape" =>
+      @nn_ir.Reshape(allowzero=get_attr_int(attrs, "allowzero", 0) != 0)
+    "Transpose" => {
+      let perm = match get_attr_ints_opt(attrs, "perm") {
+        Some(p) => p
+        None => []
+      }
+      @nn_ir.Transpose(perm~)
+    }
+    "Squeeze" => @nn_ir.Squeeze(axes=get_attr_ints_opt(attrs, "axes"))
+    "Unsqueeze" => @nn_ir.Unsqueeze(axes=get_attr_ints_opt(attrs, "axes"))
+    "Constant" => {
+      let tensor = match find_attr(attrs, "value") {
+        Some(a) =>
+          match a.t {
+            Some(tp) =>
+              @onnx_proto.decode_tensor_proto(tp) catch {
+                e =>
+                  raise @nn_ir.InvalidAttribute(
+                    "Constant '\{node_name}' failed to decode value tensor: \{e}",
+                  )
+              }
+            None =>
+              raise @nn_ir.InvalidAttribute(
+                "Constant '\{node_name}' attribute 'value' has no tensor",
+              )
+          }
+        None =>
+          match find_attr(attrs, "value_ints") {
+            Some(a) => {
+              let buf = FixedArray::makei(a.ints.length(), fn(i) { a.ints[i] })
+              @tensor.Tensor::from_i64([a.ints.length()], buf) catch {
+                e =>
+                  raise @nn_ir.InvalidAttribute("Constant '\{node_name}': \{e}")
+              }
+            }
+            None =>
+              match find_attr(attrs, "value_floats") {
+                Some(a) => {
+                  let buf = FixedArray::makei(a.floats.length(), fn(i) {
+                    a.floats[i]
+                  })
+                  @tensor.Tensor::from_f32([a.floats.length()], buf) catch {
+                    e =>
+                      raise @nn_ir.InvalidAttribute(
+                        "Constant '\{node_name}': \{e}",
+                      )
+                  }
+                }
+                None =>
+                  raise @nn_ir.InvalidAttribute(
+                    "Constant '\{node_name}' missing supported value attribute",
+                  )
+              }
+          }
+      }
+      @nn_ir.Constant(value=tensor)
+    }
+    "Gemm" => {
+      let alpha = get_attr_float(attrs, "alpha", (1.0 : Float))
+      let beta = get_attr_float(attrs, "beta", (1.0 : Float))
+      let trans_a = get_attr_int(attrs, "transA", 0) != 0
+      let trans_b = get_attr_int(attrs, "transB", 0) != 0
+      @nn_ir.Gemm(alpha~, beta~, trans_a~, trans_b~)
+    }
+    "Conv" => {
+      let kernel_shape = get_attr_ints_opt(attrs, "kernel_shape")
+      let strides = match get_attr_ints_opt(attrs, "strides") {
+        Some(v) => v
+        None => [1, 1]
+      }
+      let pads = match get_attr_ints_opt(attrs, "pads") {
+        Some(v) => v
+        None => [0, 0, 0, 0]
+      }
+      let dilations = match get_attr_ints_opt(attrs, "dilations") {
+        Some(v) => v
+        None => [1, 1]
+      }
+      let group = get_attr_int(attrs, "group", 1)
+      let auto_pad = parse_auto_pad(attrs, node_name)
+      @nn_ir.Conv(kernel_shape~, strides~, pads~, dilations~, group~, auto_pad~)
+    }
+    "MaxPool" => {
+      let kernel_shape = match get_attr_ints_opt(attrs, "kernel_shape") {
+        Some(v) => v
+        None =>
+          raise @nn_ir.InvalidAttribute(
+            "MaxPool '\{node_name}' requires kernel_shape attribute",
+          )
+      }
+      let strides = match get_attr_ints_opt(attrs, "strides") {
+        Some(v) => v
+        None => [1, 1]
+      }
+      let pads = match get_attr_ints_opt(attrs, "pads") {
+        Some(v) => v
+        None => [0, 0, 0, 0]
+      }
+      let dilations = match get_attr_ints_opt(attrs, "dilations") {
+        Some(v) => v
+        None => [1, 1]
+      }
+      let ceil_mode = get_attr_int(attrs, "ceil_mode", 0) != 0
+      let auto_pad = parse_auto_pad(attrs, node_name)
+      @nn_ir.MaxPool(
+        kernel_shape~,
+        strides~,
+        pads~,
+        dilations~,
+        ceil_mode~,
+        auto_pad~,
+      )
+    }
+    "AveragePool" => {
+      let kernel_shape = match get_attr_ints_opt(attrs, "kernel_shape") {
+        Some(v) => v
+        None =>
+          raise @nn_ir.InvalidAttribute(
+            "AveragePool '\{node_name}' requires kernel_shape attribute",
+          )
+      }
+      let strides = match get_attr_ints_opt(attrs, "strides") {
+        Some(v) => v
+        None => [1, 1]
+      }
+      let pads = match get_attr_ints_opt(attrs, "pads") {
+        Some(v) => v
+        None => [0, 0, 0, 0]
+      }
+      let ceil_mode = get_attr_int(attrs, "ceil_mode", 0) != 0
+      let count_include_pad = get_attr_int(attrs, "count_include_pad", 0) != 0
+      let auto_pad = parse_auto_pad(attrs, node_name)
+      @nn_ir.AveragePool(
+        kernel_shape~,
+        strides~,
+        pads~,
+        ceil_mode~,
+        count_include_pad~,
+        auto_pad~,
+      )
+    }
+    "BatchNormalization" => {
+      let epsilon = get_attr_float(attrs, "epsilon", (1.0e-5 : Float))
+      @nn_ir.BatchNormalization(epsilon~)
+    }
+    other => raise @nn_ir.UnsupportedOp(other)
+  }
+
+  {
+    name: node_name,
+    op,
+    inputs: node.input.copy(),
+    outputs: node.output.copy(),
+  }
+}
+
+///|
+/// 将解析完成的 ONNX 模型 Lowering 为经过依赖校验与 Kahn 拓扑排序的强类型 `@nn_ir.IrGraph`。
+pub fn lower_onnx_model(
+  m : @onnx_proto.OnnxModel,
+) -> @nn_ir.IrGraph raise @nn_ir.IrError {
+  let opset_version = match m.default_opset_version() {
+    Some(v) => v
+    None => (17 : Int64)
+  }
+
+  let raw_nodes : Array[@nn_ir.IrNode] = []
+  for i = 0; i < m.nodes.length(); i = i + 1 {
+    raw_nodes.push(lower_node(m.nodes[i], i, opset_version))
+  }
+
+  let input_names = Array::makei(m.inputs.length(), fn(i) { m.inputs[i].name })
+  let output_names = Array::makei(m.outputs.length(), fn(i) {
+    m.outputs[i].name
+  })
+
+  let initializers : Map[String, @tensor.Tensor] = Map([])
+  for i = 0; i < m.initializer_order.length(); i = i + 1 {
+    let key = m.initializer_order[i]
+    match m.initializers.get(key) {
+      Some(t) => initializers[key] = t
+      None => ()
+    }
+  }
+
+  let sorted_nodes = @nn_ir.topo_sort_nodes(
+    raw_nodes, input_names, initializers,
+  )
+  {
+    name: m.graph_name,
+    inputs: input_names,
+    outputs: output_names,
+    initializers,
+    nodes: sorted_nodes,
+  }
+}

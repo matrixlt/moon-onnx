@@ -1,0 +1,9 @@
+import {
+  "moonbitlang/protobuf",
+  "matrixlt/onnx_proto/schema",
+  "matrixlt/tensor",
+}
+
+import {
+  "matrixlt/onnx_proto/schema" @schema_test,
+} for "test"

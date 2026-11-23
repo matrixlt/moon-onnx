@@ -1,5 +1,0 @@
-import {
-  "local/moon_onnx/src/proto_gen" @proto,
-  "local/moon_onnx/src/tensor",
-  "local/moon_onnx/src/model",
-}

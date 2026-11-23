@@ -1,0 +1,10 @@
+import {
+  "moonbitlang/x/fs",
+  "matrixlt/tensor",
+  "matrixlt/onnx_proto",
+  "matrixlt/onnx_proto/fs" @onnx_fs,
+  "matrixlt/nn_ir",
+  "matrixlt/nn_ir/opt",
+  "matrixlt/onnx/frontend",
+  "matrixlt/onnx/ops",
+}

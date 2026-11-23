@@ -1,0 +1,17 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/onnx_proto/fs"
+
+import {
+  "matrixlt/onnx_proto",
+}
+
+// Values
+pub fn load_model_from_file(String) -> @onnx_proto.OnnxModel raise @onnx_proto.ModelError
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

@@ -1,0 +1,10 @@
+import {
+  "matrixlt/tensor",
+  "matrixlt/onnx_proto",
+  "matrixlt/onnx_proto/schema",
+  "matrixlt/nn_ir",
+}
+
+import {
+  "matrixlt/onnx_proto/fs" @onnx_fs,
+} for "test"

@@ -1,5 +1,0 @@
-import {
-  "moonbitlang/core/math",
-  "local/moon_onnx/src/tensor",
-  "local/moon_onnx/src/ir",
-}

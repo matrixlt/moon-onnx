@@ -1,0 +1,66 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/onnx_proto"
+
+import {
+  "matrixlt/onnx_proto/schema",
+  "matrixlt/tensor",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn decode_tensor_proto(@schema.TensorProto) -> @tensor.Tensor raise ModelError
+
+pub fn load_model_from_bytes(Bytes) -> OnnxModel raise ModelError
+
+pub fn onnx_dtype_to_dtype(Int32) -> @tensor.DType raise ModelError
+
+// Errors
+#derive(Eq, @debug.Debug)
+pub(all) suberror ModelError {
+  IoError(String)
+  ParseError(String)
+  UnsupportedDataType(Int32)
+  InvalidTensor(String)
+  MissingGraph(String)
+}
+pub impl Show for ModelError
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) enum DimSpec {
+  Static(Int32)
+  Symbolic(String)
+  Unknown
+}
+pub fn DimSpec::to_label(Self) -> String
+
+pub struct OnnxModel {
+  ir_version : Int64
+  producer_name : String
+  producer_version : String
+  opsets : Array[OpsetImport]
+  graph_name : String
+  inputs : Array[ValueSpec]
+  outputs : Array[ValueSpec]
+  initializers : Map[String, @tensor.Tensor]
+  initializer_order : Array[String]
+  nodes : Array[@schema.NodeProto]
+}
+pub fn OnnxModel::default_opset_version(Self) -> Int64?
+pub fn OnnxModel::format_summary(Self) -> String
+
+pub struct OpsetImport {
+  domain : String
+  version : Int64
+}
+
+pub struct ValueSpec {
+  name : String
+  dtype : @tensor.DType?
+  shape : Array[DimSpec]
+}
+pub fn ValueSpec::format(Self) -> String
+
+// Type aliases
+
+// Traits

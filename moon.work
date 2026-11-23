@@ -1,0 +1,9 @@
+members = [
+  "./packages/tensor",
+  "./packages/ml_kernels",
+  "./packages/onnx_proto",
+  "./packages/nn_ir",
+  "./packages/onnx",
+  "./apps/cli",
+  "./benchmarks",
+]

@@ -1,0 +1,7 @@
+import {
+  "moonbitlang/core/env",
+  "matrixlt/onnx",
+  "matrixlt/onnx/session",
+}
+
+pkgtype(kind: "executable")

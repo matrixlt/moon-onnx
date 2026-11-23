@@ -1,0 +1,943 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/onnx_proto/schema"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/protobuf",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) struct AttributeProto {
+  mut name : String?
+  mut ref_attr_name : String?
+  mut doc_string : String?
+  mut type_ : AttributeProto_AttributeType?
+  mut f : Float?
+  mut i : Int64?
+  mut s : Bytes?
+  mut t : TensorProto?
+  mut g : GraphProto?
+  mut sparse_tensor : SparseTensorProto?
+  mut tp : TypeProto?
+  mut floats : Array[Float]
+  mut ints : Array[Int64]
+  mut strings : Array[Bytes]
+  mut tensors : Array[TensorProto]
+  mut graphs : Array[GraphProto]
+  mut sparse_tensors : Array[SparseTensorProto]
+  mut type_protos : Array[TypeProto]
+}
+#alias(new, deprecated)
+pub fn AttributeProto::AttributeProto(name? : String, ref_attr_name? : String, doc_string? : String, type_? : AttributeProto_AttributeType, f? : Float, i? : Int64, s? : Bytes, t? : TensorProto, g? : GraphProto, sparse_tensor? : SparseTensorProto, tp? : TypeProto, Array[Float], Array[Int64], Array[Bytes], Array[TensorProto], Array[GraphProto], Array[SparseTensorProto], Array[TypeProto]) -> Self
+pub fn AttributeProto::default() -> Self
+#deprecated
+pub fn AttributeProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn AttributeProto::not_equal(Self, Self) -> Bool
+pub fn AttributeProto::read(&@protobuf.Reader) -> Self raise
+pub fn AttributeProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn AttributeProto::size_of(Self) -> UInt32
+pub fn AttributeProto::to_repr(Self) -> @debug.Repr
+pub fn AttributeProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for AttributeProto
+pub impl @protobuf.AsyncRead for AttributeProto
+pub impl @protobuf.AsyncWrite for AttributeProto
+pub impl @protobuf.Read for AttributeProto
+pub impl @protobuf.Sized for AttributeProto
+pub impl @protobuf.Write for AttributeProto
+
+#derive(Eq, @debug.Debug)
+pub(all) enum AttributeProto_AttributeType {
+  UNDEFINED
+  FLOAT
+  INT
+  STRING
+  TENSOR
+  GRAPH
+  SPARSE_TENSOR
+  TYPE_PROTO
+  FLOATS
+  INTS
+  STRINGS
+  TENSORS
+  GRAPHS
+  SPARSE_TENSORS
+  TYPE_PROTOS
+}
+pub fn AttributeProto_AttributeType::default() -> Self
+#deprecated
+pub fn AttributeProto_AttributeType::equal(Self, Self) -> Bool
+pub fn AttributeProto_AttributeType::from_enum(@protobuf.Enum) -> Self
+#deprecated
+pub fn AttributeProto_AttributeType::not_equal(Self, Self) -> Bool
+pub fn AttributeProto_AttributeType::size_of(Self) -> UInt32
+pub fn AttributeProto_AttributeType::to_enum(Self) -> @protobuf.Enum
+pub fn AttributeProto_AttributeType::to_repr(Self) -> @debug.Repr
+pub impl Default for AttributeProto_AttributeType
+pub impl @protobuf.Sized for AttributeProto_AttributeType
+
+#derive(Eq, @debug.Debug)
+pub(all) struct DeviceConfigurationProto {
+  mut name : String?
+  mut num_devices : Int32?
+  mut device : Array[String]
+}
+#alias(new, deprecated)
+pub fn DeviceConfigurationProto::DeviceConfigurationProto(name? : String, num_devices? : Int32, Array[String]) -> Self
+pub fn DeviceConfigurationProto::default() -> Self
+#deprecated
+pub fn DeviceConfigurationProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn DeviceConfigurationProto::not_equal(Self, Self) -> Bool
+pub fn DeviceConfigurationProto::read(&@protobuf.Reader) -> Self raise
+pub fn DeviceConfigurationProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn DeviceConfigurationProto::size_of(Self) -> UInt32
+pub fn DeviceConfigurationProto::to_repr(Self) -> @debug.Repr
+pub fn DeviceConfigurationProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for DeviceConfigurationProto
+pub impl @protobuf.AsyncRead for DeviceConfigurationProto
+pub impl @protobuf.AsyncWrite for DeviceConfigurationProto
+pub impl @protobuf.Read for DeviceConfigurationProto
+pub impl @protobuf.Sized for DeviceConfigurationProto
+pub impl @protobuf.Write for DeviceConfigurationProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct FunctionProto {
+  mut name : String?
+  mut input : Array[String]
+  mut output : Array[String]
+  mut attribute : Array[String]
+  mut attribute_proto : Array[AttributeProto]
+  mut node : Array[NodeProto]
+  mut doc_string : String?
+  mut opset_import : Array[OperatorSetIdProto]
+  mut domain : String?
+  mut overload : String?
+  mut value_info : Array[ValueInfoProto]
+  mut metadata_props : Array[StringStringEntryProto]
+}
+#alias(new, deprecated)
+pub fn FunctionProto::FunctionProto(name? : String, Array[String], Array[String], Array[String], Array[AttributeProto], Array[NodeProto], doc_string? : String, Array[OperatorSetIdProto], domain? : String, overload? : String, Array[ValueInfoProto], Array[StringStringEntryProto]) -> Self
+pub fn FunctionProto::default() -> Self
+#deprecated
+pub fn FunctionProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn FunctionProto::not_equal(Self, Self) -> Bool
+pub fn FunctionProto::read(&@protobuf.Reader) -> Self raise
+pub fn FunctionProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn FunctionProto::size_of(Self) -> UInt32
+pub fn FunctionProto::to_repr(Self) -> @debug.Repr
+pub fn FunctionProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for FunctionProto
+pub impl @protobuf.AsyncRead for FunctionProto
+pub impl @protobuf.AsyncWrite for FunctionProto
+pub impl @protobuf.Read for FunctionProto
+pub impl @protobuf.Sized for FunctionProto
+pub impl @protobuf.Write for FunctionProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct GraphProto {
+  mut node : Array[NodeProto]
+  mut name : String?
+  mut initializer : Array[TensorProto]
+  mut sparse_initializer : Array[SparseTensorProto]
+  mut doc_string : String?
+  mut input : Array[ValueInfoProto]
+  mut output : Array[ValueInfoProto]
+  mut value_info : Array[ValueInfoProto]
+  mut quantization_annotation : Array[TensorAnnotation]
+  mut metadata_props : Array[StringStringEntryProto]
+}
+#alias(new, deprecated)
+pub fn GraphProto::GraphProto(Array[NodeProto], name? : String, Array[TensorProto], Array[SparseTensorProto], doc_string? : String, Array[ValueInfoProto], Array[ValueInfoProto], Array[ValueInfoProto], Array[TensorAnnotation], Array[StringStringEntryProto]) -> Self
+pub fn GraphProto::default() -> Self
+#deprecated
+pub fn GraphProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn GraphProto::not_equal(Self, Self) -> Bool
+pub fn GraphProto::read(&@protobuf.Reader) -> Self raise
+pub fn GraphProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn GraphProto::size_of(Self) -> UInt32
+pub fn GraphProto::to_repr(Self) -> @debug.Repr
+pub fn GraphProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for GraphProto
+pub impl @protobuf.AsyncRead for GraphProto
+pub impl @protobuf.AsyncWrite for GraphProto
+pub impl @protobuf.Read for GraphProto
+pub impl @protobuf.Sized for GraphProto
+pub impl @protobuf.Write for GraphProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct IntIntListEntryProto {
+  mut key : Int64?
+  mut value : Array[Int64]
+}
+#alias(new, deprecated)
+pub fn IntIntListEntryProto::IntIntListEntryProto(key? : Int64, Array[Int64]) -> Self
+pub fn IntIntListEntryProto::default() -> Self
+#deprecated
+pub fn IntIntListEntryProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn IntIntListEntryProto::not_equal(Self, Self) -> Bool
+pub fn IntIntListEntryProto::read(&@protobuf.Reader) -> Self raise
+pub fn IntIntListEntryProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn IntIntListEntryProto::size_of(Self) -> UInt32
+pub fn IntIntListEntryProto::to_repr(Self) -> @debug.Repr
+pub fn IntIntListEntryProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for IntIntListEntryProto
+pub impl @protobuf.AsyncRead for IntIntListEntryProto
+pub impl @protobuf.AsyncWrite for IntIntListEntryProto
+pub impl @protobuf.Read for IntIntListEntryProto
+pub impl @protobuf.Sized for IntIntListEntryProto
+pub impl @protobuf.Write for IntIntListEntryProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct ModelProto {
+  mut ir_version : Int64?
+  mut opset_import : Array[OperatorSetIdProto]
+  mut producer_name : String?
+  mut producer_version : String?
+  mut domain : String?
+  mut model_version : Int64?
+  mut doc_string : String?
+  mut graph : GraphProto?
+  mut metadata_props : Array[StringStringEntryProto]
+  mut training_info : Array[TrainingInfoProto]
+  mut functions : Array[FunctionProto]
+  mut configuration : Array[DeviceConfigurationProto]
+}
+#alias(new, deprecated)
+pub fn ModelProto::ModelProto(ir_version? : Int64, Array[OperatorSetIdProto], producer_name? : String, producer_version? : String, domain? : String, model_version? : Int64, doc_string? : String, graph? : GraphProto, Array[StringStringEntryProto], Array[TrainingInfoProto], Array[FunctionProto], Array[DeviceConfigurationProto]) -> Self
+pub fn ModelProto::default() -> Self
+#deprecated
+pub fn ModelProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn ModelProto::not_equal(Self, Self) -> Bool
+pub fn ModelProto::read(&@protobuf.Reader) -> Self raise
+pub fn ModelProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn ModelProto::size_of(Self) -> UInt32
+pub fn ModelProto::to_repr(Self) -> @debug.Repr
+pub fn ModelProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for ModelProto
+pub impl @protobuf.AsyncRead for ModelProto
+pub impl @protobuf.AsyncWrite for ModelProto
+pub impl @protobuf.Read for ModelProto
+pub impl @protobuf.Sized for ModelProto
+pub impl @protobuf.Write for ModelProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct NodeDeviceConfigurationProto {
+  mut configuration_id : String?
+  mut sharding_spec : Array[ShardingSpecProto]
+  mut pipeline_stage : Int32?
+}
+#alias(new, deprecated)
+pub fn NodeDeviceConfigurationProto::NodeDeviceConfigurationProto(configuration_id? : String, Array[ShardingSpecProto], pipeline_stage? : Int32) -> Self
+pub fn NodeDeviceConfigurationProto::default() -> Self
+#deprecated
+pub fn NodeDeviceConfigurationProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn NodeDeviceConfigurationProto::not_equal(Self, Self) -> Bool
+pub fn NodeDeviceConfigurationProto::read(&@protobuf.Reader) -> Self raise
+pub fn NodeDeviceConfigurationProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn NodeDeviceConfigurationProto::size_of(Self) -> UInt32
+pub fn NodeDeviceConfigurationProto::to_repr(Self) -> @debug.Repr
+pub fn NodeDeviceConfigurationProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for NodeDeviceConfigurationProto
+pub impl @protobuf.AsyncRead for NodeDeviceConfigurationProto
+pub impl @protobuf.AsyncWrite for NodeDeviceConfigurationProto
+pub impl @protobuf.Read for NodeDeviceConfigurationProto
+pub impl @protobuf.Sized for NodeDeviceConfigurationProto
+pub impl @protobuf.Write for NodeDeviceConfigurationProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct NodeProto {
+  mut input : Array[String]
+  mut output : Array[String]
+  mut name : String?
+  mut op_type : String?
+  mut domain : String?
+  mut overload : String?
+  mut attribute : Array[AttributeProto]
+  mut doc_string : String?
+  mut metadata_props : Array[StringStringEntryProto]
+  mut device_configurations : Array[NodeDeviceConfigurationProto]
+}
+#alias(new, deprecated)
+pub fn NodeProto::NodeProto(Array[String], Array[String], name? : String, op_type? : String, domain? : String, overload? : String, Array[AttributeProto], doc_string? : String, Array[StringStringEntryProto], Array[NodeDeviceConfigurationProto]) -> Self
+pub fn NodeProto::default() -> Self
+#deprecated
+pub fn NodeProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn NodeProto::not_equal(Self, Self) -> Bool
+pub fn NodeProto::read(&@protobuf.Reader) -> Self raise
+pub fn NodeProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn NodeProto::size_of(Self) -> UInt32
+pub fn NodeProto::to_repr(Self) -> @debug.Repr
+pub fn NodeProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for NodeProto
+pub impl @protobuf.AsyncRead for NodeProto
+pub impl @protobuf.AsyncWrite for NodeProto
+pub impl @protobuf.Read for NodeProto
+pub impl @protobuf.Sized for NodeProto
+pub impl @protobuf.Write for NodeProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct OperatorSetIdProto {
+  mut domain : String?
+  mut version : Int64?
+}
+#alias(new, deprecated)
+pub fn OperatorSetIdProto::OperatorSetIdProto(domain? : String, version? : Int64) -> Self
+pub fn OperatorSetIdProto::default() -> Self
+#deprecated
+pub fn OperatorSetIdProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn OperatorSetIdProto::not_equal(Self, Self) -> Bool
+pub fn OperatorSetIdProto::read(&@protobuf.Reader) -> Self raise
+pub fn OperatorSetIdProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn OperatorSetIdProto::size_of(Self) -> UInt32
+pub fn OperatorSetIdProto::to_repr(Self) -> @debug.Repr
+pub fn OperatorSetIdProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for OperatorSetIdProto
+pub impl @protobuf.AsyncRead for OperatorSetIdProto
+pub impl @protobuf.AsyncWrite for OperatorSetIdProto
+pub impl @protobuf.Read for OperatorSetIdProto
+pub impl @protobuf.Sized for OperatorSetIdProto
+pub impl @protobuf.Write for OperatorSetIdProto
+
+#derive(Eq, @debug.Debug)
+pub(all) enum OperatorStatus {
+  EXPERIMENTAL
+  STABLE
+}
+pub fn OperatorStatus::default() -> Self
+#deprecated
+pub fn OperatorStatus::equal(Self, Self) -> Bool
+pub fn OperatorStatus::from_enum(@protobuf.Enum) -> Self
+#deprecated
+pub fn OperatorStatus::not_equal(Self, Self) -> Bool
+pub fn OperatorStatus::size_of(Self) -> UInt32
+pub fn OperatorStatus::to_enum(Self) -> @protobuf.Enum
+pub fn OperatorStatus::to_repr(Self) -> @debug.Repr
+pub impl Default for OperatorStatus
+pub impl @protobuf.Sized for OperatorStatus
+
+#derive(Eq, @debug.Debug)
+pub(all) struct ShardedDimProto {
+  mut axis : Int64?
+  mut simple_sharding : Array[SimpleShardedDimProto]
+}
+#alias(new, deprecated)
+pub fn ShardedDimProto::ShardedDimProto(axis? : Int64, Array[SimpleShardedDimProto]) -> Self
+pub fn ShardedDimProto::default() -> Self
+#deprecated
+pub fn ShardedDimProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn ShardedDimProto::not_equal(Self, Self) -> Bool
+pub fn ShardedDimProto::read(&@protobuf.Reader) -> Self raise
+pub fn ShardedDimProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn ShardedDimProto::size_of(Self) -> UInt32
+pub fn ShardedDimProto::to_repr(Self) -> @debug.Repr
+pub fn ShardedDimProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for ShardedDimProto
+pub impl @protobuf.AsyncRead for ShardedDimProto
+pub impl @protobuf.AsyncWrite for ShardedDimProto
+pub impl @protobuf.Read for ShardedDimProto
+pub impl @protobuf.Sized for ShardedDimProto
+pub impl @protobuf.Write for ShardedDimProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct ShardingSpecProto {
+  mut tensor_name : String?
+  mut device : Array[Int64]
+  mut index_to_device_group_map : Array[IntIntListEntryProto]
+  mut sharded_dim : Array[ShardedDimProto]
+}
+#alias(new, deprecated)
+pub fn ShardingSpecProto::ShardingSpecProto(tensor_name? : String, Array[Int64], Array[IntIntListEntryProto], Array[ShardedDimProto]) -> Self
+pub fn ShardingSpecProto::default() -> Self
+#deprecated
+pub fn ShardingSpecProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn ShardingSpecProto::not_equal(Self, Self) -> Bool
+pub fn ShardingSpecProto::read(&@protobuf.Reader) -> Self raise
+pub fn ShardingSpecProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn ShardingSpecProto::size_of(Self) -> UInt32
+pub fn ShardingSpecProto::to_repr(Self) -> @debug.Repr
+pub fn ShardingSpecProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for ShardingSpecProto
+pub impl @protobuf.AsyncRead for ShardingSpecProto
+pub impl @protobuf.AsyncWrite for ShardingSpecProto
+pub impl @protobuf.Read for ShardingSpecProto
+pub impl @protobuf.Sized for ShardingSpecProto
+pub impl @protobuf.Write for ShardingSpecProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct SimpleShardedDimProto {
+  mut num_shards : Int64?
+  mut dim : SimpleShardedDimProto_Dim
+}
+#alias(new, deprecated)
+pub fn SimpleShardedDimProto::SimpleShardedDimProto(num_shards? : Int64, dim? : SimpleShardedDimProto_Dim) -> Self
+pub fn SimpleShardedDimProto::default() -> Self
+#deprecated
+pub fn SimpleShardedDimProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn SimpleShardedDimProto::not_equal(Self, Self) -> Bool
+pub fn SimpleShardedDimProto::read(&@protobuf.Reader) -> Self raise
+pub fn SimpleShardedDimProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn SimpleShardedDimProto::size_of(Self) -> UInt32
+pub fn SimpleShardedDimProto::to_repr(Self) -> @debug.Repr
+pub fn SimpleShardedDimProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for SimpleShardedDimProto
+pub impl @protobuf.AsyncRead for SimpleShardedDimProto
+pub impl @protobuf.AsyncWrite for SimpleShardedDimProto
+pub impl @protobuf.Read for SimpleShardedDimProto
+pub impl @protobuf.Sized for SimpleShardedDimProto
+pub impl @protobuf.Write for SimpleShardedDimProto
+
+#derive(Eq, @debug.Debug)
+pub(all) enum SimpleShardedDimProto_Dim {
+  DimValue(Int64)
+  DimParam(String)
+  NotSet
+}
+pub fn SimpleShardedDimProto_Dim::default() -> Self
+#deprecated
+pub fn SimpleShardedDimProto_Dim::equal(Self, Self) -> Bool
+#deprecated
+pub fn SimpleShardedDimProto_Dim::not_equal(Self, Self) -> Bool
+pub fn SimpleShardedDimProto_Dim::to_repr(Self) -> @debug.Repr
+pub impl Default for SimpleShardedDimProto_Dim
+
+#derive(Eq, @debug.Debug)
+pub(all) struct SparseTensorProto {
+  mut values : TensorProto?
+  mut indices : TensorProto?
+  mut dims : Array[Int64]
+}
+#alias(new, deprecated)
+pub fn SparseTensorProto::SparseTensorProto(values? : TensorProto, indices? : TensorProto, Array[Int64]) -> Self
+pub fn SparseTensorProto::default() -> Self
+#deprecated
+pub fn SparseTensorProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn SparseTensorProto::not_equal(Self, Self) -> Bool
+pub fn SparseTensorProto::read(&@protobuf.Reader) -> Self raise
+pub fn SparseTensorProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn SparseTensorProto::size_of(Self) -> UInt32
+pub fn SparseTensorProto::to_repr(Self) -> @debug.Repr
+pub fn SparseTensorProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for SparseTensorProto
+pub impl @protobuf.AsyncRead for SparseTensorProto
+pub impl @protobuf.AsyncWrite for SparseTensorProto
+pub impl @protobuf.Read for SparseTensorProto
+pub impl @protobuf.Sized for SparseTensorProto
+pub impl @protobuf.Write for SparseTensorProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct StringStringEntryProto {
+  mut key : String?
+  mut value : String?
+}
+#alias(new, deprecated)
+pub fn StringStringEntryProto::StringStringEntryProto(key? : String, value? : String) -> Self
+pub fn StringStringEntryProto::default() -> Self
+#deprecated
+pub fn StringStringEntryProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn StringStringEntryProto::not_equal(Self, Self) -> Bool
+pub fn StringStringEntryProto::read(&@protobuf.Reader) -> Self raise
+pub fn StringStringEntryProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn StringStringEntryProto::size_of(Self) -> UInt32
+pub fn StringStringEntryProto::to_repr(Self) -> @debug.Repr
+pub fn StringStringEntryProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for StringStringEntryProto
+pub impl @protobuf.AsyncRead for StringStringEntryProto
+pub impl @protobuf.AsyncWrite for StringStringEntryProto
+pub impl @protobuf.Read for StringStringEntryProto
+pub impl @protobuf.Sized for StringStringEntryProto
+pub impl @protobuf.Write for StringStringEntryProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TensorAnnotation {
+  mut tensor_name : String?
+  mut quant_parameter_tensor_names : Array[StringStringEntryProto]
+}
+#alias(new, deprecated)
+pub fn TensorAnnotation::TensorAnnotation(tensor_name? : String, Array[StringStringEntryProto]) -> Self
+pub fn TensorAnnotation::default() -> Self
+#deprecated
+pub fn TensorAnnotation::equal(Self, Self) -> Bool
+#deprecated
+pub fn TensorAnnotation::not_equal(Self, Self) -> Bool
+pub fn TensorAnnotation::read(&@protobuf.Reader) -> Self raise
+pub fn TensorAnnotation::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TensorAnnotation::size_of(Self) -> UInt32
+pub fn TensorAnnotation::to_repr(Self) -> @debug.Repr
+pub fn TensorAnnotation::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TensorAnnotation
+pub impl @protobuf.AsyncRead for TensorAnnotation
+pub impl @protobuf.AsyncWrite for TensorAnnotation
+pub impl @protobuf.Read for TensorAnnotation
+pub impl @protobuf.Sized for TensorAnnotation
+pub impl @protobuf.Write for TensorAnnotation
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TensorProto {
+  mut dims : Array[Int64]
+  mut data_type : Int32?
+  mut segment : TensorProto_Segment?
+  mut float_data : Array[Float]
+  mut int32_data : Array[Int32]
+  mut string_data : Array[Bytes]
+  mut int64_data : Array[Int64]
+  mut name : String?
+  mut doc_string : String?
+  mut raw_data : Bytes?
+  mut external_data : Array[StringStringEntryProto]
+  mut data_location : TensorProto_DataLocation?
+  mut double_data : Array[Double]
+  mut uint64_data : Array[UInt64]
+  mut metadata_props : Array[StringStringEntryProto]
+}
+#alias(new, deprecated)
+pub fn TensorProto::TensorProto(Array[Int64], data_type? : Int32, segment? : TensorProto_Segment, Array[Float], Array[Int32], Array[Bytes], Array[Int64], name? : String, doc_string? : String, raw_data? : Bytes, Array[StringStringEntryProto], data_location? : TensorProto_DataLocation, Array[Double], Array[UInt64], Array[StringStringEntryProto]) -> Self
+pub fn TensorProto::default() -> Self
+#deprecated
+pub fn TensorProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn TensorProto::not_equal(Self, Self) -> Bool
+pub fn TensorProto::read(&@protobuf.Reader) -> Self raise
+pub fn TensorProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TensorProto::size_of(Self) -> UInt32
+pub fn TensorProto::to_repr(Self) -> @debug.Repr
+pub fn TensorProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TensorProto
+pub impl @protobuf.AsyncRead for TensorProto
+pub impl @protobuf.AsyncWrite for TensorProto
+pub impl @protobuf.Read for TensorProto
+pub impl @protobuf.Sized for TensorProto
+pub impl @protobuf.Write for TensorProto
+
+#derive(Eq, @debug.Debug)
+pub(all) enum TensorProto_DataLocation {
+  DEFAULT
+  EXTERNAL
+}
+pub fn TensorProto_DataLocation::default() -> Self
+#deprecated
+pub fn TensorProto_DataLocation::equal(Self, Self) -> Bool
+pub fn TensorProto_DataLocation::from_enum(@protobuf.Enum) -> Self
+#deprecated
+pub fn TensorProto_DataLocation::not_equal(Self, Self) -> Bool
+pub fn TensorProto_DataLocation::size_of(Self) -> UInt32
+pub fn TensorProto_DataLocation::to_enum(Self) -> @protobuf.Enum
+pub fn TensorProto_DataLocation::to_repr(Self) -> @debug.Repr
+pub impl Default for TensorProto_DataLocation
+pub impl @protobuf.Sized for TensorProto_DataLocation
+
+#derive(Eq, @debug.Debug)
+pub(all) enum TensorProto_DataType {
+  UNDEFINED
+  FLOAT
+  UINT8
+  INT8
+  UINT16
+  INT16
+  INT32
+  INT64
+  STRING
+  BOOL
+  FLOAT16
+  DOUBLE
+  UINT32
+  UINT64
+  COMPLEX64
+  COMPLEX128
+  BFLOAT16
+  FLOAT8E4M3FN
+  FLOAT8E4M3FNUZ
+  FLOAT8E5M2
+  FLOAT8E5M2FNUZ
+  UINT4
+  INT4
+  FLOAT4E2M1
+  FLOAT8E8M0
+  UINT2
+  INT2
+  FLOAT6E2M3
+  FLOAT6E3M2
+}
+pub fn TensorProto_DataType::default() -> Self
+#deprecated
+pub fn TensorProto_DataType::equal(Self, Self) -> Bool
+pub fn TensorProto_DataType::from_enum(@protobuf.Enum) -> Self
+#deprecated
+pub fn TensorProto_DataType::not_equal(Self, Self) -> Bool
+pub fn TensorProto_DataType::size_of(Self) -> UInt32
+pub fn TensorProto_DataType::to_enum(Self) -> @protobuf.Enum
+pub fn TensorProto_DataType::to_repr(Self) -> @debug.Repr
+pub impl Default for TensorProto_DataType
+pub impl @protobuf.Sized for TensorProto_DataType
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TensorProto_Segment {
+  mut begin : Int64?
+  mut end : Int64?
+}
+#alias(new, deprecated)
+pub fn TensorProto_Segment::TensorProto_Segment(begin? : Int64, end? : Int64) -> Self
+pub fn TensorProto_Segment::default() -> Self
+#deprecated
+pub fn TensorProto_Segment::equal(Self, Self) -> Bool
+#deprecated
+pub fn TensorProto_Segment::not_equal(Self, Self) -> Bool
+pub fn TensorProto_Segment::read(&@protobuf.Reader) -> Self raise
+pub fn TensorProto_Segment::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TensorProto_Segment::size_of(Self) -> UInt32
+pub fn TensorProto_Segment::to_repr(Self) -> @debug.Repr
+pub fn TensorProto_Segment::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TensorProto_Segment
+pub impl @protobuf.AsyncRead for TensorProto_Segment
+pub impl @protobuf.AsyncWrite for TensorProto_Segment
+pub impl @protobuf.Read for TensorProto_Segment
+pub impl @protobuf.Sized for TensorProto_Segment
+pub impl @protobuf.Write for TensorProto_Segment
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TensorShapeProto {
+  mut dim : Array[TensorShapeProto_Dimension]
+}
+#alias(new, deprecated)
+pub fn TensorShapeProto::TensorShapeProto(Array[TensorShapeProto_Dimension]) -> Self
+pub fn TensorShapeProto::default() -> Self
+#deprecated
+pub fn TensorShapeProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn TensorShapeProto::not_equal(Self, Self) -> Bool
+pub fn TensorShapeProto::read(&@protobuf.Reader) -> Self raise
+pub fn TensorShapeProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TensorShapeProto::size_of(Self) -> UInt32
+pub fn TensorShapeProto::to_repr(Self) -> @debug.Repr
+pub fn TensorShapeProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TensorShapeProto
+pub impl @protobuf.AsyncRead for TensorShapeProto
+pub impl @protobuf.AsyncWrite for TensorShapeProto
+pub impl @protobuf.Read for TensorShapeProto
+pub impl @protobuf.Sized for TensorShapeProto
+pub impl @protobuf.Write for TensorShapeProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TensorShapeProto_Dimension {
+  mut denotation : String?
+  mut value : TensorShapeProto_Dimension_Value
+}
+#alias(new, deprecated)
+pub fn TensorShapeProto_Dimension::TensorShapeProto_Dimension(denotation? : String, value? : TensorShapeProto_Dimension_Value) -> Self
+pub fn TensorShapeProto_Dimension::default() -> Self
+#deprecated
+pub fn TensorShapeProto_Dimension::equal(Self, Self) -> Bool
+#deprecated
+pub fn TensorShapeProto_Dimension::not_equal(Self, Self) -> Bool
+pub fn TensorShapeProto_Dimension::read(&@protobuf.Reader) -> Self raise
+pub fn TensorShapeProto_Dimension::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TensorShapeProto_Dimension::size_of(Self) -> UInt32
+pub fn TensorShapeProto_Dimension::to_repr(Self) -> @debug.Repr
+pub fn TensorShapeProto_Dimension::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TensorShapeProto_Dimension
+pub impl @protobuf.AsyncRead for TensorShapeProto_Dimension
+pub impl @protobuf.AsyncWrite for TensorShapeProto_Dimension
+pub impl @protobuf.Read for TensorShapeProto_Dimension
+pub impl @protobuf.Sized for TensorShapeProto_Dimension
+pub impl @protobuf.Write for TensorShapeProto_Dimension
+
+#derive(Eq, @debug.Debug)
+pub(all) enum TensorShapeProto_Dimension_Value {
+  DimValue(Int64)
+  DimParam(String)
+  NotSet
+}
+pub fn TensorShapeProto_Dimension_Value::default() -> Self
+#deprecated
+pub fn TensorShapeProto_Dimension_Value::equal(Self, Self) -> Bool
+#deprecated
+pub fn TensorShapeProto_Dimension_Value::not_equal(Self, Self) -> Bool
+pub fn TensorShapeProto_Dimension_Value::to_repr(Self) -> @debug.Repr
+pub impl Default for TensorShapeProto_Dimension_Value
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TrainingInfoProto {
+  mut initialization : GraphProto?
+  mut algorithm : GraphProto?
+  mut initialization_binding : Array[StringStringEntryProto]
+  mut update_binding : Array[StringStringEntryProto]
+}
+#alias(new, deprecated)
+pub fn TrainingInfoProto::TrainingInfoProto(initialization? : GraphProto, algorithm? : GraphProto, Array[StringStringEntryProto], Array[StringStringEntryProto]) -> Self
+pub fn TrainingInfoProto::default() -> Self
+#deprecated
+pub fn TrainingInfoProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn TrainingInfoProto::not_equal(Self, Self) -> Bool
+pub fn TrainingInfoProto::read(&@protobuf.Reader) -> Self raise
+pub fn TrainingInfoProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TrainingInfoProto::size_of(Self) -> UInt32
+pub fn TrainingInfoProto::to_repr(Self) -> @debug.Repr
+pub fn TrainingInfoProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TrainingInfoProto
+pub impl @protobuf.AsyncRead for TrainingInfoProto
+pub impl @protobuf.AsyncWrite for TrainingInfoProto
+pub impl @protobuf.Read for TrainingInfoProto
+pub impl @protobuf.Sized for TrainingInfoProto
+pub impl @protobuf.Write for TrainingInfoProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TypeProto {
+  mut denotation : String?
+  mut value : TypeProto_Value
+}
+#alias(new, deprecated)
+pub fn TypeProto::TypeProto(denotation? : String, value? : TypeProto_Value) -> Self
+pub fn TypeProto::default() -> Self
+#deprecated
+pub fn TypeProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto::not_equal(Self, Self) -> Bool
+pub fn TypeProto::read(&@protobuf.Reader) -> Self raise
+pub fn TypeProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TypeProto::size_of(Self) -> UInt32
+pub fn TypeProto::to_repr(Self) -> @debug.Repr
+pub fn TypeProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TypeProto
+pub impl @protobuf.AsyncRead for TypeProto
+pub impl @protobuf.AsyncWrite for TypeProto
+pub impl @protobuf.Read for TypeProto
+pub impl @protobuf.Sized for TypeProto
+pub impl @protobuf.Write for TypeProto
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TypeProto_Map {
+  mut key_type : Int32?
+  mut value_type : TypeProto?
+}
+#alias(new, deprecated)
+pub fn TypeProto_Map::TypeProto_Map(key_type? : Int32, value_type? : TypeProto) -> Self
+pub fn TypeProto_Map::default() -> Self
+#deprecated
+pub fn TypeProto_Map::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto_Map::not_equal(Self, Self) -> Bool
+pub fn TypeProto_Map::read(&@protobuf.Reader) -> Self raise
+pub fn TypeProto_Map::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TypeProto_Map::size_of(Self) -> UInt32
+pub fn TypeProto_Map::to_repr(Self) -> @debug.Repr
+pub fn TypeProto_Map::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TypeProto_Map
+pub impl @protobuf.AsyncRead for TypeProto_Map
+pub impl @protobuf.AsyncWrite for TypeProto_Map
+pub impl @protobuf.Read for TypeProto_Map
+pub impl @protobuf.Sized for TypeProto_Map
+pub impl @protobuf.Write for TypeProto_Map
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TypeProto_Opaque {
+  mut domain : String?
+  mut name : String?
+}
+#alias(new, deprecated)
+pub fn TypeProto_Opaque::TypeProto_Opaque(domain? : String, name? : String) -> Self
+pub fn TypeProto_Opaque::default() -> Self
+#deprecated
+pub fn TypeProto_Opaque::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto_Opaque::not_equal(Self, Self) -> Bool
+pub fn TypeProto_Opaque::read(&@protobuf.Reader) -> Self raise
+pub fn TypeProto_Opaque::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TypeProto_Opaque::size_of(Self) -> UInt32
+pub fn TypeProto_Opaque::to_repr(Self) -> @debug.Repr
+pub fn TypeProto_Opaque::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TypeProto_Opaque
+pub impl @protobuf.AsyncRead for TypeProto_Opaque
+pub impl @protobuf.AsyncWrite for TypeProto_Opaque
+pub impl @protobuf.Read for TypeProto_Opaque
+pub impl @protobuf.Sized for TypeProto_Opaque
+pub impl @protobuf.Write for TypeProto_Opaque
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TypeProto_Optional {
+  mut elem_type : TypeProto?
+}
+#alias(new, deprecated)
+pub fn TypeProto_Optional::TypeProto_Optional(elem_type? : TypeProto) -> Self
+pub fn TypeProto_Optional::default() -> Self
+#deprecated
+pub fn TypeProto_Optional::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto_Optional::not_equal(Self, Self) -> Bool
+pub fn TypeProto_Optional::read(&@protobuf.Reader) -> Self raise
+pub fn TypeProto_Optional::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TypeProto_Optional::size_of(Self) -> UInt32
+pub fn TypeProto_Optional::to_repr(Self) -> @debug.Repr
+pub fn TypeProto_Optional::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TypeProto_Optional
+pub impl @protobuf.AsyncRead for TypeProto_Optional
+pub impl @protobuf.AsyncWrite for TypeProto_Optional
+pub impl @protobuf.Read for TypeProto_Optional
+pub impl @protobuf.Sized for TypeProto_Optional
+pub impl @protobuf.Write for TypeProto_Optional
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TypeProto_Sequence {
+  mut elem_type : TypeProto?
+}
+#alias(new, deprecated)
+pub fn TypeProto_Sequence::TypeProto_Sequence(elem_type? : TypeProto) -> Self
+pub fn TypeProto_Sequence::default() -> Self
+#deprecated
+pub fn TypeProto_Sequence::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto_Sequence::not_equal(Self, Self) -> Bool
+pub fn TypeProto_Sequence::read(&@protobuf.Reader) -> Self raise
+pub fn TypeProto_Sequence::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TypeProto_Sequence::size_of(Self) -> UInt32
+pub fn TypeProto_Sequence::to_repr(Self) -> @debug.Repr
+pub fn TypeProto_Sequence::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TypeProto_Sequence
+pub impl @protobuf.AsyncRead for TypeProto_Sequence
+pub impl @protobuf.AsyncWrite for TypeProto_Sequence
+pub impl @protobuf.Read for TypeProto_Sequence
+pub impl @protobuf.Sized for TypeProto_Sequence
+pub impl @protobuf.Write for TypeProto_Sequence
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TypeProto_SparseTensor {
+  mut elem_type : Int32?
+  mut shape : TensorShapeProto?
+}
+#alias(new, deprecated)
+pub fn TypeProto_SparseTensor::TypeProto_SparseTensor(elem_type? : Int32, shape? : TensorShapeProto) -> Self
+pub fn TypeProto_SparseTensor::default() -> Self
+#deprecated
+pub fn TypeProto_SparseTensor::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto_SparseTensor::not_equal(Self, Self) -> Bool
+pub fn TypeProto_SparseTensor::read(&@protobuf.Reader) -> Self raise
+pub fn TypeProto_SparseTensor::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TypeProto_SparseTensor::size_of(Self) -> UInt32
+pub fn TypeProto_SparseTensor::to_repr(Self) -> @debug.Repr
+pub fn TypeProto_SparseTensor::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TypeProto_SparseTensor
+pub impl @protobuf.AsyncRead for TypeProto_SparseTensor
+pub impl @protobuf.AsyncWrite for TypeProto_SparseTensor
+pub impl @protobuf.Read for TypeProto_SparseTensor
+pub impl @protobuf.Sized for TypeProto_SparseTensor
+pub impl @protobuf.Write for TypeProto_SparseTensor
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TypeProto_Tensor {
+  mut elem_type : Int32?
+  mut shape : TensorShapeProto?
+}
+#alias(new, deprecated)
+pub fn TypeProto_Tensor::TypeProto_Tensor(elem_type? : Int32, shape? : TensorShapeProto) -> Self
+pub fn TypeProto_Tensor::default() -> Self
+#deprecated
+pub fn TypeProto_Tensor::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto_Tensor::not_equal(Self, Self) -> Bool
+pub fn TypeProto_Tensor::read(&@protobuf.Reader) -> Self raise
+pub fn TypeProto_Tensor::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn TypeProto_Tensor::size_of(Self) -> UInt32
+pub fn TypeProto_Tensor::to_repr(Self) -> @debug.Repr
+pub fn TypeProto_Tensor::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for TypeProto_Tensor
+pub impl @protobuf.AsyncRead for TypeProto_Tensor
+pub impl @protobuf.AsyncWrite for TypeProto_Tensor
+pub impl @protobuf.Read for TypeProto_Tensor
+pub impl @protobuf.Sized for TypeProto_Tensor
+pub impl @protobuf.Write for TypeProto_Tensor
+
+#derive(Eq, @debug.Debug)
+pub(all) enum TypeProto_Value {
+  TensorType(TypeProto_Tensor)
+  SequenceType(TypeProto_Sequence)
+  MapType(TypeProto_Map)
+  OptionalType(TypeProto_Optional)
+  SparseTensorType(TypeProto_SparseTensor)
+  OpaqueType(TypeProto_Opaque)
+  NotSet
+}
+pub fn TypeProto_Value::default() -> Self
+#deprecated
+pub fn TypeProto_Value::equal(Self, Self) -> Bool
+#deprecated
+pub fn TypeProto_Value::not_equal(Self, Self) -> Bool
+pub fn TypeProto_Value::to_repr(Self) -> @debug.Repr
+pub impl Default for TypeProto_Value
+
+#derive(Eq, @debug.Debug)
+pub(all) struct ValueInfoProto {
+  mut name : String?
+  mut type_ : TypeProto?
+  mut doc_string : String?
+  mut metadata_props : Array[StringStringEntryProto]
+}
+#alias(new, deprecated)
+pub fn ValueInfoProto::ValueInfoProto(name? : String, type_? : TypeProto, doc_string? : String, Array[StringStringEntryProto]) -> Self
+pub fn ValueInfoProto::default() -> Self
+#deprecated
+pub fn ValueInfoProto::equal(Self, Self) -> Bool
+#deprecated
+pub fn ValueInfoProto::not_equal(Self, Self) -> Bool
+pub fn ValueInfoProto::read(&@protobuf.Reader) -> Self raise
+pub fn ValueInfoProto::read_with_limit(@protobuf.LimitedReader[&@protobuf.Reader]) -> Self raise
+pub fn ValueInfoProto::size_of(Self) -> UInt32
+pub fn ValueInfoProto::to_repr(Self) -> @debug.Repr
+pub fn ValueInfoProto::write(Self, &@protobuf.Writer) -> Unit raise
+pub impl Default for ValueInfoProto
+pub impl @protobuf.AsyncRead for ValueInfoProto
+pub impl @protobuf.AsyncWrite for ValueInfoProto
+pub impl @protobuf.Read for ValueInfoProto
+pub impl @protobuf.Sized for ValueInfoProto
+pub impl @protobuf.Write for ValueInfoProto
+
+#derive(Eq, @debug.Debug)
+pub(all) enum Version {
+  XSTART_VERSION
+  IR_VERSION_2017_10_10
+  IR_VERSION_2017_10_30
+  IR_VERSION_2017_11_3
+  IR_VERSION_2019_1_22
+  IR_VERSION_2019_3_18
+  IR_VERSION_2019_9_19
+  IR_VERSION_2020_5_8
+  IR_VERSION_2021_7_30
+  IR_VERSION_2023_5_5
+  IR_VERSION_2024_3_25
+  IR_VERSION_2025_05_12
+  IR_VERSION_2025_08_26
+  IR_VERSION_2025_11_06
+  IR_VERSION
+}
+pub fn Version::default() -> Self
+#deprecated
+pub fn Version::equal(Self, Self) -> Bool
+pub fn Version::from_enum(@protobuf.Enum) -> Self
+#deprecated
+pub fn Version::not_equal(Self, Self) -> Bool
+pub fn Version::size_of(Self) -> UInt32
+pub fn Version::to_enum(Self) -> @protobuf.Enum
+pub fn Version::to_repr(Self) -> @debug.Repr
+pub impl Default for Version
+pub impl @protobuf.Sized for Version
+
+// Type aliases
+
+// Traits

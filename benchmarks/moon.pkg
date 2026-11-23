@@ -1,7 +1,8 @@
 import {
   "moonbitlang/core/bench",
-  "local/moon_onnx/src/tensor",
-  "local/moon_onnx/src/ops",
-  "local/moon_onnx/src/backend/simd",
-  "local/moon_onnx/src/runtime",
+  "matrixlt/tensor",
+  "matrixlt/ml_kernels/gemm",
+  "matrixlt/ml_kernels/vecmath",
+  "matrixlt/onnx/ops",
+  "matrixlt/onnx/session",
 } for "test"
