@@ -147,3 +147,13 @@
   4. **Conv + 通道偏置 Add 折叠**：针对 ONNX Model Zoo MNIST 常见导出形态，将 `Conv(x, W) -> Add(c, bias[C_out, 1, 1])` 合并为带偏置单节点 `Conv`，使 `mnist_cnn.onnx` 从 **11 节点缩减为 9 节点**。
   5. **Dead Code Elimination (DCE)**：基于拓扑序反向标记消除不可达死节点。
 - 将 `optimize_graph` 默认接入 `Session`（提供 `optimize? : Bool = true` 开关），优化后 `mnist_cnn.onnx` 依然与 ONNX Runtime 保持完全一致（累计 27 项测试全部通过）。
+
+---
+
+## 2026-11-23 · Phase 3（Commit 14）：实现 MoonBit `V128` SIMD 逐元素与激活内核（`src/backend/simd`）
+
+- 探明 MoonBit v0.10.22 `moonbitlang/core/v128` 在 Native 目标下的真实能力：`v128_load`/`v128_store`、`f32x4_const`/`f32x4_splat`/`f32x4_extract_lane`、`f32x4_add`/`sub`/`mul`/`max` 及 `f32x4_relaxed_madd` 全部原生可用。
+- 新增 `src/backend/simd/elementwise_simd.mbt`：
+  - 提供面向 `Tensor` 的 `add_f32_simd`、`sub_f32_simd`、`mul_f32_simd`、`relu_f32_simd`（4-wide 主循环 + 非 4 倍数尾部标量收尾，广播形状自动回退至通用广播）。
+  - 提供基于 `FixedArray[Byte]` 零转换的 `pack_f32_to_bytes` / `unpack_bytes_to_f32`、`add_bytes_v128` 与 `relu_bytes_v128`，便于后续对比纯内存加载版与逐通道构造版的 SIMD 性能差异。
+- 单元测试验证非 4 倍数长度下 SIMD 输出与标量内核逐位一致（累计 29 项测试全部通过）。

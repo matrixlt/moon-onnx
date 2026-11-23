@@ -1,0 +1,9 @@
+import {
+  "moonbitlang/core/v128",
+  "local/moon_onnx/src/tensor",
+  "local/moon_onnx/src/ops",
+}
+
+options(
+  warn_list: "-14",
+)
