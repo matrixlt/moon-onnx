@@ -46,3 +46,31 @@ test "end-to-end MNIST MLP and CNN match ORT on Scalar and V128 SIMD backends" {
     assert_eq(cnn_pred, cnn_ort)
   }
 }
+
+///|
+/// 验证 SIMD 会话自动缓存静态权重预打包矩阵，并且 `run_single_profiled` 准确记录全部节点耗时。
+test "Session caches PackedMatrixB static weights and produces per-op RunProfile" {
+  let mlp_simd = @session.Session::from_file(
+    "../../tests/fixtures/mnist_mlp.onnx",
+    backend=@session.Simd,
+  )
+  // MNIST MLP 包含 3 个全连接 Gemm 权重，均应在初始化期预打包
+  assert_eq(mlp_simd.packed_weight_count(), 3)
+
+  let cnn_simd = @session.Session::from_file(
+    "../../tests/fixtures/mnist_cnn.onnx",
+    backend=@session.Simd,
+  )
+  // MNIST CNN 包含 1 个全连接 MatMul 权重
+  assert_eq(cnn_simd.packed_weight_count(), 1)
+
+  let cnn_in = @session.load_f32_file(
+    "../../tests/fixtures/mnist_cnn_input.f32",
+    [1, 1, 28, 28],
+  )
+  let (out, profile) = cnn_simd.run_single_profiled(cnn_in)
+  assert_eq(out.shape(), [1, 10])
+  assert_eq(profile.ops.length(), 9)
+  assert_true(profile.total_us >= 0.0)
+  assert_true(profile.format_table().contains("Conv"))
+}

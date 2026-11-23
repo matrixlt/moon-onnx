@@ -31,6 +31,10 @@ pub using @session {type BackendKind}
 
 pub using @onnx_proto {type OnnxModel}
 
+pub using @session {type OpTiming}
+
+pub using @session {type RunProfile}
+
 pub using @session {type RuntimeError}
 
 pub using @session {type Session}

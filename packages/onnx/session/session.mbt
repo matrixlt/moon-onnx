@@ -24,7 +24,7 @@ pub impl Show for RuntimeError with fn output(self, logger) {
 ///|
 /// 推理计算后端选择：
 /// - `Scalar`：100% 纯 MoonBit 标量参考实现
-/// - `Simd`  ：基于 `matrixlt/ml_kernels` 的 MoonBit V128 SIMD 向量化内核
+/// - `Simd`  ：基于 `matrixlt/ml_kernels` 的 MoonBit V128 SIMD 向量化内核 + 静态权重预打包缓存
 #derive(Debug, Eq)
 pub(all) enum BackendKind {
   Scalar
@@ -41,14 +41,98 @@ pub impl Show for BackendKind with fn output(self, logger) {
 }
 
 ///|
-/// ONNX 推理会话（Session）：持有已完成 Lowering、可选图优化与拓扑排序的计算图及所选后端。
-pub struct Session {
-  graph : @nn_ir.IrGraph
-  backend : BackendKind
+/// 单个节点的逐算子耗时剖析记录。
+pub(all) struct OpTiming {
+  node_name : String
+  op_type : String
+  output_shape : Array[Int32]
+  elapsed_us : Double
 }
 
 ///|
-/// 从已解析的 OnnxModel 构建推理会话（默认启用图优化 Pass）。
+/// 单次推理的完整剖析报告，包含总耗时与每个节点的耗时分布。
+pub(all) struct RunProfile {
+  backend : BackendKind
+  total_us : Double
+  ops : Array[OpTiming]
+}
+
+///|
+/// 将剖析报告格式化为人类易读的对齐表格（供 CLI `profile` 与性能诊断使用）。
+pub fn RunProfile::format_table(self : RunProfile) -> String {
+  let buf = StringBuilder()
+  buf.write_string("=== Inference Profile (backend=\{self.backend}) ===\n")
+  let denom = if self.total_us > 0.0 { self.total_us } else { 1.0 }
+  for i = 0; i < self.ops.length(); i = i + 1 {
+    let op = self.ops[i]
+    let pct = op.elapsed_us / denom * 100.0
+    // 保留 1 位小数展示占比，避免冗长浮点尾数影响阅读
+    let pct_10 = (pct * 10.0).to_int()
+    let pct_whole = pct_10 / 10
+    let pct_frac = pct_10 % 10
+    let us_10 = (op.elapsed_us * 10.0).to_int()
+    let us_whole = us_10 / 10
+    let us_frac = us_10 % 10
+    buf.write_string(
+      "  [\{i}] \{op.op_type} (\{op.node_name}) -> \{@tensor.format_shape(op.output_shape)} : \{us_whole}.\{us_frac} us (\{pct_whole}.\{pct_frac}%)\n",
+    )
+  }
+  let tot_10 = (self.total_us * 10.0).to_int()
+  buf.write_string("Total: \{tot_10 / 10}.\{tot_10 % 10} us\n")
+  buf.to_string()
+}
+
+///|
+/// ONNX 推理会话（Session）：
+/// 持有已完成 Lowering、可选图优化与拓扑排序的计算图、所选后端以及 SIMD 静态权重预打包缓存。
+pub struct Session {
+  graph : @nn_ir.IrGraph
+  backend : BackendKind
+  /// 静态 2D Float32 权重的预打包缓存（键为权重张量名），运行期直接走零打包 SIMD GEMM
+  packed_weights : Map[String, @gemm.PackedMatrixB]
+}
+
+///|
+/// 在会话初始化期扫描计算图，将所有用于 `Gemm(trans_b=false)` 与 `MatMul` 的静态 2D Float32 权重
+/// 一次性打包为 16 字节对齐的 `PackedMatrixB`，彻底消除推理热路径上的重复打包开销。
+fn build_packed_weight_cache(
+  graph : @nn_ir.IrGraph,
+  backend : BackendKind,
+) -> Map[String, @gemm.PackedMatrixB] {
+  let cache : Map[String, @gemm.PackedMatrixB] = Map([])
+  if backend != Simd {
+    return cache
+  }
+  for i = 0; i < graph.nodes.length(); i = i + 1 {
+    let node = graph.nodes[i]
+    let should_pack = match node.op {
+      @nn_ir.MatMul => true
+      @nn_ir.Gemm(trans_b~, ..) => !trans_b
+      _ => false
+    }
+    if should_pack && node.inputs.length() >= 2 {
+      let w_name = node.inputs[1]
+      if !cache.contains(w_name) {
+        match graph.initializers.get(w_name) {
+          Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Float32 => {
+            let ws = w_t.shape()
+            try {
+              let w_buf = w_t.to_f32_buffer()
+              cache[w_name] = @gemm.pack_matrix_b_f32(w_buf, 0, ws[0], ws[1])
+            } catch {
+              _ => ()
+            }
+          }
+          _ => ()
+        }
+      }
+    }
+  }
+  cache
+}
+
+///|
+/// 从已解析的 OnnxModel 构建推理会话（默认启用图优化 Pass 与 SIMD 权重预打包缓存）。
 pub fn Session::from_model(
   m : @onnx_proto.OnnxModel,
   backend~ : BackendKind = Scalar,
@@ -63,7 +147,8 @@ pub fn Session::from_model(
   } else {
     raw_graph
   }
-  { graph, backend, }
+  let packed_weights = build_packed_weight_cache(graph, backend)
+  { graph, backend, packed_weights, }
 }
 
 ///|
@@ -98,7 +183,8 @@ pub fn Session::from_graph(
   graph : @nn_ir.IrGraph,
   backend~ : BackendKind = Scalar,
 ) -> Session {
-  { graph, backend, }
+  let packed_weights = build_packed_weight_cache(graph, backend)
+  { graph, backend, packed_weights, }
 }
 
 ///|
@@ -111,6 +197,14 @@ pub fn Session::graph(self : Session) -> @nn_ir.IrGraph {
 /// 返回当前会话使用的计算后端类型。
 pub fn Session::backend(self : Session) -> BackendKind {
   self.backend
+}
+
+///|
+/// 返回当前会话中已完成预打包的静态权重矩阵数量（便于测试与诊断）。
+pub fn Session::packed_weight_count(self : Session) -> Int32 {
+  let mut count = 0
+  self.packed_weights.each(fn(_, _) { count = count + 1 })
+  count
 }
 
 ///|
@@ -158,11 +252,12 @@ fn optional_tensor(
 }
 
 ///|
-/// 执行单个强类型 IR 节点并返回输出张量。
+/// 执行单个强类型 IR 节点并返回输出张量（SIMD 后端下优先命中静态 `PackedMatrixB` 缓存）。
 fn eval_node(
   node : @nn_ir.IrNode,
   env : Map[String, @tensor.Tensor],
   backend : BackendKind,
+  packed_weights : Map[String, @gemm.PackedMatrixB],
 ) -> @tensor.Tensor raise RuntimeError {
   let n = node.name
   let ins = node.inputs
@@ -219,13 +314,26 @@ fn eval_node(
       @nn_ir.Constant(value~) => value
       @nn_ir.MatMul => {
         let a = require_tensor(env, n, ins, 0)
+        if use_simd && a.rank() == 2 && ins.length() >= 2 {
+          match packed_weights.get(ins[1]) {
+            Some(pb) => return @ops.matmul_prepacked_f32(a, pb)
+            None => ()
+          }
+        }
         let b = require_tensor(env, n, ins, 1)
         @ops.matmul_f32(a, b, use_simd~)
       }
       @nn_ir.Gemm(alpha~, beta~, trans_a~, trans_b~) => {
         let a = require_tensor(env, n, ins, 0)
-        let b = require_tensor(env, n, ins, 1)
         let c = optional_tensor(env, n, ins, 2)
+        if use_simd && !trans_b && ins.length() >= 2 {
+          match packed_weights.get(ins[1]) {
+            Some(pb) =>
+              return @ops.gemm_prepacked_f32(a, pb, c, alpha~, beta~, trans_a~)
+            None => ()
+          }
+        }
+        let b = require_tensor(env, n, ins, 1)
         @ops.gemm_f32(a, b, c, alpha~, beta~, trans_a~, trans_b~, use_simd~)
       }
       @nn_ir.Conv(strides~, pads~, dilations~, group~, auto_pad~, ..) => {
@@ -287,7 +395,7 @@ fn eval_node(
 }
 
 ///|
-/// 执行一次完整的前向推理。
+/// 执行一次完整的前向推理（零计时开销热路径）。
 pub fn Session::run(
   self : Session,
   feeds : Map[String, @tensor.Tensor],
@@ -305,7 +413,7 @@ pub fn Session::run(
 
   for i = 0; i < self.graph.nodes.length(); i = i + 1 {
     let node = self.graph.nodes[i]
-    let out_tensor = eval_node(node, env, self.backend)
+    let out_tensor = eval_node(node, env, self.backend, self.packed_weights)
     if node.outputs.length() > 0 && node.outputs[0] != "" {
       env[node.outputs[0]] = out_tensor
     }
@@ -320,6 +428,53 @@ pub fn Session::run(
     }
   }
   results
+}
+
+///|
+/// 执行带逐算子计时剖析的前向推理，返回输出张量字典与 `RunProfile` 报告。
+pub fn Session::run_profiled(
+  self : Session,
+  feeds : Map[String, @tensor.Tensor],
+) -> (Map[String, @tensor.Tensor], RunProfile) raise RuntimeError {
+  let t_total = @bench.monotonic_clock_start()
+  let env : Map[String, @tensor.Tensor] = Map([])
+  self.graph.initializers.each(fn(k, v) { env[k] = v })
+
+  for i = 0; i < self.graph.inputs.length(); i = i + 1 {
+    let in_name = self.graph.inputs[i]
+    match feeds.get(in_name) {
+      Some(t) => env[in_name] = t
+      None => raise MissingTensor("missing required graph input '\{in_name}'")
+    }
+  }
+
+  let timings : Array[OpTiming] = []
+  for i = 0; i < self.graph.nodes.length(); i = i + 1 {
+    let node = self.graph.nodes[i]
+    let t0 = @bench.monotonic_clock_start()
+    let out_tensor = eval_node(node, env, self.backend, self.packed_weights)
+    let elapsed_us = @bench.monotonic_clock_end(t0)
+    timings.push({
+      node_name: node.name,
+      op_type: node.op.name(),
+      output_shape: out_tensor.shape(),
+      elapsed_us,
+    })
+    if node.outputs.length() > 0 && node.outputs[0] != "" {
+      env[node.outputs[0]] = out_tensor
+    }
+  }
+
+  let results : Map[String, @tensor.Tensor] = Map([])
+  for i = 0; i < self.graph.outputs.length(); i = i + 1 {
+    let out_name = self.graph.outputs[i]
+    match env.get(out_name) {
+      Some(t) => results[out_name] = t
+      None => raise MissingTensor("graph output '\{out_name}' was not produced")
+    }
+  }
+  let total_us = @bench.monotonic_clock_end(t_total)
+  (results, { backend: self.backend, total_us, ops: timings, })
 }
 
 ///|
@@ -343,6 +498,26 @@ pub fn Session::run_single(
 }
 
 ///|
+/// 面向单输入、单输出模型的带剖析前向推理接口。
+pub fn Session::run_single_profiled(
+  self : Session,
+  input : @tensor.Tensor,
+) -> (@tensor.Tensor, RunProfile) raise RuntimeError {
+  if self.graph.inputs.length() != 1 || self.graph.outputs.length() != 1 {
+    raise IrErr(
+      "run_single_profiled requires 1 input and 1 output, got \{self.graph.inputs.length()} inputs and \{self.graph.outputs.length()} outputs",
+    )
+  }
+  let feeds : Map[String, @tensor.Tensor] = Map([])
+  feeds[self.graph.inputs[0]] = input
+  let (outputs, profile) = self.run_profiled(feeds)
+  match outputs.get(self.graph.outputs[0]) {
+    Some(t) => (t, profile)
+    None => raise MissingTensor("output tensor missing")
+  }
+}
+
+///|
 /// 从原始小端序 float32 二进制文件（`.f32`）加载张量。
 pub fn load_f32_file(
   path : String,
@@ -351,24 +526,8 @@ pub fn load_f32_file(
   let bytes = @fs.read_file_to_bytes(path) catch {
     @fs.IOError(msg) => raise ModelErr("failed to read '\{path}': \{msg}")
   }
-  let expected = @tensor.num_elements(shape) catch {
-    e => raise TensorErr("\{e}")
-  }
-  if bytes.length() != expected * 4 {
-    raise TensorErr(
-      "file '\{path}' has \{bytes.length()} bytes, expected \{expected * 4} bytes for shape \{@tensor.format_shape(shape)}",
-    )
-  }
-  let buf = FixedArray::makei(expected, fn(i) {
-    let off = i * 4
-    let bits = bytes[off].to_uint() |
-      (bytes[off + 1].to_uint() << 8) |
-      (bytes[off + 2].to_uint() << 16) |
-      (bytes[off + 3].to_uint() << 24)
-    Float::reinterpret_from_uint(bits)
-  })
-  @tensor.Tensor::from_f32(shape, buf) catch {
-    e => raise TensorErr("\{e}")
+  @tensor.Tensor::from_f32_bytes_le(shape, bytes) catch {
+    e => raise TensorErr("file '\{path}': \{e}")
   }
 }
 

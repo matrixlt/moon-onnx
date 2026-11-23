@@ -2,6 +2,7 @@
 package "matrixlt/onnx/ops"
 
 import {
+  "matrixlt/ml_kernels/gemm",
   "matrixlt/nn_ir",
   "matrixlt/tensor",
 }
@@ -19,7 +20,11 @@ pub fn flatten_op(@tensor.Tensor, axis? : Int32) -> @tensor.Tensor raise @tensor
 
 pub fn gemm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, alpha? : Float, beta? : Float, trans_a? : Bool, trans_b? : Bool, use_simd? : Bool) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn gemm_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB, @tensor.Tensor?, alpha? : Float, beta? : Float, trans_a? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn matmul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn matmul_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn maxpool_2d_f32(@tensor.Tensor, Array[Int32], Array[Int32], Array[Int32], Array[Int32], Bool, @nn_ir.AutoPad) -> @tensor.Tensor raise @tensor.TensorError
 

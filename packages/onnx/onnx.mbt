@@ -9,6 +9,12 @@ pub type BackendKind = @session.BackendKind
 pub type RuntimeError = @session.RuntimeError
 
 ///|
+pub type OpTiming = @session.OpTiming
+
+///|
+pub type RunProfile = @session.RunProfile
+
+///|
 pub type OnnxModel = @onnx_proto.OnnxModel
 
 ///|

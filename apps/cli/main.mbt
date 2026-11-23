@@ -12,6 +12,12 @@ fn print_usage() -> Unit {
   println(
     "      Run MNIST [1,1,28,28] inference and optionally compare against ORT golden output",
   )
+  println(
+    "  moon-onnx profile <model.onnx> <input.f32> [--backend=scalar|simd]",
+  )
+  println(
+    "      Run inference and print per-operator execution latency breakdown",
+  )
   println("  moon-onnx version")
   println("      Show engine version")
 }
@@ -71,6 +77,7 @@ fn handle_run(args : Array[String]) -> Unit {
     }
     println("Backend         : \{backend}")
     println("Model           : \{model_path}")
+    println("Packed Weights  : \{session.packed_weight_count()}")
     println("Output          : \{output.summary()}")
     println("Predicted Class : \{pred_cls} (score=\{pred_val})")
 
@@ -95,6 +102,38 @@ fn handle_run(args : Array[String]) -> Unit {
   } catch {
     err => {
       println("Inference failed: \{err}")
+      @env.exit(1)
+    }
+  }
+}
+
+///|
+/// 执行 `profile` 子命令：预热一次后输出逐算子耗时分布表。
+fn handle_profile(args : Array[String]) -> Unit {
+  let pos = positional_args(args, 2)
+  if pos.length() < 2 {
+    println("Error: profile requires <model.onnx> and <input.f32>")
+    print_usage()
+    @env.exit(1)
+    return
+  }
+  let model_path = pos[0]
+  let input_path = pos[1]
+  let backend = parse_backend_flag(args)
+
+  try {
+    let session = @onnx.session_from_file(model_path, backend~)
+    let input = @onnx.load_f32_file(input_path, [1, 1, 28, 28])
+    // 先预热 1 次消除冷启动抖动
+    session.run_single(input) |> ignore
+    let (_, profile) = session.run_single_profiled(input)
+    println(
+      "Model: \{model_path} (packed_weights=\{session.packed_weight_count()})",
+    )
+    println(profile.format_table())
+  } catch {
+    err => {
+      println("Profile failed: \{err}")
       @env.exit(1)
     }
   }
@@ -129,6 +168,7 @@ fn main {
       }
     }
     "run" => handle_run(args)
+    "profile" => handle_profile(args)
     other => {
       println("Error: unknown command '\{other}'")
       print_usage()

@@ -2,6 +2,7 @@
 package "matrixlt/onnx/session"
 
 import {
+  "matrixlt/ml_kernels/gemm",
   "matrixlt/nn_ir",
   "matrixlt/onnx_proto",
   "matrixlt/tensor",
@@ -32,9 +33,24 @@ pub(all) enum BackendKind {
 }
 pub impl Show for BackendKind
 
+pub(all) struct OpTiming {
+  node_name : String
+  op_type : String
+  output_shape : Array[Int32]
+  elapsed_us : Double
+}
+
+pub(all) struct RunProfile {
+  backend : BackendKind
+  total_us : Double
+  ops : Array[OpTiming]
+}
+pub fn RunProfile::format_table(Self) -> String
+
 pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
+  packed_weights : Map[String, @gemm.PackedMatrixB]
 }
 pub fn Session::backend(Self) -> BackendKind
 pub fn Session::from_bytes(Bytes, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
@@ -42,8 +58,11 @@ pub fn Session::from_file(String, backend? : BackendKind, optimize? : Bool) -> S
 pub fn Session::from_graph(@nn_ir.IrGraph, backend? : BackendKind) -> Self
 pub fn Session::from_model(@onnx_proto.OnnxModel, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::graph(Self) -> @nn_ir.IrGraph
+pub fn Session::packed_weight_count(Self) -> Int32
 pub fn Session::run(Self, Map[String, @tensor.Tensor]) -> Map[String, @tensor.Tensor] raise RuntimeError
+pub fn Session::run_profiled(Self, Map[String, @tensor.Tensor]) -> (Map[String, @tensor.Tensor], RunProfile) raise RuntimeError
 pub fn Session::run_single(Self, @tensor.Tensor) -> @tensor.Tensor raise RuntimeError
+pub fn Session::run_single_profiled(Self, @tensor.Tensor) -> (@tensor.Tensor, RunProfile) raise RuntimeError
 
 // Type aliases
 

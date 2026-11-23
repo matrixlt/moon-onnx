@@ -209,3 +209,92 @@ pub fn matmul_f32(
   }
   @tensor.Tensor::from_f32(final_shape, out_buf)
 }
+
+///|
+/// 使用预打包权重矩阵 `PackedMatrixB` 执行 V128 SIMD `Gemm`（运行期零权重打包开销）。
+/// 要求 `packed_b` 已经对应未转置的 `[K, N]` 静态权重矩阵。
+pub fn gemm_prepacked_f32(
+  a : @tensor.Tensor,
+  packed_b : @gemm.PackedMatrixB,
+  c : @tensor.Tensor?,
+  alpha~ : Float = (1.0 : Float),
+  beta~ : Float = (1.0 : Float),
+  trans_a~ : Bool = false,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  if a.rank() != 2 {
+    raise @tensor.ShapeMismatch(
+      "gemm_prepacked_f32: A must be 2D matrix, got rank \{a.rank()}",
+    )
+  }
+  let a_mat = if trans_a { a.transpose([1, 0]).contiguous() } else { a }
+  let sa = a_mat.shape()
+  let m = sa[0]
+  let k = sa[1]
+  let (kb, n) = packed_b.dims()
+  if k != kb {
+    raise @tensor.ShapeMismatch(
+      "gemm_prepacked_f32: inner dimension mismatch (\{k} vs \{kb})",
+    )
+  }
+
+  let out = FixedArray::make(m * n, (0.0 : Float))
+  @gemm.matmul_2d_prepacked_simd_f32(
+    a_mat.to_f32_buffer(),
+    0,
+    packed_b,
+    out,
+    0,
+    m,
+  )
+
+  let one : Float = 1.0
+  if alpha != one {
+    for i = 0; i < m * n; i = i + 1 {
+      out[i] = out[i] * alpha
+    }
+  }
+  let prod = @tensor.Tensor::from_f32([m, n], out)
+  let zero : Float = 0.0
+  match c {
+    None => prod
+    Some(bias) =>
+      if beta == zero {
+        prod
+      } else if beta == one {
+        add_f32(prod, bias, use_simd=true)
+      } else {
+        let b_buf = bias.to_f32_buffer()
+        let scaled = FixedArray::makei(b_buf.length(), fn(i) { b_buf[i] * beta })
+        add_f32(
+          prod,
+          @tensor.Tensor::from_f32(bias.shape(), scaled),
+          use_simd=true,
+        )
+      }
+  }
+}
+
+///|
+/// 使用预打包权重矩阵 `PackedMatrixB` 执行 2D V128 SIMD `MatMul`（运行期零权重打包开销）。
+pub fn matmul_prepacked_f32(
+  a : @tensor.Tensor,
+  packed_b : @gemm.PackedMatrixB,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  if a.rank() != 2 {
+    raise @tensor.ShapeMismatch(
+      "matmul_prepacked_f32: A must be 2D matrix, got rank \{a.rank()}",
+    )
+  }
+  let sa = a.shape()
+  let m = sa[0]
+  let k = sa[1]
+  let (kb, n) = packed_b.dims()
+  if k != kb {
+    raise @tensor.ShapeMismatch(
+      "matmul_prepacked_f32: inner dimension mismatch (\{k} vs \{kb})",
+    )
+  }
+  let out = FixedArray::make(m * n, (0.0 : Float))
+  @gemm.matmul_2d_prepacked_simd_f32(a.to_f32_buffer(), 0, packed_b, out, 0, m)
+  @tensor.Tensor::from_f32([m, n], out)
+}
