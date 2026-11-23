@@ -6,6 +6,14 @@ pub fn add_bytes_v128(FixedArray[Byte], FixedArray[Byte], FixedArray[Byte], Int3
 
 pub fn add_f32_v128(FixedArray[Float], FixedArray[Float], FixedArray[Float], Int32) -> Unit
 
+pub fn clip_bytes_v128(FixedArray[Byte], FixedArray[Byte], Int32, Float, Float) -> Unit
+
+pub fn clip_f32_v128(FixedArray[Float], FixedArray[Float], Int32, Float, Float) -> Unit
+
+pub fn exp_bytes_v128(FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
+
+pub fn exp_f32x4(V128) -> V128
+
 pub fn mul_bytes_v128(FixedArray[Byte], FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
 
 pub fn mul_f32_v128(FixedArray[Float], FixedArray[Float], FixedArray[Float], Int32) -> Unit
@@ -16,9 +24,17 @@ pub fn relu_bytes_v128(FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
 
 pub fn relu_f32_v128(FixedArray[Float], FixedArray[Float], Int32) -> Unit
 
+pub fn sigmoid_bytes_v128(FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
+
+pub fn sigmoid_f32x4(V128) -> V128
+
 pub fn sub_bytes_v128(FixedArray[Byte], FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
 
 pub fn sub_f32_v128(FixedArray[Float], FixedArray[Float], FixedArray[Float], Int32) -> Unit
+
+pub fn tanh_bytes_v128(FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
+
+pub fn tanh_f32x4(V128) -> V128
 
 pub fn unpack_bytes_to_f32(FixedArray[Byte], Int32) -> FixedArray[Float]
 

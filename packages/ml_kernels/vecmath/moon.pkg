@@ -2,6 +2,10 @@ import {
   "moonbitlang/core/v128",
 }
 
+import {
+  "moonbitlang/core/math",
+} for "test"
+
 options(
   warn_list: "-14",
 )

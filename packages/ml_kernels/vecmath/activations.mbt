@@ -1,0 +1,200 @@
+///|
+/// 4-wide `V128` 向量化快速指数函数 `exp(x)`（Cody-Waite 范围归约 + 5 阶 Horner 多项式逼近）。
+///
+/// 算法步骤（参考 Cephes / Eigen / RTen vecmath）：
+/// 1. 将输入钳位在 `[-87.33654, 88.37626]`，防止 IEEE-754 单精度指数位溢出产生非规格化噪声；
+/// 2. 计算 `k = round(x / ln(2))` 与归约余数 `r = x - k * ln2_hi - k * ln2_lo`（`r ∈ [-ln2/2, ln2/2]`）；
+/// 3. 在 `r` 上使用 5 阶泰勒/极小极大逼近多项式 `p(r) ≈ exp(r)`（全链路 `f32x4_relaxed_madd`）；
+/// 4. 通过 IEEE-754 阶码位操作 `((int32(k) + 127) << 23)` 零开销构造 `2^k` 并与 `p(r)` 相乘。
+///
+/// 精度：在常规区间 `[-20, 20]` 内相对误差 `< 1e-6`，满足全部深度学习激活函数（Sigmoid/Tanh/Softmax/Gelu）精度要求。
+pub fn exp_f32x4(x : V128) -> V128 {
+  let lo_clamp = @v128.f32x4_splat((-87.33654 : Float))
+  let hi_clamp = @v128.f32x4_splat((88.37626 : Float))
+  let xc = @v128.f32x4_pmax(lo_clamp, @v128.f32x4_pmin(hi_clamp, x))
+
+  let log2e = @v128.f32x4_splat((1.4426950408889634 : Float))
+  // Cody-Waite 高低双段 ln(2) 常量，减少大 |x| 时的范围归约相消误差
+  let neg_ln2_hi = @v128.f32x4_splat((-0.693145751953125 : Float))
+  let neg_ln2_lo = @v128.f32x4_splat((-1.428606765330187e-6 : Float))
+
+  let kf = @v128.f32x4_nearest(@v128.f32x4_mul(xc, log2e))
+  let r0 = @v128.f32x4_relaxed_madd(kf, neg_ln2_hi, xc)
+  let r = @v128.f32x4_relaxed_madd(kf, neg_ln2_lo, r0)
+
+  // 6 阶多项式：1 + r + r^2/2! + r^3/3! + r^4/4! + r^5/5! + r^6/6!
+  // 在 |r| <= ln(2)/2 ≈ 0.3466 上截断误差约 1.2e-7，达到 Float32 单精度全精度
+  let c6 = @v128.f32x4_splat((0.0013888889225199819 : Float))
+  let c5 = @v128.f32x4_splat((0.008333333767950535 : Float))
+  let c4 = @v128.f32x4_splat((0.0416666679084301 : Float))
+  let c3 = @v128.f32x4_splat((0.1666666716337204 : Float))
+  let c2 = @v128.f32x4_splat((0.5 : Float))
+  let one = @v128.f32x4_splat((1.0 : Float))
+
+  let p = @v128.f32x4_relaxed_madd(c6, r, c5)
+  let p = @v128.f32x4_relaxed_madd(p, r, c4)
+  let p = @v128.f32x4_relaxed_madd(p, r, c3)
+  let p = @v128.f32x4_relaxed_madd(p, r, c2)
+  let p = @v128.f32x4_relaxed_madd(p, r, one)
+  let poly = @v128.f32x4_relaxed_madd(p, r, one)
+
+  // 构造 2^k：IEEE-754 单精度偏移阶码 = (k + 127) << 23
+  let bias = @v128.i32x4_splat(127U)
+  let ki = @v128.i32x4_trunc_sat_f32x4_s(kf)
+  let pow2k = @v128.i32x4_shl(@v128.i32x4_add(ki, bias), 23)
+  @v128.f32x4_mul(poly, pow2k)
+}
+
+///|
+/// 4-wide `V128` 向量化 Sigmoid：`1 / (1 + exp(-x))`。
+pub fn sigmoid_f32x4(x : V128) -> V128 {
+  let one = @v128.f32x4_splat((1.0 : Float))
+  let denom = @v128.f32x4_add(one, exp_f32x4(@v128.f32x4_neg(x)))
+  @v128.f32x4_div(one, denom)
+}
+
+///|
+/// 4-wide `V128` 向量化 Tanh：`2 * sigmoid(2x) - 1`，在 `|x| > 10` 时平滑饱和至 `±1.0`。
+pub fn tanh_f32x4(x : V128) -> V128 {
+  let two = @v128.f32x4_splat((2.0 : Float))
+  let one = @v128.f32x4_splat((1.0 : Float))
+  let s = sigmoid_f32x4(@v128.f32x4_mul(two, x))
+  @v128.f32x4_sub(@v128.f32x4_mul(two, s), one)
+}
+
+///|
+/// 零转换字节缓冲版 V128 向量 Clip（`clamp(x, min_val, max_val)`）。
+pub fn clip_bytes_v128(
+  src : FixedArray[Byte],
+  out : FixedArray[Byte],
+  count : Int32,
+  min_val : Float,
+  max_val : Float,
+) -> Unit {
+  let vmin = @v128.f32x4_splat(min_val)
+  let vmax = @v128.f32x4_splat(max_val)
+  let mut i = 0
+  while i + 4 <= count {
+    let off = i * 4
+    let v = @v128.v128_load(src, off)
+    let clamped = @v128.f32x4_pmax(vmin, @v128.f32x4_pmin(vmax, v))
+    @v128.v128_store(out, off, clamped)
+    i = i + 4
+  }
+  while i < count {
+    let off = i * 4
+    let x = read_f32_le(src, off)
+    let c = if x < min_val {
+      min_val
+    } else if x > max_val {
+      max_val
+    } else {
+      x
+    }
+    write_f32_le(out, off, c)
+    i = i + 1
+  }
+}
+
+///|
+/// 面向 `FixedArray[Float]` 的 V128 向量 Clip。
+pub fn clip_f32_v128(
+  src : FixedArray[Float],
+  out : FixedArray[Float],
+  n : Int32,
+  min_val : Float,
+  max_val : Float,
+) -> Unit {
+  let vmin = @v128.f32x4_splat(min_val)
+  let vmax = @v128.f32x4_splat(max_val)
+  let mut i = 0
+  while i + 4 <= n {
+    let v = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let r = @v128.f32x4_pmax(vmin, @v128.f32x4_pmin(vmax, v))
+    out[i] = @v128.f32x4_extract_lane(r, 0)
+    out[i + 1] = @v128.f32x4_extract_lane(r, 1)
+    out[i + 2] = @v128.f32x4_extract_lane(r, 2)
+    out[i + 3] = @v128.f32x4_extract_lane(r, 3)
+    i = i + 4
+  }
+  while i < n {
+    let x = src[i]
+    out[i] = if x < min_val {
+      min_val
+    } else if x > max_val {
+      max_val
+    } else {
+      x
+    }
+    i = i + 1
+  }
+}
+
+///|
+/// 零转换字节缓冲版 V128 向量 `exp(x)`。
+pub fn exp_bytes_v128(
+  src : FixedArray[Byte],
+  out : FixedArray[Byte],
+  count : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= count {
+    let off = i * 4
+    let v = @v128.v128_load(src, off)
+    @v128.v128_store(out, off, exp_f32x4(v))
+    i = i + 4
+  }
+  while i < count {
+    let off = i * 4
+    let x = read_f32_le(src, off)
+    let r = @v128.f32x4_extract_lane(exp_f32x4(@v128.f32x4_splat(x)), 0)
+    write_f32_le(out, off, r)
+    i = i + 1
+  }
+}
+
+///|
+/// 零转换字节缓冲版 V128 向量 `sigmoid(x)`。
+pub fn sigmoid_bytes_v128(
+  src : FixedArray[Byte],
+  out : FixedArray[Byte],
+  count : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= count {
+    let off = i * 4
+    let v = @v128.v128_load(src, off)
+    @v128.v128_store(out, off, sigmoid_f32x4(v))
+    i = i + 4
+  }
+  while i < count {
+    let off = i * 4
+    let x = read_f32_le(src, off)
+    let r = @v128.f32x4_extract_lane(sigmoid_f32x4(@v128.f32x4_splat(x)), 0)
+    write_f32_le(out, off, r)
+    i = i + 1
+  }
+}
+
+///|
+/// 零转换字节缓冲版 V128 向量 `tanh(x)`。
+pub fn tanh_bytes_v128(
+  src : FixedArray[Byte],
+  out : FixedArray[Byte],
+  count : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= count {
+    let off = i * 4
+    let v = @v128.v128_load(src, off)
+    @v128.v128_store(out, off, tanh_f32x4(v))
+    i = i + 4
+  }
+  while i < count {
+    let off = i * 4
+    let x = read_f32_le(src, off)
+    let r = @v128.f32x4_extract_lane(tanh_f32x4(@v128.f32x4_splat(x)), 0)
+    write_f32_le(out, off, r)
+    i = i + 1
+  }
+}
