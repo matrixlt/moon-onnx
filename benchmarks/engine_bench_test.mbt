@@ -164,3 +164,80 @@ test "bench E2E MNIST CNN [simd-v128, optimized]" (it : @bench.T) {
     it.keep(out)
   })
 }
+
+///|
+test "bench Conv2D 1x8x14x14->16x14x14 k=5 [scalar]" (it : @bench.T) {
+  let x = @tensor.Tensor::from_f32([1, 8, 14, 14], make_matrix(8, 196, 3))
+  let w = @tensor.Tensor::from_f32([16, 8, 5, 5], make_matrix(16, 200, 5))
+  let b = @tensor.Tensor::from_f32([16], make_matrix(1, 16, 7))
+  it.bench(fn() {
+    let out = @ops.conv2d_f32(
+      x,
+      w,
+      Some(b),
+      [1, 1],
+      [2, 2, 2, 2],
+      [1, 1],
+      1,
+      @nn_ir.NotSet,
+      use_simd=false,
+    ) catch {
+      _ => abort("conv scalar failed")
+    }
+    it.keep(out)
+  })
+}
+
+///|
+test "bench Conv2D 1x8x14x14->16x14x14 k=5 [simd on-the-fly]" (it : @bench.T) {
+  let x = @tensor.Tensor::from_f32([1, 8, 14, 14], make_matrix(8, 196, 3))
+  let w = @tensor.Tensor::from_f32([16, 8, 5, 5], make_matrix(16, 200, 5))
+  let b = @tensor.Tensor::from_f32([16], make_matrix(1, 16, 7))
+  it.bench(fn() {
+    let out = @ops.conv2d_f32(
+      x,
+      w,
+      Some(b),
+      [1, 1],
+      [2, 2, 2, 2],
+      [1, 1],
+      1,
+      @nn_ir.NotSet,
+      use_simd=true,
+    ) catch {
+      _ => abort("conv simd failed")
+    }
+    it.keep(out)
+  })
+}
+
+///|
+test "bench Conv2D 1x8x14x14->16x14x14 k=5 [simd prepacked + BufferPool]" (
+  it : @bench.T,
+) {
+  let x = @tensor.Tensor::from_f32([1, 8, 14, 14], make_matrix(8, 196, 3))
+  let w = @tensor.Tensor::from_f32([16, 8, 5, 5], make_matrix(16, 200, 5))
+  let b = @tensor.Tensor::from_f32([16], make_matrix(1, 16, 7))
+  let pw = @ops.pack_conv2d_weight_f32(w, 1)
+  let pool = @tensor.BufferPool::new()
+  it.bench(fn() {
+    let out = @ops.conv2d_prepacked_f32(
+      x,
+      pw,
+      Some(b),
+      [1, 1],
+      [2, 2, 2, 2],
+      [1, 1],
+      @nn_ir.NotSet,
+      pool=Some(pool),
+      scratch_pool=Some(pool),
+    ) catch {
+      _ => abort("conv prepacked failed")
+    }
+    match out.raw_f32_buffer() {
+      Some(buf) => pool.release_f32(buf)
+      None => ()
+    }
+    it.keep(out)
+  })
+}

@@ -127,8 +127,9 @@ fn handle_profile(args : Array[String]) -> Unit {
     // 先预热 1 次消除冷启动抖动
     session.run_single(input) |> ignore
     let (_, profile) = session.run_single_profiled(input)
+    let ps = session.pool_stats()
     println(
-      "Model: \{model_path} (packed_weights=\{session.packed_weight_count()})",
+      "Model: \{model_path} (packed_weights=\{session.packed_weight_count()}, packed_conv=\{session.packed_conv_weight_count()}, pool_hits=\{ps.hits}, pool_misses=\{ps.misses}, pooled_f32=\{ps.pooled_f32_buffers})",
     )
     println(profile.format_table())
   } catch {

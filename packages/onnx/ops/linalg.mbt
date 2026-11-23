@@ -22,7 +22,80 @@ fn run_gemm_2d(
 }
 
 ///|
-/// ONNX Gemm 算子：`Y = alpha * (A' @ B') + beta * C`（复用 `matrixlt/ml_kernels/gemm`）。
+/// 将 ONNX Gemm 的单向广播偏置 `beta * C` 原地累加至 `out[m, n]`，避免额外分配临时输出张量。
+fn add_gemm_bias_inplace(
+  out : FixedArray[Float],
+  m : Int32,
+  n : Int32,
+  bias : @tensor.Tensor,
+  beta : Float,
+) -> Unit raise @tensor.TensorError {
+  let zero : Float = 0.0
+  if beta == zero {
+    return
+  }
+  let cs = bias.shape()
+  let b_buf = bias.to_f32_buffer()
+  let one : Float = 1.0
+  let total = m * n
+
+  if cs.length() == 0 ||
+    (cs.length() == 1 && cs[0] == 1) ||
+    (cs.length() == 2 && cs[0] == 1 && cs[1] == 1) {
+    let bv = b_buf[0] * beta
+    for i = 0; i < total; i = i + 1 {
+      out[i] = out[i] + bv
+    }
+    return
+  }
+  if (cs.length() == 1 && cs[0] == n) ||
+    (cs.length() == 2 && cs[0] == 1 && cs[1] == n) {
+    if beta == one {
+      for r = 0; r < m; r = r + 1 {
+        let off = r * n
+        for c = 0; c < n; c = c + 1 {
+          out[off + c] = out[off + c] + b_buf[c]
+        }
+      }
+    } else {
+      for r = 0; r < m; r = r + 1 {
+        let off = r * n
+        for c = 0; c < n; c = c + 1 {
+          out[off + c] = out[off + c] + b_buf[c] * beta
+        }
+      }
+    }
+    return
+  }
+  if cs.length() == 2 && cs[0] == m && cs[1] == 1 {
+    for r = 0; r < m; r = r + 1 {
+      let bv = b_buf[r] * beta
+      let off = r * n
+      for c = 0; c < n; c = c + 1 {
+        out[off + c] = out[off + c] + bv
+      }
+    }
+    return
+  }
+  if cs.length() == 2 && cs[0] == m && cs[1] == n {
+    if beta == one {
+      for i = 0; i < total; i = i + 1 {
+        out[i] = out[i] + b_buf[i]
+      }
+    } else {
+      for i = 0; i < total; i = i + 1 {
+        out[i] = out[i] + b_buf[i] * beta
+      }
+    }
+    return
+  }
+  raise @tensor.ShapeMismatch(
+    "gemm: bias shape \{@tensor.format_shape(cs)} is not unidirectional-broadcastable to [\{m}, \{n}]",
+  )
+}
+
+///|
+/// ONNX Gemm 算子：`Y = alpha * (A' @ B') + beta * C`（复用 `matrixlt/ml_kernels/gemm` 与可选 `BufferPool`）。
 pub fn gemm_f32(
   a : @tensor.Tensor,
   b : @tensor.Tensor,
@@ -32,6 +105,7 @@ pub fn gemm_f32(
   trans_a~ : Bool = false,
   trans_b~ : Bool = false,
   use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   if a.rank() != 2 || b.rank() != 2 {
     raise @tensor.ShapeMismatch(
@@ -53,19 +127,10 @@ pub fn gemm_f32(
     )
   }
 
-  let out = FixedArray::make(m * n, (0.0 : Float))
-  run_gemm_2d(
-    a_mat.to_f32_buffer(),
-    0,
-    b_mat.to_f32_buffer(),
-    0,
-    out,
-    0,
-    m,
-    k,
-    n,
-    use_simd,
-  )
+  let a_buf = a_mat.to_f32_buffer()
+  let b_buf = b_mat.to_f32_buffer()
+  let out = alloc_f32(pool, m * n)
+  run_gemm_2d(a_buf, 0, b_buf, 0, out, 0, m, k, n, use_simd)
 
   let one : Float = 1.0
   if alpha != one {
@@ -74,29 +139,20 @@ pub fn gemm_f32(
     }
   }
 
-  let prod = @tensor.Tensor::from_f32([m, n], out)
-  let zero : Float = 0.0
   match c {
-    None => prod
-    Some(bias) =>
-      if beta == zero {
-        prod
-      } else if beta == one {
-        add_f32(prod, bias, use_simd~)
-      } else {
-        let b_buf = bias.to_f32_buffer()
-        let scaled = FixedArray::makei(b_buf.length(), fn(i) { b_buf[i] * beta })
-        add_f32(prod, @tensor.Tensor::from_f32(bias.shape(), scaled), use_simd~)
-      }
+    None => ()
+    Some(bias) => add_gemm_bias_inplace(out, m, n, bias, beta)
   }
+  @tensor.Tensor::from_f32([m, n], out)
 }
 
 ///|
-/// ONNX MatMul 算子（支持 2D、1D 点积及高维批量广播，底层复用 `matrixlt/ml_kernels/gemm`）。
+/// ONNX MatMul 算子（支持 2D、1D 点积及高维批量广播，底层复用 `matrixlt/ml_kernels/gemm` 与可选 `BufferPool`）。
 pub fn matmul_f32(
   a : @tensor.Tensor,
   b : @tensor.Tensor,
   use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let ra = a.rank()
   let rb = b.rank()
@@ -115,19 +171,10 @@ pub fn matmul_f32(
       )
     }
     let n = sb[1]
-    let out = FixedArray::make(m * n, (0.0 : Float))
-    run_gemm_2d(
-      a.to_f32_buffer(),
-      0,
-      b.to_f32_buffer(),
-      0,
-      out,
-      0,
-      m,
-      k,
-      n,
-      use_simd,
-    )
+    let a_buf = a.to_f32_buffer()
+    let b_buf = b.to_f32_buffer()
+    let out = alloc_f32(pool, m * n)
+    run_gemm_2d(a_buf, 0, b_buf, 0, out, 0, m, k, n, use_simd)
     return @tensor.Tensor::from_f32([m, n], out)
   }
 
@@ -157,7 +204,7 @@ pub fn matmul_f32(
 
   let a_buf = a2.to_f32_buffer()
   let b_buf = b2.to_f32_buffer()
-  let out_buf = FixedArray::make(batch_total * m * n, (0.0 : Float))
+  let out_buf = alloc_f32(pool, batch_total * m * n)
 
   let mat_size_a = m * k
   let mat_size_b = k * n
@@ -211,8 +258,8 @@ pub fn matmul_f32(
 }
 
 ///|
-/// 使用预打包权重矩阵 `PackedMatrixB` 执行 V128 SIMD `Gemm`（运行期零权重打包开销）。
-/// 要求 `packed_b` 已经对应未转置的 `[K, N]` 静态权重矩阵。
+/// 使用预打包权重矩阵 `PackedMatrixB` 执行 V128 SIMD `Gemm`（运行期零权重打包开销，支持原地偏置融合与 BufferPool）。
+/// 要求 `packed_b` 已经对应有效的 `[K, N]` 右矩阵（无论原权重是 `trans_b=false` 还是已转置预打包的 `trans_b=true`）。
 pub fn gemm_prepacked_f32(
   a : @tensor.Tensor,
   packed_b : @gemm.PackedMatrixB,
@@ -220,6 +267,7 @@ pub fn gemm_prepacked_f32(
   alpha~ : Float = (1.0 : Float),
   beta~ : Float = (1.0 : Float),
   trans_a~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   if a.rank() != 2 {
     raise @tensor.ShapeMismatch(
@@ -237,15 +285,9 @@ pub fn gemm_prepacked_f32(
     )
   }
 
-  let out = FixedArray::make(m * n, (0.0 : Float))
-  @gemm.matmul_2d_prepacked_simd_f32(
-    a_mat.to_f32_buffer(),
-    0,
-    packed_b,
-    out,
-    0,
-    m,
-  )
+  let a_buf = a_mat.to_f32_buffer()
+  let out = alloc_f32(pool, m * n)
+  @gemm.matmul_2d_prepacked_simd_f32(a_buf, 0, packed_b, out, 0, m)
 
   let one : Float = 1.0
   if alpha != one {
@@ -253,32 +295,19 @@ pub fn gemm_prepacked_f32(
       out[i] = out[i] * alpha
     }
   }
-  let prod = @tensor.Tensor::from_f32([m, n], out)
-  let zero : Float = 0.0
   match c {
-    None => prod
-    Some(bias) =>
-      if beta == zero {
-        prod
-      } else if beta == one {
-        add_f32(prod, bias, use_simd=true)
-      } else {
-        let b_buf = bias.to_f32_buffer()
-        let scaled = FixedArray::makei(b_buf.length(), fn(i) { b_buf[i] * beta })
-        add_f32(
-          prod,
-          @tensor.Tensor::from_f32(bias.shape(), scaled),
-          use_simd=true,
-        )
-      }
+    None => ()
+    Some(bias) => add_gemm_bias_inplace(out, m, n, bias, beta)
   }
+  @tensor.Tensor::from_f32([m, n], out)
 }
 
 ///|
-/// 使用预打包权重矩阵 `PackedMatrixB` 执行 2D V128 SIMD `MatMul`（运行期零权重打包开销）。
+/// 使用预打包权重矩阵 `PackedMatrixB` 执行 2D V128 SIMD `MatMul`（运行期零权重打包开销，支持 BufferPool）。
 pub fn matmul_prepacked_f32(
   a : @tensor.Tensor,
   packed_b : @gemm.PackedMatrixB,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   if a.rank() != 2 {
     raise @tensor.ShapeMismatch(
@@ -294,7 +323,8 @@ pub fn matmul_prepacked_f32(
       "matmul_prepacked_f32: inner dimension mismatch (\{k} vs \{kb})",
     )
   }
-  let out = FixedArray::make(m * n, (0.0 : Float))
-  @gemm.matmul_2d_prepacked_simd_f32(a.to_f32_buffer(), 0, packed_b, out, 0, m)
+  let a_buf = a.to_f32_buffer()
+  let out = alloc_f32(pool, m * n)
+  @gemm.matmul_2d_prepacked_simd_f32(a_buf, 0, packed_b, out, 0, m)
   @tensor.Tensor::from_f32([m, n], out)
 }

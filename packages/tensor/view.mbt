@@ -96,6 +96,16 @@ pub fn Tensor::to_f32_buffer(
 }
 
 ///|
+/// 直接返回底层 `Float32` 缓冲区（不触发复制），供推理会话在生命周期结束后归还至 `BufferPool`。
+/// 调用方必须确保该张量及其所有共享视图不再被后续使用。
+pub fn Tensor::raw_f32_buffer(self : Tensor) -> FixedArray[Float]? {
+  match self.data {
+    F32(buf) => Some(buf)
+    _ => None
+  }
+}
+
+///|
 /// 获取底层连续的 FixedArray[Int64] 缓冲区（常用于读取 ONNX Reshape 的目标 shape 张量）。
 pub fn Tensor::to_i64_buffer(
   self : Tensor,

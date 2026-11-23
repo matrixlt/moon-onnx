@@ -82,3 +82,111 @@ test "MatMul, Gemm, Conv2D, MaxPool, AveragePool and BatchNorm" {
   )
   assert_eq(mp.get_f32([0, 0, 1, 1]), (9.0 : Float))
 }
+
+///|
+/// 验证预打包卷积 `conv2d_prepacked_f32`（含多分组、填充、偏置融合与 BufferPool 复用）与标量参考精确一致。
+test "conv2d_prepacked_f32 matches scalar conv2d across grouped, padded, and 1x1 cases with BufferPool" {
+  let pool = @tensor.BufferPool::new()
+
+  // 用例 1：多通道 + 5x5 + padding=2 + bias（与 MNIST CNN 特征形态一致）
+  let x1 = @tensor.Tensor::from_f32(
+    [2, 4, 7, 7],
+    FixedArray::makei(2 * 4 * 7 * 7, fn(i) {
+      Float::from_int(i % 19 - 9) * (0.125 : Float)
+    }),
+  )
+  let w1 = @tensor.Tensor::from_f32(
+    [10, 4, 5, 5],
+    FixedArray::makei(10 * 4 * 5 * 5, fn(i) {
+      Float::from_int(i % 13 - 6) * (0.0625 : Float)
+    }),
+  )
+  let b1 = @tensor.Tensor::from_f32(
+    [10],
+    FixedArray::makei(10, fn(i) { Float::from_int(i - 5) * (0.1 : Float) }),
+  )
+  let ref1 = @ops.conv2d_f32(
+    x1,
+    w1,
+    Some(b1),
+    [1, 1],
+    [2, 2, 2, 2],
+    [1, 1],
+    1,
+    @nn_ir.NotSet,
+    use_simd=false,
+  )
+  let pw1 = @ops.pack_conv2d_weight_f32(w1, 1)
+  assert_eq(pw1.shape(), [10, 4, 5, 5])
+  assert_eq(pw1.group(), 1)
+  let pre1_a = @ops.conv2d_prepacked_f32(
+    x1,
+    pw1,
+    Some(b1),
+    [1, 1],
+    [2, 2, 2, 2],
+    [1, 1],
+    @nn_ir.NotSet,
+    scratch_pool=Some(pool),
+  )
+  let pre1_b = @ops.conv2d_prepacked_f32(
+    x1,
+    pw1,
+    Some(b1),
+    [1, 1],
+    [2, 2, 2, 2],
+    [1, 1],
+    @nn_ir.NotSet,
+    scratch_pool=Some(pool),
+  )
+  // 第二次执行时 col_t 临时工作缓冲应直接命中 BufferPool
+  assert_true(pool.stats().hits >= 1)
+  let r1_buf = ref1.to_f32_buffer()
+  let p1a_buf = pre1_a.to_f32_buffer()
+  let p1b_buf = pre1_b.to_f32_buffer()
+  for i = 0; i < r1_buf.length(); i = i + 1 {
+    assert_approx(p1a_buf[i], r1_buf[i], (1.0e-5 : Float))
+    assert_eq(p1a_buf[i], p1b_buf[i])
+  }
+
+  // 用例 2：Grouped Conv（group=2, stride=2, dilation=1, 无偏置）
+  let x2 = @tensor.Tensor::from_f32(
+    [1, 6, 8, 8],
+    FixedArray::makei(6 * 8 * 8, fn(i) {
+      Float::from_int(i % 11 - 5) * (0.25 : Float)
+    }),
+  )
+  let w2 = @tensor.Tensor::from_f32(
+    [6, 3, 3, 3],
+    FixedArray::makei(6 * 3 * 3 * 3, fn(i) {
+      Float::from_int(i % 7 - 3) * (0.125 : Float)
+    }),
+  )
+  let ref2 = @ops.conv2d_f32(
+    x2,
+    w2,
+    None,
+    [2, 2],
+    [1, 1, 1, 1],
+    [1, 1],
+    2,
+    @nn_ir.NotSet,
+    use_simd=false,
+  )
+  let pw2 = @ops.pack_conv2d_weight_f32(w2, 2)
+  let pre2 = @ops.conv2d_prepacked_f32(
+    x2,
+    pw2,
+    None,
+    [2, 2],
+    [1, 1, 1, 1],
+    [1, 1],
+    @nn_ir.NotSet,
+    scratch_pool=Some(pool),
+  )
+  let r2_buf = ref2.to_f32_buffer()
+  let p2_buf = pre2.to_f32_buffer()
+  for i = 0; i < r2_buf.length(); i = i + 1 {
+    assert_approx(p2_buf[i], r2_buf[i], (1.0e-5 : Float))
+  }
+}

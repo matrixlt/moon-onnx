@@ -33,6 +33,8 @@ pub using @onnx_proto {type OnnxModel}
 
 pub using @session {type OpTiming}
 
+pub using @tensor {type PoolStats}
+
 pub using @session {type RunProfile}
 
 pub using @session {type RuntimeError}

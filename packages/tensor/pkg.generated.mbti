@@ -115,6 +115,7 @@ pub fn Tensor::numel(Self) -> Int32
 pub fn Tensor::offset(Self) -> Int32
 pub fn Tensor::physical_index_from_linear(Self, Int32) -> Int32
 pub fn Tensor::rank(Self) -> Int32
+pub fn Tensor::raw_f32_buffer(Self) -> FixedArray[Float]?
 pub fn Tensor::reshape(Self, Array[Int32], allowzero? : Bool) -> Self raise TensorError
 pub fn Tensor::shape(Self) -> Array[Int32]
 pub fn Tensor::squeeze(Self, Array[Int32]?) -> Self raise TensorError

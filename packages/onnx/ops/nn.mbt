@@ -55,8 +55,175 @@ fn compute_spatial_out_and_pads(
 }
 
 ///|
+/// 预打包后的 2D 卷积静态权重：按 `group` 分组将 `W_g[C_out_g, C_in_g * kH * kW]`
+/// 转置并打包为 16 字节对齐的 `PackedMatrixB(K, C_out_g)`，消除推理热路径上的重复打包与分配。
+pub struct PackedConvWeight {
+  c_out : Int32
+  c_in_per_group : Int32
+  kh : Int32
+  kw : Int32
+  group : Int32
+  groups : Array[@gemm.PackedMatrixB]
+}
+
+///|
+/// 返回预打包卷积权重对应的原始 OIHW 形状 `[C_out, C_in_per_group, kH, kW]`。
+pub fn PackedConvWeight::shape(self : PackedConvWeight) -> Array[Int32] {
+  [self.c_out, self.c_in_per_group, self.kh, self.kw]
+}
+
+///|
+/// 返回预打包卷积权重对应的分组数 `group`。
+pub fn PackedConvWeight::group(self : PackedConvWeight) -> Int32 {
+  self.group
+}
+
+///|
+/// 在模型加载/会话构建期将 4D OIHW Float32 卷积权重一次性预打包为 `PackedConvWeight`。
+pub fn pack_conv2d_weight_f32(
+  w : @tensor.Tensor,
+  group : Int32,
+) -> PackedConvWeight raise @tensor.TensorError {
+  let ws = w.shape()
+  if ws.length() != 4 {
+    raise @tensor.ShapeMismatch(
+      "pack_conv2d_weight_f32 requires 4D OIHW weight, got rank \{ws.length()}",
+    )
+  }
+  let c_out = ws[0]
+  let c_in_per_group = ws[1]
+  let kh = ws[2]
+  let kw = ws[3]
+  if group <= 0 || c_out % group != 0 {
+    raise @tensor.ShapeMismatch(
+      "pack_conv2d_weight_f32 invalid group=\{group} for c_out=\{c_out}",
+    )
+  }
+  let c_out_per_group = c_out / group
+  let k = c_in_per_group * kh * kw
+  let w_buf = w.to_f32_buffer()
+  let w_group_stride = c_out_per_group * k
+  let groups = Array::makei(group, fn(g) {
+    @gemm.pack_matrix_b_transposed_f32(
+      w_buf,
+      g * w_group_stride,
+      c_out_per_group,
+      k,
+    )
+  })
+  { c_out, c_in_per_group, kh, kw, group, groups, }
+}
+
+///|
+/// 使用预打包静态权重 `PackedConvWeight` 执行 2D Conv（V128 SIMD 零运行期权重打包 + 偏置融合 + BufferPool 复用）。
+pub fn conv2d_prepacked_f32(
+  x : @tensor.Tensor,
+  packed_w : PackedConvWeight,
+  bias : @tensor.Tensor?,
+  strides : Array[Int32],
+  pads : Array[Int32],
+  dilations : Array[Int32],
+  auto_pad : @nn_ir.AutoPad,
+  pool~ : @tensor.BufferPool? = None,
+  scratch_pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let xs = x.shape()
+  if xs.length() != 4 {
+    raise @tensor.ShapeMismatch(
+      "conv2d_prepacked_f32 requires 4D NCHW input, got rank \{xs.length()}",
+    )
+  }
+  let n_batch = xs[0]
+  let c_in = xs[1]
+  let in_h = xs[2]
+  let in_w = xs[3]
+
+  let c_out = packed_w.c_out
+  let c_in_per_group = packed_w.c_in_per_group
+  let kh = packed_w.kh
+  let kw = packed_w.kw
+  let group = packed_w.group
+
+  if c_in != c_in_per_group * group {
+    raise @tensor.ShapeMismatch(
+      "conv2d_prepacked_f32 invalid c_in=\{c_in} for group=\{group}, w_in=\{c_in_per_group}",
+    )
+  }
+  let c_out_per_group = c_out / group
+
+  let bias_buf : FixedArray[Float]? = match bias {
+    Some(b_tensor) => {
+      let b_buf = b_tensor.to_f32_buffer()
+      if b_buf.length() != c_out {
+        raise @tensor.ShapeMismatch(
+          "conv2d_prepacked_f32 bias length \{b_buf.length()} != c_out \{c_out}",
+        )
+      }
+      Some(b_buf)
+    }
+    None => None
+  }
+
+  let stride_h = if strides.length() >= 1 { strides[0] } else { 1 }
+  let stride_w = if strides.length() >= 2 { strides[1] } else { stride_h }
+  let dil_h = if dilations.length() >= 1 { dilations[0] } else { 1 }
+  let dil_w = if dilations.length() >= 2 { dilations[1] } else { dil_h }
+  let pad_top_in = if pads.length() >= 1 { pads[0] } else { 0 }
+  let pad_left_in = if pads.length() >= 2 { pads[1] } else { 0 }
+  let pad_bottom_in = if pads.length() >= 3 { pads[2] } else { pad_top_in }
+  let pad_right_in = if pads.length() >= 4 { pads[3] } else { pad_left_in }
+
+  let (out_h, pad_top, _) = compute_spatial_out_and_pads(
+    in_h, kh, stride_h, dil_h, pad_top_in, pad_bottom_in, false, auto_pad,
+  )
+  let (out_w, pad_left, _) = compute_spatial_out_and_pads(
+    in_w, kw, stride_w, dil_w, pad_left_in, pad_right_in, false, auto_pad,
+  )
+
+  let x_buf = x.to_f32_buffer()
+  let out_spatial = out_h * out_w
+  let col_k = c_in_per_group * kh * kw
+  let work_pool = match scratch_pool {
+    Some(_) => scratch_pool
+    None => pool
+  }
+
+  let out_buf = alloc_f32(pool, n_batch * c_out * out_spatial)
+  let col_t_buf = alloc_f32(work_pool, out_spatial * col_k)
+
+  let in_batch_stride = c_in * in_h * in_w
+  let in_group_stride = c_in_per_group * in_h * in_w
+  let out_batch_stride = c_out * out_spatial
+  let out_group_stride = c_out_per_group * out_spatial
+
+  for b = 0; b < n_batch; b = b + 1 {
+    for g = 0; g < group; g = g + 1 {
+      let in_off = b * in_batch_stride + g * in_group_stride
+      @conv.im2col_2d_nhwc_f32(
+        x_buf, in_off, c_in_per_group, in_h, in_w, kh, kw, stride_h, stride_w, pad_top,
+        pad_left, dil_h, dil_w, out_h, out_w, col_t_buf,
+      )
+      let out_off = b * out_batch_stride + g * out_group_stride
+      @gemm.matmul_2d_prepacked_nchw_simd_f32(
+        col_t_buf,
+        0,
+        packed_w.groups[g],
+        bias_buf,
+        g * c_out_per_group,
+        out_buf,
+        out_off,
+        out_spatial,
+      )
+    }
+  }
+
+  free_f32(work_pool, col_t_buf)
+  @tensor.Tensor::from_f32([n_batch, c_out, out_h, out_w], out_buf)
+}
+
+///|
 /// ONNX 2D Conv 算子：底层复用 `matrixlt/ml_kernels/conv::im2col_2d_f32`
-/// 与 `matrixlt/ml_kernels/gemm`（支持标量与 V128 SIMD 分派）。
+/// 与 `matrixlt/ml_kernels/gemm`（支持标量、V128 SIMD 与 `BufferPool` 缓冲复用）。
 pub fn conv2d_f32(
   x : @tensor.Tensor,
   w : @tensor.Tensor,
@@ -67,6 +234,8 @@ pub fn conv2d_f32(
   group : Int32,
   auto_pad : @nn_ir.AutoPad,
   use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+  scratch_pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let xs = x.shape()
   let ws = w.shape()
@@ -92,6 +261,19 @@ pub fn conv2d_f32(
   }
   let c_out_per_group = c_out / group
 
+  let bias_buf : FixedArray[Float]? = match bias {
+    Some(b_tensor) => {
+      let b_buf = b_tensor.to_f32_buffer()
+      if b_buf.length() != c_out {
+        raise @tensor.ShapeMismatch(
+          "conv2d_f32 bias length \{b_buf.length()} != c_out \{c_out}",
+        )
+      }
+      Some(b_buf)
+    }
+    None => None
+  }
+
   let stride_h = if strides.length() >= 1 { strides[0] } else { 1 }
   let stride_w = if strides.length() >= 2 { strides[1] } else { stride_h }
   let dil_h = if dilations.length() >= 1 { dilations[0] } else { 1 }
@@ -111,10 +293,14 @@ pub fn conv2d_f32(
   let x_buf = x.to_f32_buffer()
   let w_buf = w.to_f32_buffer()
   let out_spatial = out_h * out_w
-  let out_buf = FixedArray::make(n_batch * c_out * out_spatial, (0.0 : Float))
-
   let col_rows = c_in_per_group * kh * kw
-  let col_buf = FixedArray::make(col_rows * out_spatial, (0.0 : Float))
+  let work_pool = match scratch_pool {
+    Some(_) => scratch_pool
+    None => pool
+  }
+
+  let out_buf = alloc_f32(pool, n_batch * c_out * out_spatial)
+  let col_buf = alloc_f32(work_pool, col_rows * out_spatial)
 
   let in_batch_stride = c_in * in_h * in_w
   let in_group_stride = c_in_per_group * in_h * in_w
@@ -138,14 +324,10 @@ pub fn conv2d_f32(
     }
   }
 
-  match bias {
-    Some(b_tensor) => {
-      let b_buf = b_tensor.to_f32_buffer()
-      if b_buf.length() != c_out {
-        raise @tensor.ShapeMismatch(
-          "conv2d_f32 bias length \{b_buf.length()} != c_out \{c_out}",
-        )
-      }
+  free_f32(work_pool, col_buf)
+
+  match bias_buf {
+    Some(b_buf) =>
       for b = 0; b < n_batch; b = b + 1 {
         let b_base = b * out_batch_stride
         for oc = 0; oc < c_out; oc = oc + 1 {
@@ -156,7 +338,6 @@ pub fn conv2d_f32(
           }
         }
       }
-    }
     None => ()
   }
 
@@ -164,7 +345,7 @@ pub fn conv2d_f32(
 }
 
 ///|
-/// ONNX 2D MaxPool 算子。
+/// ONNX 2D MaxPool 算子（支持无填充无空洞快速路径与可选 `BufferPool` 复用）。
 pub fn maxpool_2d_f32(
   x : @tensor.Tensor,
   kernel_shape : Array[Int32],
@@ -173,6 +354,7 @@ pub fn maxpool_2d_f32(
   dilations : Array[Int32],
   ceil_mode : Bool,
   auto_pad : @nn_ir.AutoPad,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let xs = x.shape()
   if xs.length() != 4 || kernel_shape.length() != 2 {
@@ -204,9 +386,43 @@ pub fn maxpool_2d_f32(
   )
 
   let src = x.to_f32_buffer()
-  let out = FixedArray::make(n_batch * channels * out_h * out_w, (0.0 : Float))
+  let out = alloc_f32(pool, n_batch * channels * out_h * out_w)
   let in_hw = in_h * in_w
   let out_hw = out_h * out_w
+
+  // 快速路径：无填充且 dilation=1 且所有窗口严格位于输入范围内（消除内层边界判断分支）
+  if pad_top == 0 &&
+    pad_left == 0 &&
+    dil_h == 1 &&
+    dil_w == 1 &&
+    (out_h - 1) * stride_h + kh <= in_h &&
+    (out_w - 1) * stride_w + kw <= in_w {
+    for b = 0; b < n_batch; b = b + 1 {
+      for c = 0; c < channels; c = c + 1 {
+        let in_ch = (b * channels + c) * in_hw
+        let out_ch = (b * channels + c) * out_hw
+        for oy = 0; oy < out_h; oy = oy + 1 {
+          let iy0 = oy * stride_h
+          let out_row = out_ch + oy * out_w
+          for ox = 0; ox < out_w; ox = ox + 1 {
+            let mut row_base = in_ch + iy0 * in_w + ox * stride_w
+            let mut best = src[row_base]
+            for ky = 0; ky < kh; ky = ky + 1 {
+              for kx = 0; kx < kw; kx = kx + 1 {
+                let v = src[row_base + kx]
+                if v > best {
+                  best = v
+                }
+              }
+              row_base = row_base + in_w
+            }
+            out[out_row + ox] = best
+          }
+        }
+      }
+    }
+    return @tensor.Tensor::from_f32([n_batch, channels, out_h, out_w], out)
+  }
 
   for b = 0; b < n_batch; b = b + 1 {
     for c = 0; c < channels; c = c + 1 {
@@ -242,7 +458,7 @@ pub fn maxpool_2d_f32(
 }
 
 ///|
-/// ONNX 2D AveragePool 算子。
+/// ONNX 2D AveragePool 算子（支持可选 `BufferPool` 复用）。
 pub fn avgpool_2d_f32(
   x : @tensor.Tensor,
   kernel_shape : Array[Int32],
@@ -251,6 +467,7 @@ pub fn avgpool_2d_f32(
   ceil_mode : Bool,
   count_include_pad : Bool,
   auto_pad : @nn_ir.AutoPad,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let xs = x.shape()
   if xs.length() != 4 || kernel_shape.length() != 2 {
@@ -280,7 +497,7 @@ pub fn avgpool_2d_f32(
   )
 
   let src = x.to_f32_buffer()
-  let out = FixedArray::make(n_batch * channels * out_h * out_w, (0.0 : Float))
+  let out = alloc_f32(pool, n_batch * channels * out_h * out_w)
   let in_hw = in_h * in_w
   let out_hw = out_h * out_w
   let full_window = kh * kw
@@ -321,7 +538,7 @@ pub fn avgpool_2d_f32(
 }
 
 ///|
-/// ONNX 推理态 BatchNormalization 算子。
+/// ONNX 推理态 BatchNormalization 算子（支持可选 `BufferPool` 复用）。
 pub fn batch_norm_f32(
   x : @tensor.Tensor,
   scale : @tensor.Tensor,
@@ -329,6 +546,7 @@ pub fn batch_norm_f32(
   mean : @tensor.Tensor,
   variance : @tensor.Tensor,
   epsilon~ : Float = (1.0e-5 : Float),
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let xs = x.shape()
   let rank = xs.length()
@@ -369,7 +587,7 @@ pub fn batch_norm_f32(
   }
 
   let src = x.to_f32_buffer()
-  let out = FixedArray::make(src.length(), (0.0 : Float))
+  let out = alloc_f32(pool, src.length())
   for b = 0; b < n_batch; b = b + 1 {
     for c = 0; c < channels; c = c + 1 {
       let a = a_coef[c]

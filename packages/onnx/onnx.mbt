@@ -21,6 +21,9 @@ pub type OnnxModel = @onnx_proto.OnnxModel
 pub type Tensor = @tensor.Tensor
 
 ///|
+pub type PoolStats = @tensor.PoolStats
+
+///|
 /// 返回当前引擎版本字符串。
 pub fn engine_version() -> String {
   "moon-onnx 0.1.0"

@@ -1,4 +1,22 @@
 ///|
+/// 从可选 `BufferPool` 获取指定长度的 `FixedArray[Float]`（无池时直接分配）。
+fn alloc_f32(pool : @tensor.BufferPool?, len : Int32) -> FixedArray[Float] {
+  match pool {
+    Some(p) => p.acquire_f32(len)
+    None => FixedArray::make(len, (0.0 : Float))
+  }
+}
+
+///|
+/// 将临时工作缓冲区归还至可选 `BufferPool`。
+fn free_f32(pool : @tensor.BufferPool?, buf : FixedArray[Float]) -> Unit {
+  match pool {
+    Some(p) => p.release_f32(buf)
+    None => ()
+  }
+}
+
+///|
 /// 二元逐元素算术操作类型（内部复用快速路径与通用多向广播逻辑）。
 priv enum BinaryOp {
   BAdd
@@ -23,6 +41,7 @@ fn binary_f32(
   a : @tensor.Tensor,
   b : @tensor.Tensor,
   use_simd : Bool,
+  pool : @tensor.BufferPool?,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let a_shape = a.shape()
   let b_shape = b.shape()
@@ -31,7 +50,7 @@ fn binary_f32(
 
   let a_buf = a.to_f32_buffer()
   let b_buf = b.to_f32_buffer()
-  let out = FixedArray::make(total, (0.0 : Float))
+  let out = alloc_f32(pool, total)
 
   // 快速路径 1：同形状连续张量（支持 V128 SIMD 分派）
   if a_shape == b_shape {
@@ -92,44 +111,48 @@ fn binary_f32(
 }
 
 ///|
-/// ONNX Add 算子（支持多向广播与可选 V128 SIMD 加速）。
+/// ONNX Add 算子（支持多向广播与可选 V128 SIMD 加速及 BufferPool 复用）。
 pub fn add_f32(
   a : @tensor.Tensor,
   b : @tensor.Tensor,
   use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
-  binary_f32(BAdd, a, b, use_simd)
+  binary_f32(BAdd, a, b, use_simd, pool)
 }
 
 ///|
-/// ONNX Sub 算子（支持多向广播与可选 V128 SIMD 加速）。
+/// ONNX Sub 算子（支持多向广播与可选 V128 SIMD 加速及 BufferPool 复用）。
 pub fn sub_f32(
   a : @tensor.Tensor,
   b : @tensor.Tensor,
   use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
-  binary_f32(BSub, a, b, use_simd)
+  binary_f32(BSub, a, b, use_simd, pool)
 }
 
 ///|
-/// ONNX Mul 算子（支持多向广播与可选 V128 SIMD 加速）。
+/// ONNX Mul 算子（支持多向广播与可选 V128 SIMD 加速及 BufferPool 复用）。
 pub fn mul_f32(
   a : @tensor.Tensor,
   b : @tensor.Tensor,
   use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
-  binary_f32(BMul, a, b, use_simd)
+  binary_f32(BMul, a, b, use_simd, pool)
 }
 
 ///|
-/// ONNX Relu 算子（支持标量与 V128 `f32x4_pmax` 向量化路径）。
+/// ONNX Relu 算子（支持标量与 V128 `f32x4_pmax` 向量化路径及 BufferPool 复用）。
 pub fn relu_f32(
   x : @tensor.Tensor,
   use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let src = x.to_f32_buffer()
   let n = src.length()
-  let out = FixedArray::make(n, (0.0 : Float))
+  let out = alloc_f32(pool, n)
   if use_simd {
     @vecmath.relu_f32_v128(src, out, n)
   } else {
@@ -143,10 +166,11 @@ pub fn relu_f32(
 }
 
 ///|
-/// ONNX Softmax 算子（数值稳定版，支持任意正负轴）。
+/// ONNX Softmax 算子（数值稳定版，支持任意正负轴与 BufferPool 复用）。
 pub fn softmax_f32(
   x : @tensor.Tensor,
   axis : Int32,
+  pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let shape = x.shape()
   let rank = shape.length()
@@ -166,7 +190,7 @@ pub fn softmax_f32(
   }
 
   let src = x.to_f32_buffer()
-  let out = FixedArray::make(src.length(), (0.0 : Float))
+  let out = alloc_f32(pool, src.length())
 
   for o = 0; o < outer; o = o + 1 {
     let outer_base = o * axis_dim * inner

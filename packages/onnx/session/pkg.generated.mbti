@@ -4,6 +4,7 @@ package "matrixlt/onnx/session"
 import {
   "matrixlt/ml_kernels/gemm",
   "matrixlt/nn_ir",
+  "matrixlt/onnx/ops",
   "matrixlt/onnx_proto",
   "matrixlt/tensor",
   "moonbitlang/core/debug",
@@ -51,14 +52,21 @@ pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
   packed_weights : Map[String, @gemm.PackedMatrixB]
+  packed_conv_weights : Map[String, @ops.PackedConvWeight]
+  release_plan : Array[Array[String]]
+  pinned_outputs : Array[Bool]
+  pool : @tensor.BufferPool
 }
 pub fn Session::backend(Self) -> BackendKind
+pub fn Session::clear_pool(Self) -> Unit
 pub fn Session::from_bytes(Bytes, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::from_file(String, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::from_graph(@nn_ir.IrGraph, backend? : BackendKind) -> Self
 pub fn Session::from_model(@onnx_proto.OnnxModel, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::graph(Self) -> @nn_ir.IrGraph
+pub fn Session::packed_conv_weight_count(Self) -> Int32
 pub fn Session::packed_weight_count(Self) -> Int32
+pub fn Session::pool_stats(Self) -> @tensor.PoolStats
 pub fn Session::run(Self, Map[String, @tensor.Tensor]) -> Map[String, @tensor.Tensor] raise RuntimeError
 pub fn Session::run_profiled(Self, Map[String, @tensor.Tensor]) -> (Map[String, @tensor.Tensor], RunProfile) raise RuntimeError
 pub fn Session::run_single(Self, @tensor.Tensor) -> @tensor.Tensor raise RuntimeError

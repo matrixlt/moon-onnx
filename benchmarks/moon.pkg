@@ -3,6 +3,7 @@ import {
   "matrixlt/tensor",
   "matrixlt/ml_kernels/gemm",
   "matrixlt/ml_kernels/vecmath",
+  "matrixlt/nn_ir",
   "matrixlt/onnx/ops",
   "matrixlt/onnx/session",
 } for "test"

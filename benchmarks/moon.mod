@@ -13,5 +13,6 @@ description = "Benchmarks comparing Scalar vs MoonBit V128 SIMD kernels and MNIS
 import {
   "matrixlt/tensor@0.1.0",
   "matrixlt/ml_kernels@0.1.0",
+  "matrixlt/nn_ir@0.1.0",
   "matrixlt/onnx@0.1.0",
 }
