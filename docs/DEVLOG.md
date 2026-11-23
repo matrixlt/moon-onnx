@@ -25,3 +25,18 @@
 - 初始化 Git 仓库与 `moon.mod`（设定 `preferred_target = "native"`）。
 - 建立根包入口与基础 smoke test。
 - 添加提交前强制门禁脚本 `scripts/pre_commit_check.sh`（依次执行 `moon fmt`、`moon check --target native`、`moon test --target native`）。
+
+---
+
+## 2026-11-23 · Phase 0（Commit 2）：引入 `onnx.proto` 与 `protoc-gen-mbt` 代码生成
+
+### 1. 依赖与生成链路
+
+- 添加依赖：`moonbitlang/protobuf@0.2.0`（Protobuf 运行时）、`moonbitlang/x@0.5.9`（Native 文件 I/O 等扩展能力）。
+- 从 Python `onnx==1.23.2` 提取官方 `proto/onnx.proto`。
+- 编写 `scripts/protoc-gen-mbt.sh`（基于 `moonx moonbitlang/protoc-gen-mbt@0.3.0`）与 `scripts/gen_proto.sh`，将生成结果落盘到 `src/proto_gen/`。
+
+### 2. 踩坑记录与解决方案
+
+- **问题**：默认参数运行 `protoc-gen-mbt@0.3.0` 时，插件会开启 `json=true`，对 `onnx.proto` 中两处 `repeated bytes` 字段（`AttributeProto.strings` 与 `TensorProto.string_data`）生成了 `@lib.base64_encode(Array[Bytes])`，触发 MoonBit 编译错误（`base64_encode` 期望单个 `Bytes`）。
+- **解决**：ONNX 模型解析仅依赖二进制 Protobuf，在 `--mbt_opt` 中显式指定 `json=false`，同时在生成脚本中移除多余的 `moonbitlang/core/json` 导入。重新生成后 `moon check --target native` 与 `moon test --target native` 0 错误通过。

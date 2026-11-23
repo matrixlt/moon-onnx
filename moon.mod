@@ -16,3 +16,8 @@ keywords = [ "onnx", "inference", "ml", "simd", "wasm", "native" ]
 preferred_target = "native"
 
 description = "ONNX model parser and cross-platform inference engine written in MoonBit"
+
+import {
+  "moonbitlang/protobuf@0.2.0",
+  "moonbitlang/x@0.5.9",
+}
