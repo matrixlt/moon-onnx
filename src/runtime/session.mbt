@@ -161,34 +161,51 @@ fn optional_tensor(
 }
 
 ///|
-/// 执行单个强类型 IR 节点并返回输出张量。
+/// 执行单个强类型 IR 节点并返回输出张量（根据 backend 分派至 Scalar 或 V128 SIMD 内核）。
 fn eval_node(
   node : @ir.IrNode,
   env : Map[String, @tensor.Tensor],
-  _backend : BackendKind,
+  backend : BackendKind,
 ) -> @tensor.Tensor raise RuntimeError {
   let n = node.name
   let ins = node.inputs
+  let use_simd = backend == Simd
   try {
     match node.op {
       @ir.Add => {
         let a = require_tensor(env, n, ins, 0)
         let b = require_tensor(env, n, ins, 1)
-        @ops.add_f32(a, b)
+        if use_simd {
+          @simd.add_f32_simd(a, b)
+        } else {
+          @ops.add_f32(a, b)
+        }
       }
       @ir.Sub => {
         let a = require_tensor(env, n, ins, 0)
         let b = require_tensor(env, n, ins, 1)
-        @ops.sub_f32(a, b)
+        if use_simd {
+          @simd.sub_f32_simd(a, b)
+        } else {
+          @ops.sub_f32(a, b)
+        }
       }
       @ir.Mul => {
         let a = require_tensor(env, n, ins, 0)
         let b = require_tensor(env, n, ins, 1)
-        @ops.mul_f32(a, b)
+        if use_simd {
+          @simd.mul_f32_simd(a, b)
+        } else {
+          @ops.mul_f32(a, b)
+        }
       }
       @ir.Relu => {
         let x = require_tensor(env, n, ins, 0)
-        @ops.relu_f32(x)
+        if use_simd {
+          @simd.relu_f32_simd(x)
+        } else {
+          @ops.relu_f32(x)
+        }
       }
       @ir.Identity => require_tensor(env, n, ins, 0)
       @ir.Softmax(axis~) => {
@@ -222,19 +239,33 @@ fn eval_node(
       @ir.MatMul => {
         let a = require_tensor(env, n, ins, 0)
         let b = require_tensor(env, n, ins, 1)
-        @ops.matmul_f32(a, b)
+        if use_simd {
+          @simd.matmul_f32_simd(a, b)
+        } else {
+          @ops.matmul_f32(a, b)
+        }
       }
       @ir.Gemm(alpha~, beta~, trans_a~, trans_b~) => {
         let a = require_tensor(env, n, ins, 0)
         let b = require_tensor(env, n, ins, 1)
         let c = optional_tensor(env, n, ins, 2)
-        @ops.gemm_f32(a, b, c, alpha~, beta~, trans_a~, trans_b~)
+        if use_simd {
+          @simd.gemm_f32_simd(a, b, c, alpha~, beta~, trans_a~, trans_b~)
+        } else {
+          @ops.gemm_f32(a, b, c, alpha~, beta~, trans_a~, trans_b~)
+        }
       }
       @ir.Conv(strides~, pads~, dilations~, group~, auto_pad~, ..) => {
         let x = require_tensor(env, n, ins, 0)
         let w = require_tensor(env, n, ins, 1)
         let b = optional_tensor(env, n, ins, 2)
-        @ops.conv2d_f32(x, w, b, strides, pads, dilations, group, auto_pad)
+        if use_simd {
+          @simd.conv2d_f32_simd(
+            x, w, b, strides, pads, dilations, group, auto_pad,
+          )
+        } else {
+          @ops.conv2d_f32(x, w, b, strides, pads, dilations, group, auto_pad)
+        }
       }
       @ir.MaxPool(
         kernel_shape~,

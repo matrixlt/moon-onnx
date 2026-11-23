@@ -157,3 +157,17 @@
   - 提供面向 `Tensor` 的 `add_f32_simd`、`sub_f32_simd`、`mul_f32_simd`、`relu_f32_simd`（4-wide 主循环 + 非 4 倍数尾部标量收尾，广播形状自动回退至通用广播）。
   - 提供基于 `FixedArray[Byte]` 零转换的 `pack_f32_to_bytes` / `unpack_bytes_to_f32`、`add_bytes_v128` 与 `relu_bytes_v128`，便于后续对比纯内存加载版与逐通道构造版的 SIMD 性能差异。
 - 单元测试验证非 4 倍数长度下 SIMD 输出与标量内核逐位一致（累计 29 项测试全部通过）。
+
+---
+
+## 2026-11-23 · Phase 3（Commit 15）：实现 `4x8` 寄存器分块 `V128` SIMD GEMM 与卷积接入
+
+- 新增 `src/backend/simd/gemm_simd.mbt`：
+  - 将矩阵 `B[K, N]` 预打包为 4 列对齐（16 字节对齐）的小端序 `FixedArray[Byte]`，彻底消除热循环内边界判断。
+  - 实现 `NC = 64` 缓存列分块 + `4 x 8` 寄存器分块微内核：每步 K 归约维护 8 个 `V128` 累加器，仅需 2 次 `v128_load` + 4 次 `f32x4_splat` 完成 8 条 `f32x4_relaxed_madd`（32 次乘加），并覆盖 `4x4` / `1x8` / `1x4` 全部非对齐边角情况。
+  - 通过 `@ops.conv2d_f32_with_gemm(..., matmul_2d_raw_simd_f32)` 一行零重复接入 2D 卷积。
+- 在 `src/runtime/session.mbt` 中完成 `BackendKind::Simd` 全链路分派。
+- 实测 `--backend=simd` 端到端对齐 ONNX Runtime：
+  - `mnist_mlp.onnx`：`max_abs_diff = 1.1920929e-7`（PASS）
+  - `mnist_cnn.onnx`：`max_abs_diff = 1.1920929e-6`（PASS）
+  - 累计 32 项测试全部通过。

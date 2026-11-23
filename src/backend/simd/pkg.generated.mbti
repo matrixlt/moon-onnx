@@ -2,6 +2,7 @@
 package "local/moon_onnx/src/backend/simd"
 
 import {
+  "local/moon_onnx/src/ir",
   "local/moon_onnx/src/tensor",
 }
 
@@ -9,6 +10,14 @@ import {
 pub fn add_bytes_v128(FixedArray[Byte], FixedArray[Byte], FixedArray[Byte], Int32) -> Unit
 
 pub fn add_f32_simd(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn conv2d_f32_simd(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], Int32, @ir.AutoPad) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn gemm_f32_simd(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, alpha? : Float, beta? : Float, trans_a? : Bool, trans_b? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn matmul_2d_raw_simd_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
+
+pub fn matmul_f32_simd(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn mul_f32_simd(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
