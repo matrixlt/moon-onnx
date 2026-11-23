@@ -88,3 +88,11 @@
 - 实现 `add_f32`、`sub_f32`、`mul_f32`：覆盖同形状连续快速路径、2D+1D 偏置快速路径与基于虚拟广播步长的任意阶 NumPy/ONNX 多向广播通用路径。
 - 实现 `relu_f32` 与数值稳定版 `softmax_f32`（支持任意正负轴，先减最大值并在 `Double` 精度累计指数和避免溢出错差）。
 - 新增单元测试覆盖 4D+3D CNN 通道偏置广播、2D+1D 偏置广播与大数值 Softmax 稳定性（累计 15 项测试全部通过）。
+
+---
+
+## 2026-11-23 · Phase 2（Commit 8）：实现形状变换算子（`src/ops/shape_ops.mbt`）
+
+- 实现 `reshape_op`（解析 Int64 形状张量，支持非连续输入自动连续化）、`flatten_op`、`transpose_op`（空 `perm` 按 ONNX 规范默认反转全部维度）。
+- 实现 `squeeze_op` / `unsqueeze_op`，同时兼容 Opset < 13（属性传轴）与 Opset >= 13（第二输入张量传轴）。
+- 累计 17 项测试全部通过。

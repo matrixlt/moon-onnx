@@ -8,13 +8,23 @@ import {
 // Values
 pub fn add_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn flatten_op(@tensor.Tensor, axis? : Int32) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn mul_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn relu_f32(@tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn reshape_op(@tensor.Tensor, @tensor.Tensor, allowzero? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn softmax_f32(@tensor.Tensor, Int32) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn squeeze_op(@tensor.Tensor, Array[Int32]?, @tensor.Tensor?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn sub_f32(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn transpose_op(@tensor.Tensor, Array[Int32]) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn unsqueeze_op(@tensor.Tensor, Array[Int32]?, @tensor.Tensor?) -> @tensor.Tensor raise @tensor.TensorError
 
 // Errors
 
