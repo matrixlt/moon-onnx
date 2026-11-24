@@ -545,3 +545,89 @@ test "End-to-end multi-output Split/Concat and Transformer LayerNorm+Gelu FFN bl
   assert_eq(o_si.shape(), [3, 8])
   assert_true(@session.max_abs_diff_f32(o_si, o_sc) <= (5.0e-4 : Float))
 }
+
+///|
+/// 端到端验证 INT8 量化推理流水线：`QuantizeLinear -> QLinearMatMul -> DequantizeLinear`，
+/// 确认 V128 `i32x4.dot_i16x8_s` 与标量后端逐位完全一致，且反量化结果与 Float32 基准高精度吻合。
+test "End-to-end INT8 QuantizeLinear -> QLinearMatMul -> DequantizeLinear (Scalar vs V128 SIMD)" {
+  let x_f32 = @tensor.Tensor::from_f32(
+    [3, 24],
+    FixedArray::makei(3 * 24, fn(i) {
+      Float::from_int(i % 15 - 7) * (0.2 : Float)
+    }),
+  )
+  let w_f32 = @tensor.Tensor::from_f32(
+    [24, 6],
+    FixedArray::makei(24 * 6, fn(i) {
+      Float::from_int(i % 13 - 6) * (0.15 : Float)
+    }),
+  )
+
+  // 对称 INT8 量化参数
+  let a_scale = @tensor.Tensor::from_f32(
+    [],
+    FixedArray::make(1, (0.02 : Float)),
+  )
+  let a_zp = @tensor.Tensor::from_i8([], FixedArray::make(1, b'\x00'))
+  let b_scale = @tensor.Tensor::from_f32(
+    [],
+    FixedArray::make(1, (0.01 : Float)),
+  )
+  let b_zp = @tensor.Tensor::from_i8([], FixedArray::make(1, b'\x00'))
+  let y_scale = @tensor.Tensor::from_f32(
+    [],
+    FixedArray::make(1, (0.05 : Float)),
+  )
+  let y_zp = @tensor.Tensor::from_i8([], FixedArray::make(1, b'\x00'))
+
+  // 离线量化权重 B 为 Int8（单元素 1 字节，相比 Float32 实现 4× 权重压缩）
+  let w_q = @ops.quantize_linear_op(w_f32, b_scale, Some(b_zp))
+  assert_eq(w_q.dtype(), @tensor.Int8)
+  assert_eq(w_q.dtype().byte_size(), 1)
+
+  let q_graph : @nn_ir.IrGraph = {
+    name: "int8_qlinear_mlp",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: Map([
+      ("a_s", a_scale),
+      ("a_zp", a_zp),
+      ("w_q", w_q),
+      ("b_s", b_scale),
+      ("b_zp", b_zp),
+      ("y_s", y_scale),
+      ("y_zp", y_zp),
+    ]),
+    nodes: [
+      {
+        name: "quant_x",
+        op: @nn_ir.QuantizeLinear(axis=1),
+        inputs: ["x", "a_s", "a_zp"],
+        outputs: ["x_q"],
+      },
+      {
+        name: "qmm",
+        op: @nn_ir.QLinearMatMul,
+        inputs: ["x_q", "a_s", "a_zp", "w_q", "b_s", "b_zp", "y_s", "y_zp"],
+        outputs: ["y_q"],
+      },
+      {
+        name: "dequant_y",
+        op: @nn_ir.DequantizeLinear(axis=1),
+        inputs: ["y_q", "y_s", "y_zp"],
+        outputs: ["y"],
+      },
+    ],
+  }
+
+  let s_sc = @session.Session::from_graph(q_graph, backend=@session.Scalar)
+  let s_si = @session.Session::from_graph(q_graph, backend=@session.Simd)
+  let out_sc = s_sc.run_single(x_f32)
+  let out_si = s_si.run_single(x_f32)
+  let ref_f32 = @ops.matmul_f32(x_f32, w_f32)
+
+  // V128 INT8 SIMD 与标量参考逐位完全一致（误差为 0）
+  assert_eq(@session.max_abs_diff_f32(out_si, out_sc), (0.0 : Float))
+  // 量化推理结果与 Float32 基准误差在半个量化步长附近
+  assert_true(@session.max_abs_diff_f32(out_si, ref_f32) <= (0.06 : Float))
+}

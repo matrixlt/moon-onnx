@@ -92,6 +92,9 @@ pub(all) enum Op {
   ReduceMean(axes~ : Array[Int32]?, keepdims~ : Bool, noop_with_empty_axes~ : Bool)
   ReduceSum(axes~ : Array[Int32]?, keepdims~ : Bool, noop_with_empty_axes~ : Bool)
   Shape(start~ : Int32?, end~ : Int32?)
+  QuantizeLinear(axis~ : Int32)
+  DequantizeLinear(axis~ : Int32)
+  QLinearMatMul
 }
 pub fn Op::name(Self) -> String
 

@@ -78,6 +78,44 @@ pub fn Tensor::contiguous(self : Tensor) -> Tensor raise TensorError {
       }
       Tensor::from_bool(self.shape, dst)
     }
+    U8(src) => {
+      let dst = FixedArray::make(n, b'\x00')
+      for i = 0; i < n; i = i + 1 {
+        dst[i] = src[self.physical_index_from_linear(i)]
+      }
+      Tensor::from_u8(self.shape, dst)
+    }
+    I8(src) => {
+      let dst = FixedArray::make(n, b'\x00')
+      for i = 0; i < n; i = i + 1 {
+        dst[i] = src[self.physical_index_from_linear(i)]
+      }
+      Tensor::from_i8(self.shape, dst)
+    }
+  }
+}
+
+///|
+/// 获取底层连续的 `FixedArray[Byte]`（用于 `UInt8` 量化张量）。
+pub fn Tensor::to_u8_buffer(
+  self : Tensor,
+) -> FixedArray[Byte] raise TensorError {
+  let contig = self.contiguous()
+  match contig.data {
+    U8(buf) => buf
+    _ => raise DTypeMismatch("to_u8_buffer: expected UInt8, got \{self.dtype}")
+  }
+}
+
+///|
+/// 获取底层连续的补码 `FixedArray[Byte]`（用于 `Int8` 量化张量）。
+pub fn Tensor::to_i8_buffer(
+  self : Tensor,
+) -> FixedArray[Byte] raise TensorError {
+  let contig = self.contiguous()
+  match contig.data {
+    I8(buf) => buf
+    _ => raise DTypeMismatch("to_i8_buffer: expected Int8, got \{self.dtype}")
   }
 }
 

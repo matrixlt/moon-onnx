@@ -55,6 +55,8 @@ pub(all) enum DType {
   Int64
   Int32
   Bool
+  UInt8
+  Int8
 }
 pub fn DType::byte_size(Self) -> Int32
 pub fn DType::short_name(Self) -> String
@@ -107,6 +109,8 @@ pub fn Tensor::from_f32_bytes_le(Array[Int32], Bytes) -> Self raise TensorError
 pub fn Tensor::from_f64(Array[Int32], FixedArray[Double]) -> Self raise TensorError
 pub fn Tensor::from_i32(Array[Int32], FixedArray[Int32]) -> Self raise TensorError
 pub fn Tensor::from_i64(Array[Int32], FixedArray[Int64]) -> Self raise TensorError
+pub fn Tensor::from_i8(Array[Int32], FixedArray[Byte]) -> Self raise TensorError
+pub fn Tensor::from_u8(Array[Int32], FixedArray[Byte]) -> Self raise TensorError
 pub fn Tensor::full_f32(Array[Int32], Float) -> Self raise TensorError
 pub fn Tensor::get_f32(Self, Array[Int32]) -> Float raise TensorError
 pub fn Tensor::get_f32_flat(Self, Int32) -> Float raise TensorError
@@ -124,6 +128,8 @@ pub fn Tensor::summary(Self) -> String
 pub fn Tensor::to_f32_buffer(Self) -> FixedArray[Float] raise TensorError
 pub fn Tensor::to_f32_bytes_le(Self) -> FixedArray[Byte] raise TensorError
 pub fn Tensor::to_i64_buffer(Self) -> FixedArray[Int64] raise TensorError
+pub fn Tensor::to_i8_buffer(Self) -> FixedArray[Byte] raise TensorError
+pub fn Tensor::to_u8_buffer(Self) -> FixedArray[Byte] raise TensorError
 pub fn Tensor::transpose(Self, Array[Int32]) -> Self raise TensorError
 pub fn Tensor::unsqueeze(Self, Array[Int32]) -> Self raise TensorError
 pub fn Tensor::zeros_f32(Array[Int32]) -> Self raise TensorError
@@ -134,6 +140,8 @@ pub(all) enum TensorData {
   I64(FixedArray[Int64])
   I32(FixedArray[Int32])
   Bool(FixedArray[Bool])
+  U8(FixedArray[Byte])
+  I8(FixedArray[Byte])
 }
 pub fn TensorData::len(Self) -> Int32
 

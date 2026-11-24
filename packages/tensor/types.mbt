@@ -38,6 +38,8 @@ pub(all) enum DType {
   Int64
   Int32
   Bool
+  UInt8
+  Int8
 }
 
 ///|
@@ -70,6 +72,8 @@ pub fn DType::byte_size(self : DType) -> Int32 {
     Int64 => 8
     Int32 => 4
     Bool => 1
+    UInt8 => 1
+    Int8 => 1
   }
 }
 
@@ -82,6 +86,8 @@ pub fn DType::short_name(self : DType) -> String {
     Int64 => "i64"
     Int32 => "i32"
     Bool => "bool"
+    UInt8 => "u8"
+    Int8 => "i8"
   }
 }
 
@@ -94,6 +100,10 @@ pub(all) enum TensorData {
   I64(FixedArray[Int64])
   I32(FixedArray[Int32])
   Bool(FixedArray[Bool])
+  /// 无符号 8 位量化存储（0..255）
+  U8(FixedArray[Byte])
+  /// 有符号 8 位量化存储（-128..127，以二进制补码字节存放）
+  I8(FixedArray[Byte])
 }
 
 ///|
@@ -105,6 +115,8 @@ pub fn TensorData::len(self : TensorData) -> Int32 {
     I64(buf) => buf.length()
     I32(buf) => buf.length()
     Bool(buf) => buf.length()
+    U8(buf) => buf.length()
+    I8(buf) => buf.length()
   }
 }
 
@@ -265,6 +277,48 @@ pub fn Tensor::from_bool(
     shape: shape.copy(),
     strides: compute_strides(shape),
     dtype: Bool,
+  }
+}
+
+///|
+/// 从紧凑 `FixedArray[Byte]` 构造无符号 8 位量化张量（`UInt8`）。
+pub fn Tensor::from_u8(
+  shape : Array[Int32],
+  data : FixedArray[Byte],
+) -> Tensor raise TensorError {
+  let expected = num_elements(shape)
+  if data.length() != expected {
+    raise ShapeMismatch(
+      "from_u8: shape \{format_shape(shape)} requires \{expected} elements, got \{data.length()}",
+    )
+  }
+  {
+    data: U8(data),
+    offset: 0,
+    shape: shape.copy(),
+    strides: compute_strides(shape),
+    dtype: UInt8,
+  }
+}
+
+///|
+/// 从补码编码的紧凑 `FixedArray[Byte]` 构造有符号 8 位量化张量（`Int8`）。
+pub fn Tensor::from_i8(
+  shape : Array[Int32],
+  data : FixedArray[Byte],
+) -> Tensor raise TensorError {
+  let expected = num_elements(shape)
+  if data.length() != expected {
+    raise ShapeMismatch(
+      "from_i8: shape \{format_shape(shape)} requires \{expected} elements, got \{data.length()}",
+    )
+  }
+  {
+    data: I8(data),
+    offset: 0,
+    shape: shape.copy(),
+    strides: compute_strides(shape),
+    dtype: Int8,
   }
 }
 

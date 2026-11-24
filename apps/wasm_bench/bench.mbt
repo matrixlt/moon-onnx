@@ -236,3 +236,61 @@ pub fn bench_relu65k_simd_bytes(iters : Int32) -> Float {
   }
   Float::from_int(acc)
 }
+
+///|
+/// INT8 量化矩阵乘法（`128×128×128`）标量基准。
+pub fn bench_qgemm128_i8_scalar(iters : Int32) -> Float {
+  let a = FixedArray::makei(128 * 128, fn(i) { @quant.i8_to_byte(i % 127 - 63) })
+  let b = FixedArray::makei(128 * 128, fn(i) {
+    @quant.i8_to_byte(i * 3 % 127 - 63)
+  })
+  let out = FixedArray::make(128 * 128, b'\x00')
+  let mut acc = 0
+  for _i = 0; _i < iters; _i = _i + 1 {
+    @quant.qlinear_matmul_i8_scalar(
+      a,
+      (0.05 : Float),
+      b'\x00',
+      b,
+      (0.04 : Float),
+      b'\x00',
+      (0.5 : Float),
+      b'\x00',
+      out,
+      128,
+      128,
+      128,
+    )
+    acc = acc + out[0].to_int()
+  }
+  Float::from_int(acc)
+}
+
+///|
+/// INT8 量化矩阵乘法（`128×128×128`）V128 `i32x4.dot_i16x8_s` 硬件 SIMD 基准。
+pub fn bench_qgemm128_i8_simd(iters : Int32) -> Float {
+  let a = FixedArray::makei(128 * 128, fn(i) { @quant.i8_to_byte(i % 127 - 63) })
+  let b = FixedArray::makei(128 * 128, fn(i) {
+    @quant.i8_to_byte(i * 3 % 127 - 63)
+  })
+  let out = FixedArray::make(128 * 128, b'\x00')
+  let mut acc = 0
+  for _i = 0; _i < iters; _i = _i + 1 {
+    @quant.qlinear_matmul_i8_v128(
+      a,
+      (0.05 : Float),
+      b'\x00',
+      b,
+      (0.04 : Float),
+      b'\x00',
+      (0.5 : Float),
+      b'\x00',
+      out,
+      128,
+      128,
+      128,
+    )
+    acc = acc + out[0].to_int()
+  }
+  Float::from_int(acc)
+}

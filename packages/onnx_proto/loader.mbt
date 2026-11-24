@@ -24,6 +24,8 @@ fn read_u64_le(bytes : Bytes, offset : Int32) -> UInt64 {
 pub fn onnx_dtype_to_dtype(code : Int32) -> @tensor.DType raise ModelError {
   match code {
     1 => @tensor.Float32
+    2 => @tensor.UInt8
+    3 => @tensor.Int8
     6 => @tensor.Int32
     7 => @tensor.Int64
     9 => @tensor.Bool
@@ -137,6 +139,32 @@ pub fn decode_tensor_proto(
         e => raise InvalidTensor("tensor '\{name}': \{e}")
       }
     }
+    @tensor.UInt8 => {
+      if tp.int32_data.length() != expected {
+        raise InvalidTensor(
+          "tensor '\{name}' uint8 int32_data length \{tp.int32_data.length()} != expected \{expected}",
+        )
+      }
+      let buf = FixedArray::makei(expected, fn(i) {
+        (tp.int32_data[i] & 0xFF).to_byte()
+      })
+      @tensor.Tensor::from_u8(shape, buf) catch {
+        e => raise InvalidTensor("tensor '\{name}': \{e}")
+      }
+    }
+    @tensor.Int8 => {
+      if tp.int32_data.length() != expected {
+        raise InvalidTensor(
+          "tensor '\{name}' int8 int32_data length \{tp.int32_data.length()} != expected \{expected}",
+        )
+      }
+      let buf = FixedArray::makei(expected, fn(i) {
+        (tp.int32_data[i] & 0xFF).to_byte()
+      })
+      @tensor.Tensor::from_i8(shape, buf) catch {
+        e => raise InvalidTensor("tensor '\{name}': \{e}")
+      }
+    }
   }
 }
 
@@ -192,6 +220,18 @@ fn decode_raw_data(
     @tensor.Bool => {
       let buf = FixedArray::makei(expected, fn(i) { raw[i] != b'\x00' })
       @tensor.Tensor::from_bool(shape, buf) catch {
+        e => raise InvalidTensor("tensor '\{name}': \{e}")
+      }
+    }
+    @tensor.UInt8 => {
+      let buf = FixedArray::makei(expected, fn(i) { raw[i] })
+      @tensor.Tensor::from_u8(shape, buf) catch {
+        e => raise InvalidTensor("tensor '\{name}': \{e}")
+      }
+    }
+    @tensor.Int8 => {
+      let buf = FixedArray::makei(expected, fn(i) { raw[i] })
+      @tensor.Tensor::from_i8(shape, buf) catch {
         e => raise InvalidTensor("tensor '\{name}': \{e}")
       }
     }

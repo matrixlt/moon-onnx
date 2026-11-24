@@ -147,6 +147,8 @@ fn fmt_dtype(dt : @tensor.DType) -> String {
     @tensor.Int64 => "@tensor.Int64"
     @tensor.Int32 => "@tensor.Int32"
     @tensor.Bool => "@tensor.Bool"
+    @tensor.UInt8 => "@tensor.UInt8"
+    @tensor.Int8 => "@tensor.Int8"
   }
 }
 

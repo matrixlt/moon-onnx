@@ -132,6 +132,9 @@ pub(all) enum Op {
     noop_with_empty_axes~ : Bool,
   )
   Shape(start~ : Int32?, end~ : Int32?)
+  QuantizeLinear(axis~ : Int32)
+  DequantizeLinear(axis~ : Int32)
+  QLinearMatMul
 }
 
 ///|
@@ -183,6 +186,9 @@ pub fn Op::name(self : Op) -> String {
     ReduceMean(..) => "ReduceMean"
     ReduceSum(..) => "ReduceSum"
     Shape(..) => "Shape"
+    QuantizeLinear(..) => "QuantizeLinear"
+    DequantizeLinear(..) => "DequantizeLinear"
+    QLinearMatMul => "QLinearMatMul"
   }
 }
 

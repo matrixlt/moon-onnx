@@ -25,9 +25,11 @@ for target in wasm wasm-gc js; do
     -p matrixlt/ml_kernels/gemm \
     -p matrixlt/ml_kernels/vecmath \
     -p matrixlt/ml_kernels/conv \
+    -p matrixlt/ml_kernels/quant \
     -p matrixlt/nn_ir \
     -p matrixlt/nn_ir/opt \
     -p matrixlt/onnx/frontend \
+    -p matrixlt/onnx/codegen \
     -p matrixlt/onnx/ops
 done
 

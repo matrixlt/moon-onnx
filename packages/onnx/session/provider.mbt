@@ -513,6 +513,39 @@ fn eval_cpu_node(
         let x = ctx.require_tensor(n, ins, 0)
         @ops.shape_op(x, start~, end~)
       }
+      @nn_ir.QuantizeLinear(axis~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let scale = ctx.require_tensor(n, ins, 1)
+        let zp = ctx.optional_tensor(n, ins, 2)
+        @ops.quantize_linear_op(x, scale, zp, axis~)
+      }
+      @nn_ir.DequantizeLinear(axis~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let scale = ctx.require_tensor(n, ins, 1)
+        let zp = ctx.optional_tensor(n, ins, 2)
+        @ops.dequantize_linear_op(x, scale, zp, axis~, pool=out_pool)
+      }
+      @nn_ir.QLinearMatMul => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let a_scale = ctx.require_tensor(n, ins, 1)
+        let a_zp = ctx.require_tensor(n, ins, 2)
+        let b = ctx.require_tensor(n, ins, 3)
+        let b_scale = ctx.require_tensor(n, ins, 4)
+        let b_zp = ctx.require_tensor(n, ins, 5)
+        let y_scale = ctx.require_tensor(n, ins, 6)
+        let y_zp = ctx.require_tensor(n, ins, 7)
+        @ops.qlinear_matmul_op(
+          a,
+          a_scale,
+          a_zp,
+          b,
+          b_scale,
+          b_zp,
+          y_scale,
+          y_zp,
+          use_simd~,
+        )
+      }
     }
   } catch {
     MissingTensor(msg) => raise MissingTensor(msg)

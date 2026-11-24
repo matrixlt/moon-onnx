@@ -1,0 +1,39 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/ml_kernels/quant"
+
+// Values
+pub fn byte_to_i8(Byte) -> Int32
+
+pub fn dequantize_i8_per_tensor(FixedArray[Byte], Float, Byte, FixedArray[Float], Int32) -> Unit
+
+pub fn dequantize_u8_per_tensor(FixedArray[Byte], Float, Byte, FixedArray[Float], Int32) -> Unit
+
+pub fn i8_to_byte(Int32) -> Byte
+
+pub fn matmul_f32_w8_i8(FixedArray[Float], FixedArray[Byte], FixedArray[Float], FixedArray[Float], Int32, Int32, Int32) -> Unit
+
+pub fn qlinear_matmul_i8_scalar(FixedArray[Byte], Float, Byte, FixedArray[Byte], Float, Byte, Float, Byte, FixedArray[Byte], Int32, Int32, Int32) -> Unit
+
+pub fn qlinear_matmul_i8_v128(FixedArray[Byte], Float, Byte, FixedArray[Byte], Float, Byte, Float, Byte, FixedArray[Byte], Int32, Int32, Int32) -> Unit
+
+pub fn qlinear_matmul_u8_scalar(FixedArray[Byte], Float, Byte, FixedArray[Byte], Float, Byte, Float, Byte, FixedArray[Byte], Int32, Int32, Int32) -> Unit
+
+pub fn qlinear_matmul_u8_v128(FixedArray[Byte], Float, Byte, FixedArray[Byte], Float, Byte, Float, Byte, FixedArray[Byte], Int32, Int32, Int32) -> Unit
+
+pub fn quantize_i8_per_tensor(FixedArray[Float], Float, Byte, FixedArray[Byte], Int32) -> Unit
+
+pub fn quantize_u8_per_tensor(FixedArray[Float], Float, Byte, FixedArray[Byte], Int32) -> Unit
+
+pub fn quantize_weights_symmetric_i8(FixedArray[Float], Int32, Int32) -> (FixedArray[Byte], FixedArray[Float])
+
+pub fn round_half_to_even(Double) -> Int32
+
+pub fn u8_to_byte(Int32) -> Byte
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

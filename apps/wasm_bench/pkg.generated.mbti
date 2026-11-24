@@ -18,6 +18,10 @@ pub fn bench_gemm64_scalar(Int32) -> Float
 
 pub fn bench_gemm64_simd(Int32) -> Float
 
+pub fn bench_qgemm128_i8_scalar(Int32) -> Float
+
+pub fn bench_qgemm128_i8_simd(Int32) -> Float
+
 pub fn bench_relu65k_scalar(Int32) -> Float
 
 pub fn bench_relu65k_simd_bytes(Int32) -> Float

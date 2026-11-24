@@ -24,6 +24,8 @@ pub fn conv2d_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, Array[Int32],
 
 pub fn conv2d_prepacked_f32(@tensor.Tensor, PackedConvWeight, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], @nn_ir.AutoPad, activation? : @nn_ir.FusedActivation, pool? : @tensor.BufferPool?, scratch_pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn dequantize_linear_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, axis? : Int32, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn div_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn exp_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
@@ -61,6 +63,10 @@ pub fn pack_conv2d_weight_f32(@tensor.Tensor, Int32) -> PackedConvWeight raise @
 pub fn pad_f32(@tensor.Tensor, Array[Int32], String, Float, Array[Int32]?, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn pow_f32(@tensor.Tensor, @tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn qlinear_matmul_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, use_simd? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn quantize_linear_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, axis? : Int32) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn reduce_mean_f32(@tensor.Tensor, Array[Int32]?, @tensor.Tensor?, keepdims? : Bool, noop_with_empty_axes? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 

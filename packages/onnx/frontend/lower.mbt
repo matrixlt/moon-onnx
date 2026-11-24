@@ -83,6 +83,8 @@ fn parse_onnx_dtype(
 ) -> @tensor.DType raise @nn_ir.IrError {
   match code {
     1 => @tensor.Float32
+    2 => @tensor.UInt8
+    3 => @tensor.Int8
     6 => @tensor.Int32
     7 => @tensor.Int64
     9 => @tensor.Bool
@@ -453,6 +455,11 @@ fn lower_node(
         start=get_attr_int_opt(attrs, "start"),
         end=get_attr_int_opt(attrs, "end"),
       )
+    "QuantizeLinear" =>
+      @nn_ir.QuantizeLinear(axis=get_attr_int(attrs, "axis", 1))
+    "DequantizeLinear" =>
+      @nn_ir.DequantizeLinear(axis=get_attr_int(attrs, "axis", 1))
+    "QLinearMatMul" => @nn_ir.QLinearMatMul
     other => raise @nn_ir.UnsupportedOp(other)
   }
 

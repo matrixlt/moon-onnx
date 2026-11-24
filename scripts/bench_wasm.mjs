@@ -21,8 +21,9 @@ async function runSuite(label, wasmPath) {
   );
 
   const pairs = [
-    ["GEMM 64x64x64", "bench_gemm64_scalar", "bench_gemm64_simd", 200],
-    ["GEMM 128x128x128", "bench_gemm128_scalar", "bench_gemm128_simd", 30],
+    ["GEMM 64x64x64 (f32)", "bench_gemm64_scalar", "bench_gemm64_simd", 200],
+    ["GEMM 128x128x128 (f32)", "bench_gemm128_scalar", "bench_gemm128_simd", 30],
+    ["QLinearMatMul 128x128x128 (int8)", "bench_qgemm128_i8_scalar", "bench_qgemm128_i8_simd", 30],
     ["Conv2D 1x8x14x14->16 k=5 +Relu", "bench_conv2d_scalar", "bench_conv2d_simd", 80],
     ["Depthwise 1x32x14x14 k=3 +ReLU6", "bench_depthwise_scalar", "bench_depthwise_simd", 100],
     ["Relu n=65536 (byte V128 pmax)", "bench_relu65k_scalar", "bench_relu65k_simd_bytes", 300],

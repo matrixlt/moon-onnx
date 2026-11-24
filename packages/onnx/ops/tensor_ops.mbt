@@ -39,7 +39,22 @@ pub fn shape_op(
 }
 
 ///|
-/// ONNX `Cast` 算子：在 `Float32` / `Float64` / `Int64` / `Int32` / `Bool` 之间执行逐元素类型转换。
+/// 将连续张量的第 `i` 个元素统一读取为 `Double`（供 `Cast` 算子通用转换使用）。
+fn read_elem_double(c : @tensor.Tensor, i : Int32) -> Double {
+  let idx = c.offset + i
+  match c.data {
+    @tensor.F32(src) => src[idx].to_double()
+    @tensor.F64(src) => src[idx]
+    @tensor.I64(src) => src[idx].to_double()
+    @tensor.I32(src) => src[idx].to_double()
+    @tensor.Bool(src) => if src[idx] { 1.0 } else { 0.0 }
+    @tensor.U8(src) => src[idx].to_int().to_double()
+    @tensor.I8(src) => @quant.byte_to_i8(src[idx]).to_double()
+  }
+}
+
+///|
+/// ONNX `Cast` 算子：在 `Float32` / `Float64` / `Int64` / `Int32` / `Bool` / `UInt8` / `Int8` 之间执行逐元素类型转换。
 pub fn cast_op(
   x : @tensor.Tensor,
   to : @tensor.DType,
@@ -49,138 +64,38 @@ pub fn cast_op(
   let n = c.numel()
   match to {
     @tensor.Float32 => {
-      let out = FixedArray::make(n, (0.0 : Float))
-      match c.data {
-        @tensor.F32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i]
-          }
-        @tensor.F64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = Float::from_double(src[c.offset + i])
-          }
-        @tensor.I64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = Float::from_double(src[c.offset + i].to_double())
-          }
-        @tensor.I32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = Float::from_int(src[c.offset + i])
-          }
-        @tensor.Bool(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = if src[c.offset + i] {
-              (1.0 : Float)
-            } else {
-              (0.0 : Float)
-            }
-          }
-      }
+      let out = FixedArray::makei(n, fn(i) {
+        Float::from_double(read_elem_double(c, i))
+      })
       @tensor.Tensor::from_f32(shape, out)
     }
     @tensor.Float64 => {
-      let out = FixedArray::make(n, 0.0)
-      match c.data {
-        @tensor.F32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_double()
-          }
-        @tensor.F64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i]
-          }
-        @tensor.I64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_double()
-          }
-        @tensor.I32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_double()
-          }
-        @tensor.Bool(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = if src[c.offset + i] { 1.0 } else { 0.0 }
-          }
-      }
+      let out = FixedArray::makei(n, fn(i) { read_elem_double(c, i) })
       @tensor.Tensor::from_f64(shape, out)
     }
     @tensor.Int64 => {
-      let out = FixedArray::make(n, (0 : Int64))
-      match c.data {
-        @tensor.F32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_double().to_int64()
-          }
-        @tensor.F64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_int64()
-          }
-        @tensor.I64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i]
-          }
-        @tensor.I32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_int64()
-          }
-        @tensor.Bool(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = if src[c.offset + i] { (1 : Int64) } else { (0 : Int64) }
-          }
-      }
+      let out = FixedArray::makei(n, fn(i) { read_elem_double(c, i).to_int64() })
       @tensor.Tensor::from_i64(shape, out)
     }
     @tensor.Int32 => {
-      let out = FixedArray::make(n, 0)
-      match c.data {
-        @tensor.F32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_double().to_int()
-          }
-        @tensor.F64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_int()
-          }
-        @tensor.I64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i].to_int()
-          }
-        @tensor.I32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i]
-          }
-        @tensor.Bool(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = if src[c.offset + i] { 1 } else { 0 }
-          }
-      }
+      let out = FixedArray::makei(n, fn(i) { read_elem_double(c, i).to_int() })
       @tensor.Tensor::from_i32(shape, out)
     }
     @tensor.Bool => {
-      let out = FixedArray::make(n, false)
-      match c.data {
-        @tensor.F32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i] != (0.0 : Float)
-          }
-        @tensor.F64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i] != 0.0
-          }
-        @tensor.I64(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i] != (0 : Int64)
-          }
-        @tensor.I32(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i] != 0
-          }
-        @tensor.Bool(src) =>
-          for i = 0; i < n; i = i + 1 {
-            out[i] = src[c.offset + i]
-          }
-      }
+      let out = FixedArray::makei(n, fn(i) { read_elem_double(c, i) != 0.0 })
       @tensor.Tensor::from_bool(shape, out)
+    }
+    @tensor.UInt8 => {
+      let out = FixedArray::makei(n, fn(i) {
+        (read_elem_double(c, i).to_int() & 0xFF).to_byte()
+      })
+      @tensor.Tensor::from_u8(shape, out)
+    }
+    @tensor.Int8 => {
+      let out = FixedArray::makei(n, fn(i) {
+        (read_elem_double(c, i).to_int() & 0xFF).to_byte()
+      })
+      @tensor.Tensor::from_i8(shape, out)
     }
   }
 }
