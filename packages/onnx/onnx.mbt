@@ -91,3 +91,24 @@ pub fn max_abs_diff_f32(
 ) -> Float raise RuntimeError {
   @session.max_abs_diff_f32(actual, expected)
 }
+
+///|
+pub type CodegenConfig = @codegen.CodegenConfig
+
+///|
+pub type AotArtifact = @codegen.AotArtifact
+
+///|
+/// 将已加载的 `OnnxModel` 静态编译为独立、零 Map、零 Protobuf 的 MoonBit 推理源码与权重包（`onnx2mbt`）。
+pub fn compile_model_to_mbt(
+  m : OnnxModel,
+  input_shapes : Map[String, Array[Int32]],
+  config~ : CodegenConfig = @codegen.CodegenConfig::default(),
+) -> AotArtifact raise RuntimeError {
+  let graph = @frontend.lower_onnx_model(m) catch {
+    e => raise @session.IrErr("\{e}")
+  }
+  @codegen.compile_graph_to_mbt(graph, input_shapes, config~) catch {
+    e => raise @session.IrErr("AOT codegen failed: \{e}")
+  }
+}

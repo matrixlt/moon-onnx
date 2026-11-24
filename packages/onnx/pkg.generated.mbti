@@ -2,12 +2,15 @@
 package "matrixlt/onnx"
 
 import {
+  "matrixlt/onnx/codegen",
   "matrixlt/onnx/session",
   "matrixlt/onnx_proto",
   "matrixlt/tensor",
 }
 
 // Values
+pub fn compile_model_to_mbt(@onnx_proto.OnnxModel, Map[String, Array[Int32]], config? : @codegen.CodegenConfig) -> @codegen.AotArtifact raise @session.RuntimeError
+
 pub fn engine_version() -> String
 
 pub fn load_f32_file(String, Array[Int32]) -> @tensor.Tensor raise @session.RuntimeError
@@ -27,7 +30,11 @@ pub fn session_from_file(String, backend? : @session.BackendKind, optimize? : Bo
 // Types and methods
 
 // Type aliases
+pub using @codegen {type AotArtifact}
+
 pub using @session {type BackendKind}
+
+pub using @codegen {type CodegenConfig}
 
 pub using @session {type CpuScalarProvider}
 

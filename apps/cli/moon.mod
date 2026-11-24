@@ -11,5 +11,6 @@ preferred_target = "native"
 description = "Native CLI tool for inspecting and running ONNX models with matrixlt/onnx"
 
 import {
+  "moonbitlang/x@0.5.9",
   "matrixlt/onnx@0.1.0",
 }

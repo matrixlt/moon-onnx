@@ -1,6 +1,8 @@
 import {
   "moonbitlang/core/env",
+  "moonbitlang/x/fs",
   "matrixlt/onnx",
+  "matrixlt/onnx/codegen",
   "matrixlt/onnx/session",
 }
 
