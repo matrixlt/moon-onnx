@@ -29,6 +29,12 @@ pub fn session_from_file(String, backend? : @session.BackendKind, optimize? : Bo
 // Type aliases
 pub using @session {type BackendKind}
 
+pub using @session {type CpuScalarProvider}
+
+pub using @session {type CpuSimdProvider}
+
+pub using @session {type EvalContext}
+
 pub using @onnx_proto {type OnnxModel}
 
 pub using @session {type OpTiming}

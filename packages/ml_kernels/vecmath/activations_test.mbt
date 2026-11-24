@@ -58,3 +58,40 @@ test "vecmath V128 clip clamps values to [min, max]" {
     assert_eq(ub[i], exp)
   }
 }
+
+///|
+/// 验证 V128 `gelu`、`hard_swish`、`div`、`sqrt` 的数值精度与边界处理。
+test "vecmath V128 gelu, hard_swish, div, and sqrt match reference" {
+  let n = 13
+  let xs = FixedArray::makei(n, fn(i) { Float::from_int(i - 6) * (0.5 : Float) })
+  let pos = FixedArray::makei(n, fn(i) {
+    Float::from_int(i + 1) * (0.5 : Float)
+  })
+  let out_gelu = FixedArray::make(n, (0.0 : Float))
+  let out_hs = FixedArray::make(n, (0.0 : Float))
+  let out_div = FixedArray::make(n, (0.0 : Float))
+  let out_sqrt = FixedArray::make(n, (0.0 : Float))
+
+  @vecmath.gelu_f32_v128(xs, out_gelu, n)
+  @vecmath.hard_swish_f32_v128(xs, out_hs, n)
+  @vecmath.div_f32_v128(xs, pos, out_div, n)
+  @vecmath.sqrt_f32_v128(pos, out_sqrt, n)
+
+  for i = 0; i < n; i = i + 1 {
+    let xd = xs[i].to_double()
+    let ref_gelu = 0.5 *
+      xd *
+      (1.0 + @math.tanh(0.7978845608028654 * (xd + 0.044715 * xd * xd * xd)))
+    assert_true((out_gelu[i].to_double() - ref_gelu).abs() < 2.0e-5)
+
+    let g0 = xd / 6.0 + 0.5
+    let g = if g0 < 0.0 { 0.0 } else if g0 > 1.0 { 1.0 } else { g0 }
+    let ref_hs = xd * g
+    assert_true((out_hs[i].to_double() - ref_hs).abs() < 2.0e-5)
+
+    assert_true((out_div[i] - xs[i] / pos[i]).abs() < (1.0e-5 : Float))
+    assert_true(
+      (out_sqrt[i].to_double() - pos[i].to_double().sqrt()).abs() < 1.0e-5,
+    )
+  }
+}

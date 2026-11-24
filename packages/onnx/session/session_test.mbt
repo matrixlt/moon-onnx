@@ -180,3 +180,51 @@ test "Session prepacks Gemm(trans_b=true) weights and pins view-aliased graph ou
   // 中间缓冲 h（非视图输出）应在第二次推理时命中 BufferPool
   assert_true(sess_simd.pool_stats().hits >= 1)
 }
+
+///|
+/// 自定义包装 `ExecutionProvider`（测试用）：统计经由该后端调度的算子执行次数并委托给 `CpuSimdProvider`。
+priv struct CountingProvider {
+  inner : @session.CpuSimdProvider
+  mut executed_ops : Int32
+}
+
+///|
+impl @session.ExecutionProvider for CountingProvider with fn name(_self) {
+  "counting-simd"
+}
+
+///|
+impl @session.ExecutionProvider for CountingProvider with fn uses_prepacked_weights(
+  _self,
+) {
+  true
+}
+
+///|
+impl @session.ExecutionProvider for CountingProvider with fn eval_node(
+  self,
+  node,
+  ctx,
+) {
+  self.executed_ops = self.executed_ops + 1
+  @session.ExecutionProvider::eval_node(self.inner, node, ctx)
+}
+
+///|
+/// 验证用户可通过 `Session::with_provider` 零侵入接入自定义 `ExecutionProvider` 并无缝共享静态预打包与 `BufferPool`。
+test "Session::with_provider supports pluggable custom ExecutionProvider" {
+  let graph = build_mini_cnn_graph()
+  let custom : CountingProvider = {
+    inner: @session.CpuSimdProvider::new(),
+    executed_ops: 0,
+  }
+  let sess = @session.Session::with_provider(graph, custom)
+  assert_eq(sess.provider_name(), "counting-simd")
+  assert_eq(sess.packed_weight_count(), 2)
+  assert_eq(sess.packed_conv_weight_count(), 1)
+
+  let inp = @tensor.Tensor::zeros_f32([1, 2, 6, 6])
+  let out = sess.run_single(inp)
+  assert_eq(out.shape(), [1, 4])
+  assert_eq(custom.executed_ops, 6)
+}

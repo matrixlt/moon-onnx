@@ -11,6 +11,8 @@ import {
 }
 
 // Values
+pub fn default_provider_for_backend(BackendKind) -> &ExecutionProvider
+
 pub fn load_f32_file(String, Array[Int32]) -> @tensor.Tensor raise RuntimeError
 
 pub fn max_abs_diff_f32(@tensor.Tensor, @tensor.Tensor) -> Float raise RuntimeError
@@ -34,6 +36,26 @@ pub(all) enum BackendKind {
 }
 pub impl Show for BackendKind
 
+pub struct CpuScalarProvider {
+}
+pub fn CpuScalarProvider::new() -> Self
+pub impl ExecutionProvider for CpuScalarProvider
+
+pub struct CpuSimdProvider {
+}
+pub fn CpuSimdProvider::new() -> Self
+pub impl ExecutionProvider for CpuSimdProvider
+
+pub struct EvalContext {
+  env : Map[String, @tensor.Tensor]
+  packed_weights : Map[String, @gemm.PackedMatrixB]
+  packed_conv_weights : Map[String, @ops.PackedConvWeight]
+  scratch_pool : @tensor.BufferPool
+  out_pool : @tensor.BufferPool?
+}
+pub fn EvalContext::optional_tensor(Self, String, Array[String], Int32) -> @tensor.Tensor? raise RuntimeError
+pub fn EvalContext::require_tensor(Self, String, Array[String], Int32) -> @tensor.Tensor raise RuntimeError
+
 pub(all) struct OpTiming {
   node_name : String
   op_type : String
@@ -51,6 +73,7 @@ pub fn RunProfile::format_table(Self) -> String
 pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
+  provider : &ExecutionProvider
   packed_weights : Map[String, @gemm.PackedMatrixB]
   packed_conv_weights : Map[String, @ops.PackedConvWeight]
   release_plan : Array[Array[String]]
@@ -67,11 +90,18 @@ pub fn Session::graph(Self) -> @nn_ir.IrGraph
 pub fn Session::packed_conv_weight_count(Self) -> Int32
 pub fn Session::packed_weight_count(Self) -> Int32
 pub fn Session::pool_stats(Self) -> @tensor.PoolStats
+pub fn Session::provider_name(Self) -> String
 pub fn Session::run(Self, Map[String, @tensor.Tensor]) -> Map[String, @tensor.Tensor] raise RuntimeError
 pub fn Session::run_profiled(Self, Map[String, @tensor.Tensor]) -> (Map[String, @tensor.Tensor], RunProfile) raise RuntimeError
 pub fn Session::run_single(Self, @tensor.Tensor) -> @tensor.Tensor raise RuntimeError
 pub fn Session::run_single_profiled(Self, @tensor.Tensor) -> (@tensor.Tensor, RunProfile) raise RuntimeError
+pub fn Session::with_provider(@nn_ir.IrGraph, &ExecutionProvider) -> Self
 
 // Type aliases
 
 // Traits
+pub(open) trait ExecutionProvider {
+  fn name(Self) -> String
+  fn uses_prepacked_weights(Self) -> Bool
+  fn eval_node(Self, @nn_ir.IrNode, EvalContext) -> @tensor.Tensor raise RuntimeError
+}

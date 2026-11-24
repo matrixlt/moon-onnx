@@ -198,3 +198,179 @@ pub fn tanh_bytes_v128(
     i = i + 1
   }
 }
+
+///|
+/// 4-wide `V128` 向量化近似 GELU（tanh 近似，对应 ONNX `Gelu(approximate="tanh")` 与 GPT/ViT 标准实现）：
+/// `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))`。
+pub fn gelu_f32x4(x : V128) -> V128 {
+  let half = @v128.f32x4_splat((0.5 : Float))
+  let one = @v128.f32x4_splat((1.0 : Float))
+  let sqrt_2_over_pi = @v128.f32x4_splat((0.7978845608028654 : Float))
+  let coef = @v128.f32x4_splat((0.044715 : Float))
+  let x2 = @v128.f32x4_mul(x, x)
+  let x3 = @v128.f32x4_mul(x2, x)
+  let inner = @v128.f32x4_mul(
+    sqrt_2_over_pi,
+    @v128.f32x4_relaxed_madd(coef, x3, x),
+  )
+  let t = tanh_f32x4(inner)
+  @v128.f32x4_mul(@v128.f32x4_mul(half, x), @v128.f32x4_add(one, t))
+}
+
+///|
+/// 4-wide `V128` 向量化 HardSwish：`x * clamp(x / 6 + 0.5, 0, 1)`（MobileNetV3 核心激活）。
+pub fn hard_swish_f32x4(x : V128) -> V128 {
+  let inv6 = @v128.f32x4_splat((0.16666667 : Float))
+  let half = @v128.f32x4_splat((0.5 : Float))
+  let zero = @v128.f32x4_splat((0.0 : Float))
+  let one = @v128.f32x4_splat((1.0 : Float))
+  let gate = @v128.f32x4_pmax(
+    zero,
+    @v128.f32x4_pmin(one, @v128.f32x4_relaxed_madd(x, inv6, half)),
+  )
+  @v128.f32x4_mul(x, gate)
+}
+
+///|
+/// 零转换字节缓冲版 V128 向量 GELU。
+pub fn gelu_bytes_v128(
+  src : FixedArray[Byte],
+  out : FixedArray[Byte],
+  count : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= count {
+    let off = i * 4
+    let v = @v128.v128_load(src, off)
+    @v128.v128_store(out, off, gelu_f32x4(v))
+    i = i + 4
+  }
+  while i < count {
+    let off = i * 4
+    let x = read_f32_le(src, off)
+    let r = @v128.f32x4_extract_lane(gelu_f32x4(@v128.f32x4_splat(x)), 0)
+    write_f32_le(out, off, r)
+    i = i + 1
+  }
+}
+
+///|
+/// 面向 `FixedArray[Float]` 的 V128 向量 `exp(x)`。
+pub fn exp_f32_v128(
+  src : FixedArray[Float],
+  out : FixedArray[Float],
+  n : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= n {
+    let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vr = exp_f32x4(vx)
+    out[i] = @v128.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    i = i + 4
+  }
+  while i < n {
+    out[i] = @v128.f32x4_extract_lane(exp_f32x4(@v128.f32x4_splat(src[i])), 0)
+    i = i + 1
+  }
+}
+
+///|
+/// 面向 `FixedArray[Float]` 的 V128 向量 `sigmoid(x)`。
+pub fn sigmoid_f32_v128(
+  src : FixedArray[Float],
+  out : FixedArray[Float],
+  n : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= n {
+    let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vr = sigmoid_f32x4(vx)
+    out[i] = @v128.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    i = i + 4
+  }
+  while i < n {
+    out[i] = @v128.f32x4_extract_lane(
+      sigmoid_f32x4(@v128.f32x4_splat(src[i])),
+      0,
+    )
+    i = i + 1
+  }
+}
+
+///|
+/// 面向 `FixedArray[Float]` 的 V128 向量 `tanh(x)`。
+pub fn tanh_f32_v128(
+  src : FixedArray[Float],
+  out : FixedArray[Float],
+  n : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= n {
+    let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vr = tanh_f32x4(vx)
+    out[i] = @v128.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    i = i + 4
+  }
+  while i < n {
+    out[i] = @v128.f32x4_extract_lane(tanh_f32x4(@v128.f32x4_splat(src[i])), 0)
+    i = i + 1
+  }
+}
+
+///|
+/// 面向 `FixedArray[Float]` 的 V128 向量 `gelu(x)`（tanh 近似）。
+pub fn gelu_f32_v128(
+  src : FixedArray[Float],
+  out : FixedArray[Float],
+  n : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= n {
+    let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vr = gelu_f32x4(vx)
+    out[i] = @v128.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    i = i + 4
+  }
+  while i < n {
+    out[i] = @v128.f32x4_extract_lane(gelu_f32x4(@v128.f32x4_splat(src[i])), 0)
+    i = i + 1
+  }
+}
+
+///|
+/// 面向 `FixedArray[Float]` 的 V128 向量 `hard_swish(x)`。
+pub fn hard_swish_f32_v128(
+  src : FixedArray[Float],
+  out : FixedArray[Float],
+  n : Int32,
+) -> Unit {
+  let mut i = 0
+  while i + 4 <= n {
+    let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vr = hard_swish_f32x4(vx)
+    out[i] = @v128.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    i = i + 4
+  }
+  while i < n {
+    out[i] = @v128.f32x4_extract_lane(
+      hard_swish_f32x4(@v128.f32x4_splat(src[i])),
+      0,
+    )
+    i = i + 1
+  }
+}

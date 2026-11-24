@@ -84,11 +84,13 @@ pub fn RunProfile::format_table(self : RunProfile) -> String {
 
 ///|
 /// ONNX 推理会话（Session）：
-/// 持有已完成 Lowering、可选图优化与拓扑排序的计算图、所选后端、
+/// 持有已完成 Lowering、可选图优化与拓扑排序的计算图、可插拔 `ExecutionProvider` 执行后端、
 /// SIMD 静态权重预打包缓存（覆盖 MatMul / Gemm / Conv）以及基于静态生命周期分析的 `BufferPool` 复用池。
 pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
+  /// 可插拔执行后端（默认根据 `backend` 构造 `CpuScalarProvider` 或 `CpuSimdProvider`）
+  provider : &ExecutionProvider
   /// 静态 2D Float32 权重的预打包缓存（键为权重名或 `name#T`，运行期直接走零打包 SIMD GEMM）
   packed_weights : Map[String, @gemm.PackedMatrixB]
   /// 静态 4D Float32 卷积权重的预打包缓存（键为 `name#g{group}`，每分组预打包为 `W_g^T[K, C_out_g]`）
@@ -106,11 +108,11 @@ pub struct Session {
 /// 与静态 4D 卷积权重（`Conv`）一次性预打包为 16 字节对齐结构，彻底消除推理热路径上的重复打包开销。
 fn build_packed_weight_caches(
   graph : @nn_ir.IrGraph,
-  backend : BackendKind,
+  enable_packing : Bool,
 ) -> (Map[String, @gemm.PackedMatrixB], Map[String, @ops.PackedConvWeight]) {
   let mat_cache : Map[String, @gemm.PackedMatrixB] = Map([])
   let conv_cache : Map[String, @ops.PackedConvWeight] = Map([])
-  if backend != Simd {
+  if !enable_packing {
     return (mat_cache, conv_cache)
   }
   for i = 0; i < graph.nodes.length(); i = i + 1 {
@@ -296,6 +298,30 @@ fn build_release_plan(
 }
 
 ///|
+/// 从已构建的 `IrGraph` 与自定义 `ExecutionProvider` 创建推理会话。
+pub fn Session::with_provider(
+  graph : @nn_ir.IrGraph,
+  provider : &ExecutionProvider,
+) -> Session {
+  let enable_packing = provider.uses_prepacked_weights()
+  let backend = if enable_packing { Simd } else { Scalar }
+  let (packed_weights, packed_conv_weights) = build_packed_weight_caches(
+    graph, enable_packing,
+  )
+  let (release_plan, pinned_outputs) = build_release_plan(graph)
+  {
+    graph,
+    backend,
+    provider,
+    packed_weights,
+    packed_conv_weights,
+    release_plan,
+    pinned_outputs,
+    pool: @tensor.BufferPool::new(),
+  }
+}
+
+///|
 /// 从已解析的 OnnxModel 构建推理会话（默认启用图优化 Pass、SIMD 权重预打包缓存与 BufferPool 复用）。
 pub fn Session::from_model(
   m : @onnx_proto.OnnxModel,
@@ -311,19 +337,7 @@ pub fn Session::from_model(
   } else {
     raw_graph
   }
-  let (packed_weights, packed_conv_weights) = build_packed_weight_caches(
-    graph, backend,
-  )
-  let (release_plan, pinned_outputs) = build_release_plan(graph)
-  {
-    graph,
-    backend,
-    packed_weights,
-    packed_conv_weights,
-    release_plan,
-    pinned_outputs,
-    pool: @tensor.BufferPool::new(),
-  }
+  Session::with_provider(graph, default_provider_for_backend(backend))
 }
 
 ///|
@@ -358,19 +372,7 @@ pub fn Session::from_graph(
   graph : @nn_ir.IrGraph,
   backend~ : BackendKind = Scalar,
 ) -> Session {
-  let (packed_weights, packed_conv_weights) = build_packed_weight_caches(
-    graph, backend,
-  )
-  let (release_plan, pinned_outputs) = build_release_plan(graph)
-  {
-    graph,
-    backend,
-    packed_weights,
-    packed_conv_weights,
-    release_plan,
-    pinned_outputs,
-    pool: @tensor.BufferPool::new(),
-  }
+  Session::with_provider(graph, default_provider_for_backend(backend))
 }
 
 ///|
@@ -383,6 +385,12 @@ pub fn Session::graph(self : Session) -> @nn_ir.IrGraph {
 /// 返回当前会话使用的计算后端类型。
 pub fn Session::backend(self : Session) -> BackendKind {
   self.backend
+}
+
+///|
+/// 返回当前会话所绑定 `ExecutionProvider` 的名称。
+pub fn Session::provider_name(self : Session) -> String {
+  self.provider.name()
 }
 
 ///|
@@ -415,267 +423,6 @@ pub fn Session::clear_pool(self : Session) -> Unit {
 }
 
 ///|
-/// 从运行期张量环境表中读取必选输入张量。
-fn require_tensor(
-  env : Map[String, @tensor.Tensor],
-  node_name : String,
-  inputs : Array[String],
-  idx : Int32,
-) -> @tensor.Tensor raise RuntimeError {
-  if idx >= inputs.length() || inputs[idx] == "" {
-    raise MissingTensor(
-      "node '\{node_name}' missing required input at index \{idx}",
-    )
-  }
-  let name = inputs[idx]
-  match env.get(name) {
-    Some(t) => t
-    None =>
-      raise MissingTensor(
-        "node '\{node_name}' could not find tensor '\{name}' in runtime env",
-      )
-  }
-}
-
-///|
-/// 从运行期张量环境表中读取可选输入张量。
-fn optional_tensor(
-  env : Map[String, @tensor.Tensor],
-  node_name : String,
-  inputs : Array[String],
-  idx : Int32,
-) -> @tensor.Tensor? raise RuntimeError {
-  if idx >= inputs.length() || inputs[idx] == "" {
-    return None
-  }
-  let name = inputs[idx]
-  match env.get(name) {
-    Some(t) => Some(t)
-    None =>
-      raise MissingTensor(
-        "node '\{node_name}' could not find optional tensor '\{name}'",
-      )
-  }
-}
-
-///|
-/// 执行单个强类型 IR 节点并返回输出张量（优先命中静态预打包权重缓存与 `BufferPool` 复用池）。
-fn eval_node(
-  node : @nn_ir.IrNode,
-  env : Map[String, @tensor.Tensor],
-  backend : BackendKind,
-  packed_weights : Map[String, @gemm.PackedMatrixB],
-  packed_conv_weights : Map[String, @ops.PackedConvWeight],
-  scratch_pool : @tensor.BufferPool,
-  out_pool : @tensor.BufferPool?,
-) -> @tensor.Tensor raise RuntimeError {
-  let n = node.name
-  let ins = node.inputs
-  let use_simd = backend == Simd
-  try {
-    match node.op {
-      @nn_ir.Add => {
-        let a = require_tensor(env, n, ins, 0)
-        let b = require_tensor(env, n, ins, 1)
-        @ops.add_f32(a, b, use_simd~, pool=out_pool)
-      }
-      @nn_ir.Sub => {
-        let a = require_tensor(env, n, ins, 0)
-        let b = require_tensor(env, n, ins, 1)
-        @ops.sub_f32(a, b, use_simd~, pool=out_pool)
-      }
-      @nn_ir.Mul => {
-        let a = require_tensor(env, n, ins, 0)
-        let b = require_tensor(env, n, ins, 1)
-        @ops.mul_f32(a, b, use_simd~, pool=out_pool)
-      }
-      @nn_ir.Relu => {
-        let x = require_tensor(env, n, ins, 0)
-        @ops.relu_f32(x, use_simd~, pool=out_pool)
-      }
-      @nn_ir.Identity => require_tensor(env, n, ins, 0)
-      @nn_ir.Softmax(axis~) => {
-        let x = require_tensor(env, n, ins, 0)
-        @ops.softmax_f32(x, axis, pool=out_pool)
-      }
-      @nn_ir.Flatten(axis~) => {
-        let x = require_tensor(env, n, ins, 0)
-        @ops.flatten_op(x, axis~)
-      }
-      @nn_ir.Reshape(allowzero~) => {
-        let data = require_tensor(env, n, ins, 0)
-        let shape_t = require_tensor(env, n, ins, 1)
-        @ops.reshape_op(data, shape_t, allowzero~)
-      }
-      @nn_ir.Transpose(perm~) => {
-        let x = require_tensor(env, n, ins, 0)
-        @ops.transpose_op(x, perm)
-      }
-      @nn_ir.Squeeze(axes~) => {
-        let x = require_tensor(env, n, ins, 0)
-        let axes_t = optional_tensor(env, n, ins, 1)
-        @ops.squeeze_op(x, axes, axes_t)
-      }
-      @nn_ir.Unsqueeze(axes~) => {
-        let x = require_tensor(env, n, ins, 0)
-        let axes_t = optional_tensor(env, n, ins, 1)
-        @ops.unsqueeze_op(x, axes, axes_t)
-      }
-      @nn_ir.Constant(value~) => value
-      @nn_ir.MatMul => {
-        let a = require_tensor(env, n, ins, 0)
-        if use_simd && a.rank() == 2 && ins.length() >= 2 {
-          match packed_weights.get(ins[1]) {
-            Some(pb) => return @ops.matmul_prepacked_f32(a, pb, pool=out_pool)
-            None => ()
-          }
-        }
-        let b = require_tensor(env, n, ins, 1)
-        @ops.matmul_f32(a, b, use_simd~, pool=out_pool)
-      }
-      @nn_ir.Gemm(alpha~, beta~, trans_a~, trans_b~) => {
-        let a = require_tensor(env, n, ins, 0)
-        let c = optional_tensor(env, n, ins, 2)
-        if use_simd && ins.length() >= 2 {
-          let key = if trans_b { "\{ins[1]}#T" } else { ins[1] }
-          match packed_weights.get(key) {
-            Some(pb) =>
-              return @ops.gemm_prepacked_f32(
-                a,
-                pb,
-                c,
-                alpha~,
-                beta~,
-                trans_a~,
-                pool=out_pool,
-              )
-            None => ()
-          }
-        }
-        let b = require_tensor(env, n, ins, 1)
-        @ops.gemm_f32(
-          a,
-          b,
-          c,
-          alpha~,
-          beta~,
-          trans_a~,
-          trans_b~,
-          use_simd~,
-          pool=out_pool,
-        )
-      }
-      @nn_ir.Conv(
-        strides~,
-        pads~,
-        dilations~,
-        group~,
-        auto_pad~,
-        activation~,
-        ..
-      ) => {
-        let x = require_tensor(env, n, ins, 0)
-        let b = optional_tensor(env, n, ins, 2)
-        if use_simd && ins.length() >= 2 {
-          let key = "\{ins[1]}#g\{group}"
-          match packed_conv_weights.get(key) {
-            Some(pw) =>
-              return @ops.conv2d_prepacked_f32(
-                x,
-                pw,
-                b,
-                strides,
-                pads,
-                dilations,
-                auto_pad,
-                activation~,
-                pool=out_pool,
-                scratch_pool=Some(scratch_pool),
-              )
-            None => ()
-          }
-        }
-        let w = require_tensor(env, n, ins, 1)
-        @ops.conv2d_f32(
-          x,
-          w,
-          b,
-          strides,
-          pads,
-          dilations,
-          group,
-          auto_pad,
-          use_simd~,
-          activation~,
-          pool=out_pool,
-          scratch_pool=Some(scratch_pool),
-        )
-      }
-      @nn_ir.MaxPool(
-        kernel_shape~,
-        strides~,
-        pads~,
-        dilations~,
-        ceil_mode~,
-        auto_pad~,
-      ) => {
-        let x = require_tensor(env, n, ins, 0)
-        @ops.maxpool_2d_f32(
-          x,
-          kernel_shape,
-          strides,
-          pads,
-          dilations,
-          ceil_mode,
-          auto_pad,
-          pool=out_pool,
-        )
-      }
-      @nn_ir.AveragePool(
-        kernel_shape~,
-        strides~,
-        pads~,
-        ceil_mode~,
-        count_include_pad~,
-        auto_pad~,
-      ) => {
-        let x = require_tensor(env, n, ins, 0)
-        @ops.avgpool_2d_f32(
-          x,
-          kernel_shape,
-          strides,
-          pads,
-          ceil_mode,
-          count_include_pad,
-          auto_pad,
-          pool=out_pool,
-        )
-      }
-      @nn_ir.BatchNormalization(epsilon~) => {
-        let x = require_tensor(env, n, ins, 0)
-        let scale = require_tensor(env, n, ins, 1)
-        let bias = require_tensor(env, n, ins, 2)
-        let mean = require_tensor(env, n, ins, 3)
-        let variance = require_tensor(env, n, ins, 4)
-        @ops.batch_norm_f32(
-          x,
-          scale,
-          bias,
-          mean,
-          variance,
-          epsilon~,
-          pool=out_pool,
-        )
-      }
-    }
-  } catch {
-    MissingTensor(msg) => raise MissingTensor(msg)
-    UnsupportedOp(msg) => raise UnsupportedOp(msg)
-    e => raise TensorErr("node '\{n}' (\{node.op.name()}): \{e}")
-  }
-}
-
-///|
 /// 将在当前执行步骤结束后不再存活的中间张量底层 `Float32` 缓冲区归还至会话复用池。
 fn release_dead_buffers(
   dead_names : Array[String],
@@ -696,7 +443,7 @@ fn release_dead_buffers(
 }
 
 ///|
-/// 执行一次完整的前向推理（零计时开销热路径，自动复用 `BufferPool`）。
+/// 执行一次完整的前向推理（零计时开销热路径，自动通过 `ExecutionProvider` 分派并复用 `BufferPool`）。
 pub fn Session::run(
   self : Session,
   feeds : Map[String, @tensor.Tensor],
@@ -719,15 +466,14 @@ pub fn Session::run(
     } else {
       Some(self.pool)
     }
-    let out_tensor = eval_node(
-      node,
+    let ctx : EvalContext = {
       env,
-      self.backend,
-      self.packed_weights,
-      self.packed_conv_weights,
-      self.pool,
+      packed_weights: self.packed_weights,
+      packed_conv_weights: self.packed_conv_weights,
+      scratch_pool: self.pool,
       out_pool,
-    )
+    }
+    let out_tensor = self.provider.eval_node(node, ctx)
     if node.outputs.length() > 0 && node.outputs[0] != "" {
       env[node.outputs[0]] = out_tensor
     }
@@ -771,16 +517,15 @@ pub fn Session::run_profiled(
     } else {
       Some(self.pool)
     }
-    let t0 = @bench.monotonic_clock_start()
-    let out_tensor = eval_node(
-      node,
+    let ctx : EvalContext = {
       env,
-      self.backend,
-      self.packed_weights,
-      self.packed_conv_weights,
-      self.pool,
+      packed_weights: self.packed_weights,
+      packed_conv_weights: self.packed_conv_weights,
+      scratch_pool: self.pool,
       out_pool,
-    )
+    }
+    let t0 = @bench.monotonic_clock_start()
+    let out_tensor = self.provider.eval_node(node, ctx)
     let elapsed_us = @bench.monotonic_clock_end(t0)
     timings.push({
       node_name: node.name,
