@@ -3,13 +3,20 @@ package "matrixlt/onnx/codegen"
 
 import {
   "matrixlt/nn_ir",
+  "matrixlt/tensor",
   "moonbitlang/core/debug",
 }
 
 // Values
 pub fn compile_graph_to_mbt(@nn_ir.IrGraph, Map[String, Array[Int32]], config? : CodegenConfig) -> AotArtifact raise CodegenError
 
+pub fn infer_static_dtypes(@nn_ir.IrGraph, Map[String, @tensor.DType]) -> Map[String, @tensor.DType]
+
 pub fn infer_static_shapes(@nn_ir.IrGraph, Map[String, Array[Int32]]) -> Map[String, Array[Int32]] raise CodegenError
+
+pub fn is_arena_alias_op(@nn_ir.Op) -> Bool
+
+pub fn plan_static_arenas(@nn_ir.IrGraph, Map[String, Array[Int32]], Map[String, @tensor.DType]) -> (ArenaPlan, ArenaPlan) raise CodegenError
 
 // Errors
 #derive(Eq, @debug.Debug)
@@ -32,12 +39,29 @@ pub struct AotArtifact {
   node_count : Int32
 }
 
+pub struct ArenaPlan {
+  allocs : Map[String, TensorAlloc]
+  peak_elems : Int32
+  naive_elems : Int32
+  scratch_elems : Int32
+}
+pub fn ArenaPlan::savings_pct(Self) -> Double
+
 pub(all) struct CodegenConfig {
   struct_name : String
   use_simd : Bool
   optimize : Bool
 }
 pub fn CodegenConfig::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) struct TensorAlloc {
+  name : String
+  offset : Int32
+  length : Int32
+  birth : Int32
+  death : Int32
+}
 
 #derive(Eq, @debug.Debug)
 pub(all) struct WeightEntry {
