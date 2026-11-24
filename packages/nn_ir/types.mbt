@@ -104,7 +104,34 @@ pub(all) enum Op {
     count_include_pad~ : Bool,
     auto_pad~ : AutoPad,
   )
+  GlobalAveragePool
   BatchNormalization(epsilon~ : Float)
+  LayerNormalization(axis~ : Int32, epsilon~ : Float)
+  Concat(axis~ : Int32)
+  /// Opset < 13 通过属性传入 split；Opset >= 13 通过第 2 个输入传入；Opset >= 18 支持 num_outputs
+  Split(axis~ : Int32, split~ : Array[Int32]?, num_outputs~ : Int32?)
+  /// Opset < 10 通过属性传入 starts/ends/axes；Opset >= 10 通过输入张量传入
+  Slice(
+    starts~ : Array[Int32]?,
+    ends~ : Array[Int32]?,
+    axes~ : Array[Int32]?,
+    steps~ : Array[Int32]?,
+  )
+  /// Opset < 11 通过属性传入 pads/constant_value；Opset >= 11 通过输入张量传入
+  Pad(mode~ : String, pads~ : Array[Int32]?, constant_value~ : Float?)
+  Gather(axis~ : Int32)
+  Cast(to~ : @tensor.DType)
+  ReduceMean(
+    axes~ : Array[Int32]?,
+    keepdims~ : Bool,
+    noop_with_empty_axes~ : Bool,
+  )
+  ReduceSum(
+    axes~ : Array[Int32]?,
+    keepdims~ : Bool,
+    noop_with_empty_axes~ : Bool,
+  )
+  Shape(start~ : Int32?, end~ : Int32?)
 }
 
 ///|
@@ -144,7 +171,18 @@ pub fn Op::name(self : Op) -> String {
       }
     MaxPool(..) => "MaxPool"
     AveragePool(..) => "AveragePool"
+    GlobalAveragePool => "GlobalAveragePool"
     BatchNormalization(..) => "BatchNormalization"
+    LayerNormalization(..) => "LayerNormalization"
+    Concat(..) => "Concat"
+    Split(..) => "Split"
+    Slice(..) => "Slice"
+    Pad(..) => "Pad"
+    Gather(..) => "Gather"
+    Cast(..) => "Cast"
+    ReduceMean(..) => "ReduceMean"
+    ReduceSum(..) => "ReduceSum"
+    Shape(..) => "Shape"
   }
 }
 

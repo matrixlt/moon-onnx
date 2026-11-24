@@ -104,4 +104,5 @@ pub(open) trait ExecutionProvider {
   fn name(Self) -> String
   fn uses_prepacked_weights(Self) -> Bool
   fn eval_node(Self, @nn_ir.IrNode, EvalContext) -> @tensor.Tensor raise RuntimeError
+  fn eval_node_multi(Self, @nn_ir.IrNode, EvalContext) -> Array[@tensor.Tensor] raise RuntimeError = _
 }

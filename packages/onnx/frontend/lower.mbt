@@ -48,6 +48,22 @@ fn get_attr_float(
 }
 
 ///|
+/// 读取可选整数属性，缺失时返回 None。
+fn get_attr_int_opt(
+  attrs : Array[@schema.AttributeProto],
+  name : String,
+) -> Int32? {
+  match find_attr(attrs, name) {
+    Some(a) =>
+      match a.i {
+        Some(v) => Some(v.to_int())
+        None => None
+      }
+    None => None
+  }
+}
+
+///|
 /// 读取可选浮点属性，缺失时返回 None。
 fn get_attr_float_opt(
   attrs : Array[@schema.AttributeProto],
@@ -56,6 +72,25 @@ fn get_attr_float_opt(
   match find_attr(attrs, name) {
     Some(a) => a.f
     None => None
+  }
+}
+
+///|
+/// 将 ONNX `TensorProto.DataType` 整型编码解析为 `@tensor.DType`。
+fn parse_onnx_dtype(
+  code : Int32,
+  node_name : String,
+) -> @tensor.DType raise @nn_ir.IrError {
+  match code {
+    1 => @tensor.Float32
+    6 => @tensor.Int32
+    7 => @tensor.Int64
+    9 => @tensor.Bool
+    11 => @tensor.Float64
+    other =>
+      raise @nn_ir.InvalidAttribute(
+        "Cast '\{node_name}': unsupported ONNX dtype code \{other}",
+      )
   }
 }
 
@@ -360,10 +395,64 @@ fn lower_node(
         auto_pad~,
       )
     }
+    "GlobalAveragePool" => @nn_ir.GlobalAveragePool
     "BatchNormalization" => {
       let epsilon = get_attr_float(attrs, "epsilon", (1.0e-5 : Float))
       @nn_ir.BatchNormalization(epsilon~)
     }
+    "LayerNormalization" => {
+      let axis = get_attr_int(attrs, "axis", -1)
+      let epsilon = get_attr_float(attrs, "epsilon", (1.0e-5 : Float))
+      @nn_ir.LayerNormalization(axis~, epsilon~)
+    }
+    "Concat" => @nn_ir.Concat(axis=get_attr_int(attrs, "axis", 0))
+    "Split" =>
+      @nn_ir.Split(
+        axis=get_attr_int(attrs, "axis", 0),
+        split=get_attr_ints_opt(attrs, "split"),
+        num_outputs=get_attr_int_opt(attrs, "num_outputs"),
+      )
+    "Slice" =>
+      @nn_ir.Slice(
+        starts=get_attr_ints_opt(attrs, "starts"),
+        ends=get_attr_ints_opt(attrs, "ends"),
+        axes=get_attr_ints_opt(attrs, "axes"),
+        steps=get_attr_ints_opt(attrs, "steps"),
+      )
+    "Pad" =>
+      @nn_ir.Pad(
+        mode=get_attr_string(attrs, "mode", "constant"),
+        pads=get_attr_ints_opt(attrs, "pads"),
+        constant_value=get_attr_float_opt(attrs, "value"),
+      )
+    "Gather" => @nn_ir.Gather(axis=get_attr_int(attrs, "axis", 0))
+    "Cast" => {
+      let code = match get_attr_int_opt(attrs, "to") {
+        Some(c) => c
+        None =>
+          raise @nn_ir.InvalidAttribute(
+            "Cast '\{node_name}' requires 'to' attribute",
+          )
+      }
+      @nn_ir.Cast(to=parse_onnx_dtype(code, node_name))
+    }
+    "ReduceMean" =>
+      @nn_ir.ReduceMean(
+        axes=get_attr_ints_opt(attrs, "axes"),
+        keepdims=get_attr_int(attrs, "keepdims", 1) != 0,
+        noop_with_empty_axes=get_attr_int(attrs, "noop_with_empty_axes", 0) != 0,
+      )
+    "ReduceSum" =>
+      @nn_ir.ReduceSum(
+        axes=get_attr_ints_opt(attrs, "axes"),
+        keepdims=get_attr_int(attrs, "keepdims", 1) != 0,
+        noop_with_empty_axes=get_attr_int(attrs, "noop_with_empty_axes", 0) != 0,
+      )
+    "Shape" =>
+      @nn_ir.Shape(
+        start=get_attr_int_opt(attrs, "start"),
+        end=get_attr_int_opt(attrs, "end"),
+      )
     other => raise @nn_ir.UnsupportedOp(other)
   }
 

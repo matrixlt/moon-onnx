@@ -61,8 +61,16 @@ pub(open) trait ExecutionProvider {
   fn name(Self) -> String
   /// 指示会话初始化期是否需要预打包静态 2D/4D Float32 权重
   fn uses_prepacked_weights(Self) -> Bool
-  /// 执行单个强类型 IR 节点并返回输出张量
+  /// 执行单个强类型 IR 节点并返回主输出张量
   fn eval_node(Self, @nn_ir.IrNode, EvalContext) -> @tensor.Tensor raise RuntimeError
+  /// 执行可能产生多个输出张量的 IR 节点（例如 `Split`），默认退化为单输出包装
+  fn eval_node_multi(Self, @nn_ir.IrNode, EvalContext) -> Array[@tensor.Tensor] raise RuntimeError = _
+}
+
+///|
+/// `ExecutionProvider::eval_node_multi` 默认实现：直接复用单输出 `eval_node`。
+impl ExecutionProvider with fn eval_node_multi(self, node, ctx) {
+  [self.eval_node(node, ctx)]
 }
 
 ///|
@@ -329,6 +337,10 @@ fn eval_cpu_node(
           pool=out_pool,
         )
       }
+      @nn_ir.GlobalAveragePool => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.global_avgpool_f32(x, pool=out_pool)
+      }
       @nn_ir.BatchNormalization(epsilon~) => {
         let x = ctx.require_tensor(n, ins, 0)
         let scale = ctx.require_tensor(n, ins, 1)
@@ -345,11 +357,196 @@ fn eval_cpu_node(
           pool=out_pool,
         )
       }
+      @nn_ir.LayerNormalization(axis~, epsilon~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let scale = ctx.require_tensor(n, ins, 1)
+        let bias = ctx.optional_tensor(n, ins, 2)
+        @ops.layer_norm_f32(x, scale, bias, axis~, epsilon~, pool=out_pool)
+      }
+      @nn_ir.Concat(axis~) => {
+        let tensors : Array[@tensor.Tensor] = []
+        for idx = 0; idx < ins.length(); idx = idx + 1 {
+          tensors.push(ctx.require_tensor(n, ins, idx))
+        }
+        @ops.concat_op(tensors, axis, pool=out_pool)
+      }
+      @nn_ir.Split(axis~, split~, num_outputs~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let split_t = ctx.optional_tensor(n, ins, 1)
+        let n_out = match num_outputs {
+          Some(k) => k
+          None => node.outputs.length()
+        }
+        let parts = @ops.split_op(x, axis, split, split_t, n_out, pool=out_pool)
+        if parts.length() == 0 {
+          raise TensorErr("node '\{n}' (Split) produced 0 outputs")
+        }
+        parts[0]
+      }
+      @nn_ir.Slice(starts~, ends~, axes~, steps~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let resolved_starts : Array[Int64] = match
+          ctx.optional_tensor(n, ins, 1) {
+          Some(t) => {
+            let b = t.to_i64_buffer()
+            Array::makei(b.length(), fn(k) { b[k] })
+          }
+          None =>
+            match starts {
+              Some(s) => Array::makei(s.length(), fn(k) { s[k].to_int64() })
+              None =>
+                raise MissingTensor("node '\{n}' (Slice) missing starts input")
+            }
+        }
+        let resolved_ends : Array[Int64] = match
+          ctx.optional_tensor(n, ins, 2) {
+          Some(t) => {
+            let b = t.to_i64_buffer()
+            Array::makei(b.length(), fn(k) { b[k] })
+          }
+          None =>
+            match ends {
+              Some(e) => Array::makei(e.length(), fn(k) { e[k].to_int64() })
+              None =>
+                raise MissingTensor("node '\{n}' (Slice) missing ends input")
+            }
+        }
+        let resolved_axes : Array[Int32]? = match
+          ctx.optional_tensor(n, ins, 3) {
+          Some(t) => {
+            let b = t.to_i64_buffer()
+            Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+          }
+          None => axes
+        }
+        let resolved_steps : Array[Int32]? = match
+          ctx.optional_tensor(n, ins, 4) {
+          Some(t) => {
+            let b = t.to_i64_buffer()
+            Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+          }
+          None => steps
+        }
+        @ops.slice_op(
+          x,
+          resolved_starts,
+          resolved_ends,
+          resolved_axes,
+          resolved_steps,
+          pool=out_pool,
+        )
+      }
+      @nn_ir.Pad(mode~, pads~, constant_value~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let resolved_pads : Array[Int32] = match
+          ctx.optional_tensor(n, ins, 1) {
+          Some(t) => {
+            let b = t.to_i64_buffer()
+            Array::makei(b.length(), fn(k) { b[k].to_int() })
+          }
+          None =>
+            match pads {
+              Some(p) => p
+              None =>
+                raise MissingTensor("node '\{n}' (Pad) missing pads input")
+            }
+        }
+        let resolved_val : Float = match ctx.optional_tensor(n, ins, 2) {
+          Some(t) => t.get_f32_flat(0)
+          None =>
+            match constant_value {
+              Some(v) => v
+              None => (0.0 : Float)
+            }
+        }
+        let resolved_axes : Array[Int32]? = match
+          ctx.optional_tensor(n, ins, 3) {
+          Some(t) => {
+            let b = t.to_i64_buffer()
+            Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+          }
+          None => None
+        }
+        @ops.pad_f32(
+          x,
+          resolved_pads,
+          mode,
+          resolved_val,
+          resolved_axes,
+          pool=out_pool,
+        )
+      }
+      @nn_ir.Gather(axis~) => {
+        let data = ctx.require_tensor(n, ins, 0)
+        let indices = ctx.require_tensor(n, ins, 1)
+        @ops.gather_op(data, indices, axis, pool=out_pool)
+      }
+      @nn_ir.Cast(to~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.cast_op(x, to)
+      }
+      @nn_ir.ReduceMean(axes~, keepdims~, noop_with_empty_axes~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let axes_t = ctx.optional_tensor(n, ins, 1)
+        @ops.reduce_mean_f32(
+          x,
+          axes,
+          axes_t,
+          keepdims~,
+          noop_with_empty_axes~,
+          pool=out_pool,
+        )
+      }
+      @nn_ir.ReduceSum(axes~, keepdims~, noop_with_empty_axes~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let axes_t = ctx.optional_tensor(n, ins, 1)
+        @ops.reduce_sum_f32(
+          x,
+          axes,
+          axes_t,
+          keepdims~,
+          noop_with_empty_axes~,
+          pool=out_pool,
+        )
+      }
+      @nn_ir.Shape(start~, end~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.shape_op(x, start~, end~)
+      }
     }
   } catch {
     MissingTensor(msg) => raise MissingTensor(msg)
     UnsupportedOp(msg) => raise UnsupportedOp(msg)
     e => raise TensorErr("node '\{n}' (\{node.op.name()}): \{e}")
+  }
+}
+
+///|
+/// 内置 CPU 多输出节点分派入口（针对 `Split` 返回全部子张量，其余节点复用 `eval_cpu_node`）。
+fn eval_cpu_node_multi(
+  node : @nn_ir.IrNode,
+  ctx : EvalContext,
+  use_simd : Bool,
+) -> Array[@tensor.Tensor] raise RuntimeError {
+  match node.op {
+    @nn_ir.Split(axis~, split~, num_outputs~) => {
+      let n = node.name
+      let ins = node.inputs
+      try {
+        let x = ctx.require_tensor(n, ins, 0)
+        let split_t = ctx.optional_tensor(n, ins, 1)
+        let n_out = match num_outputs {
+          Some(k) => k
+          None => node.outputs.length()
+        }
+        @ops.split_op(x, axis, split, split_t, n_out, pool=ctx.out_pool)
+      } catch {
+        MissingTensor(msg) => raise MissingTensor(msg)
+        UnsupportedOp(msg) => raise UnsupportedOp(msg)
+        e => raise TensorErr("node '\{n}' (Split): \{e}")
+      }
+    }
+    _ => [eval_cpu_node(node, ctx, use_simd)]
   }
 }
 
@@ -375,6 +572,15 @@ pub impl ExecutionProvider for CpuScalarProvider with fn eval_node(
 }
 
 ///|
+pub impl ExecutionProvider for CpuScalarProvider with fn eval_node_multi(
+  _self,
+  node,
+  ctx,
+) {
+  eval_cpu_node_multi(node, ctx, false)
+}
+
+///|
 pub impl ExecutionProvider for CpuSimdProvider with fn name(_self) {
   "simd-v128"
 }
@@ -393,6 +599,15 @@ pub impl ExecutionProvider for CpuSimdProvider with fn eval_node(
   ctx,
 ) {
   eval_cpu_node(node, ctx, true)
+}
+
+///|
+pub impl ExecutionProvider for CpuSimdProvider with fn eval_node_multi(
+  _self,
+  node,
+  ctx,
+) {
+  eval_cpu_node_multi(node, ctx, true)
 }
 
 ///|

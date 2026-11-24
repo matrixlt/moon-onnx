@@ -217,38 +217,49 @@ fn build_release_plan(
   let root_of : Map[String, String] = Map([])
   for i = 0; i < num_nodes; i = i + 1 {
     let node = graph.nodes[i]
-    let out_name = if node.outputs.length() > 0 { node.outputs[0] } else { "" }
-    if out_name == "" {
-      continue
-    }
-    match node.op {
-      @nn_ir.Constant(..) => {
-        root_of[out_name] = out_name
-        pinned[out_name] = true
+    for k = 0; k < node.outputs.length(); k = k + 1 {
+      let out_name = node.outputs[k]
+      if out_name == "" {
+        continue
       }
-      op if is_view_op(op) => {
-        let in_name = if node.inputs.length() > 0 { node.inputs[0] } else { "" }
-        let root = match root_of.get(in_name) {
-          Some(prev) => prev
-          None => in_name
+      match node.op {
+        @nn_ir.Constant(..) => {
+          root_of[out_name] = out_name
+          pinned[out_name] = true
         }
-        root_of[out_name] = root
-        if pinned.contains(out_name) && root != "" {
-          pinned[root] = true
+        op if is_view_op(op) => {
+          let in_name = if node.inputs.length() > 0 {
+            node.inputs[0]
+          } else {
+            ""
+          }
+          let root = match root_of.get(in_name) {
+            Some(prev) => prev
+            None => in_name
+          }
+          root_of[out_name] = root
+          if pinned.contains(out_name) && root != "" {
+            pinned[root] = true
+          }
         }
+        _ => root_of[out_name] = out_name
       }
-      _ => root_of[out_name] = out_name
     }
   }
 
   let last_use : Map[String, Int32] = Map([])
   for i = 0; i < num_nodes; i = i + 1 {
     let node = graph.nodes[i]
-    let out_name = if node.outputs.length() > 0 { node.outputs[0] } else { "" }
-    if out_name != "" && !is_view_op(node.op) {
+    if !is_view_op(node.op) {
       match node.op {
         @nn_ir.Constant(..) => ()
-        _ => if !pinned.contains(out_name) { last_use[out_name] = i }
+        _ =>
+          for k = 0; k < node.outputs.length(); k = k + 1 {
+            let out_name = node.outputs[k]
+            if out_name != "" && !pinned.contains(out_name) {
+              last_use[out_name] = i
+            }
+          }
       }
     }
   }
@@ -280,16 +291,23 @@ fn build_release_plan(
   let pinned_outputs = Array::make(num_nodes, false)
   for i = 0; i < num_nodes; i = i + 1 {
     let node = graph.nodes[i]
-    let out_name = if node.outputs.length() > 0 { node.outputs[0] } else { "" }
-    if out_name == "" {
+    if node.outputs.length() == 0 {
       pinned_outputs[i] = true
     } else {
-      let root = match root_of.get(out_name) {
-        Some(prev) => prev
-        None => out_name
-      }
-      if pinned.contains(out_name) || pinned.contains(root) {
-        pinned_outputs[i] = true
+      for k = 0; k < node.outputs.length(); k = k + 1 {
+        let out_name = node.outputs[k]
+        if out_name == "" {
+          pinned_outputs[i] = true
+          break
+        }
+        let root = match root_of.get(out_name) {
+          Some(prev) => prev
+          None => out_name
+        }
+        if pinned.contains(out_name) || pinned.contains(root) {
+          pinned_outputs[i] = true
+          break
+        }
       }
     }
   }
@@ -473,9 +491,11 @@ pub fn Session::run(
       scratch_pool: self.pool,
       out_pool,
     }
-    let out_tensor = self.provider.eval_node(node, ctx)
-    if node.outputs.length() > 0 && node.outputs[0] != "" {
-      env[node.outputs[0]] = out_tensor
+    let out_tensors = self.provider.eval_node_multi(node, ctx)
+    for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
+      if node.outputs[k] != "" {
+        env[node.outputs[k]] = out_tensors[k]
+      }
     }
     release_dead_buffers(self.release_plan[i], env, self.pool)
   }
@@ -525,16 +545,23 @@ pub fn Session::run_profiled(
       out_pool,
     }
     let t0 = @bench.monotonic_clock_start()
-    let out_tensor = self.provider.eval_node(node, ctx)
+    let out_tensors = self.provider.eval_node_multi(node, ctx)
     let elapsed_us = @bench.monotonic_clock_end(t0)
+    let out_shape = if out_tensors.length() > 0 {
+      out_tensors[0].shape()
+    } else {
+      []
+    }
     timings.push({
       node_name: node.name,
       op_type: node.op.name(),
-      output_shape: out_tensor.shape(),
+      output_shape: out_shape,
       elapsed_us,
     })
-    if node.outputs.length() > 0 && node.outputs[0] != "" {
-      env[node.outputs[0]] = out_tensor
+    for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
+      if node.outputs[k] != "" {
+        env[node.outputs[k]] = out_tensors[k]
+      }
     }
     release_dead_buffers(self.release_plan[i], env, self.pool)
   }

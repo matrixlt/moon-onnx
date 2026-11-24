@@ -80,7 +80,18 @@ pub(all) enum Op {
   Conv(kernel_shape~ : Array[Int32]?, strides~ : Array[Int32], pads~ : Array[Int32], dilations~ : Array[Int32], group~ : Int32, auto_pad~ : AutoPad, activation~ : FusedActivation)
   MaxPool(kernel_shape~ : Array[Int32], strides~ : Array[Int32], pads~ : Array[Int32], dilations~ : Array[Int32], ceil_mode~ : Bool, auto_pad~ : AutoPad)
   AveragePool(kernel_shape~ : Array[Int32], strides~ : Array[Int32], pads~ : Array[Int32], ceil_mode~ : Bool, count_include_pad~ : Bool, auto_pad~ : AutoPad)
+  GlobalAveragePool
   BatchNormalization(epsilon~ : Float)
+  LayerNormalization(axis~ : Int32, epsilon~ : Float)
+  Concat(axis~ : Int32)
+  Split(axis~ : Int32, split~ : Array[Int32]?, num_outputs~ : Int32?)
+  Slice(starts~ : Array[Int32]?, ends~ : Array[Int32]?, axes~ : Array[Int32]?, steps~ : Array[Int32]?)
+  Pad(mode~ : String, pads~ : Array[Int32]?, constant_value~ : Float?)
+  Gather(axis~ : Int32)
+  Cast(to~ : @tensor.DType)
+  ReduceMean(axes~ : Array[Int32]?, keepdims~ : Bool, noop_with_empty_axes~ : Bool)
+  ReduceSum(axes~ : Array[Int32]?, keepdims~ : Bool, noop_with_empty_axes~ : Bool)
+  Shape(start~ : Int32?, end~ : Int32?)
 }
 pub fn Op::name(Self) -> String
 

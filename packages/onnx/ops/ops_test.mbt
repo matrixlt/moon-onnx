@@ -372,3 +372,113 @@ test "Tier-2a elementwise math and activations match scalar and SIMD" {
     assert_approx(lr_out[i], expected_lr, (1.0e-6 : Float))
   }
 }
+
+///|
+/// 验证 Tier-2b 张量变形、索引与填充算子（Shape / Cast / Concat / Split / Slice / Pad / Gather）。
+test "Tier-2b tensor manipulation ops (Shape/Cast/Concat/Split/Slice/Pad/Gather)" {
+  // 1. Shape（含 start/end 切片）
+  let x = @tensor.Tensor::from_f32_array([2, 3, 4], [
+    1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+    16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0, 24.0,
+  ])
+  let sh_full = @ops.shape_op(x)
+  assert_eq(sh_full.shape(), [3])
+  assert_eq(sh_full.to_i64_buffer(), [2, 3, 4])
+  let sh_sub = @ops.shape_op(x, start=Some(1), end=Some(-1))
+  assert_eq(sh_sub.to_i64_buffer(), [3])
+
+  // 2. Cast（F32 -> I64 -> F32 与 Bool）
+  let c_i64 = @ops.cast_op(
+    @tensor.Tensor::from_f32_array([3], [0.0, 2.7, -3.2]),
+    @tensor.Int64,
+  )
+  assert_eq(c_i64.to_i64_buffer(), [0, 2, -3])
+  let c_f32 = @ops.cast_op(c_i64, @tensor.Float32)
+  assert_eq(c_f32.to_f32_buffer(), [0.0, 2.0, -3.0])
+  let c_bool = @ops.cast_op(c_i64, @tensor.Bool)
+  let c_back = @ops.cast_op(c_bool, @tensor.Int32)
+  assert_eq(c_back.to_i64_buffer(), [0, 1, 1])
+
+  // 3. Split + Concat 往返一致
+  let parts = @ops.split_op(x, 1, Some([1, 2]), None, 2)
+  assert_eq(parts.length(), 2)
+  assert_eq(parts[0].shape(), [2, 1, 4])
+  assert_eq(parts[1].shape(), [2, 2, 4])
+  let rejoined = @ops.concat_op(parts, 1)
+  assert_eq(rejoined.shape(), [2, 3, 4])
+  assert_eq(rejoined.to_f32_buffer(), x.to_f32_buffer())
+
+  // 4. Slice（含负索引与步长 2）
+  let sl = @ops.slice_op(x, [0, 1], [2, 4], Some([1, 2]), Some([1, 2]))
+  assert_eq(sl.shape(), [2, 2, 2])
+  // [0, 0, 1] -> 2.0, [0, 0, 3] -> 4.0, [0, 1, 1] -> 6.0, [0, 1, 3] -> 8.0
+  assert_eq(sl.get_f32([0, 0, 0]), (2.0 : Float))
+  assert_eq(sl.get_f32([0, 0, 1]), (4.0 : Float))
+  assert_eq(sl.get_f32([0, 1, 0]), (6.0 : Float))
+  assert_eq(sl.get_f32([0, 1, 1]), (8.0 : Float))
+
+  // 5. Pad（constant / reflect / edge）
+  let p_in = @tensor.Tensor::from_f32_array([1, 3], [1.0, 2.0, 3.0])
+  let p_const = @ops.pad_f32(
+    p_in,
+    [0, 1, 0, 1],
+    "constant",
+    (-1.0 : Float),
+    None,
+  )
+  assert_eq(p_const.shape(), [1, 5])
+  assert_eq(p_const.to_f32_buffer(), [-1.0, 1.0, 2.0, 3.0, -1.0])
+  let p_refl = @ops.pad_f32(p_in, [0, 1, 0, 1], "reflect", (0.0 : Float), None)
+  assert_eq(p_refl.to_f32_buffer(), [2.0, 1.0, 2.0, 3.0, 2.0])
+  let p_edge = @ops.pad_f32(p_in, [0, 1, 0, 1], "edge", (0.0 : Float), None)
+  assert_eq(p_edge.to_f32_buffer(), [1.0, 1.0, 2.0, 3.0, 3.0])
+
+  // 6. Gather（嵌入查表与负索引）
+  let emb = @tensor.Tensor::from_f32_array([3, 2], [
+    10.0, 11.0, 20.0, 21.0, 30.0, 31.0,
+  ])
+  let idx = @tensor.Tensor::from_i64([2], [2, -3])
+  let gathered = @ops.gather_op(emb, idx, 0)
+  assert_eq(gathered.shape(), [2, 2])
+  assert_eq(gathered.to_f32_buffer(), [30.0, 31.0, 10.0, 11.0])
+}
+
+///|
+/// 验证 Tier-2b 归约与归一化算子（GlobalAveragePool / ReduceMean / ReduceSum / LayerNormalization）。
+test "Tier-2b reduction and normalization ops (GlobalAvgPool/ReduceMean/ReduceSum/LayerNorm)" {
+  // 1. GlobalAveragePool
+  let feat = @tensor.Tensor::from_f32_array([1, 2, 2, 2], [
+    1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0,
+  ])
+  let gap = @ops.global_avgpool_f32(feat)
+  assert_eq(gap.shape(), [1, 2, 1, 1])
+  assert_approx(gap.get_f32([0, 0, 0, 0]), (2.5 : Float), (1.0e-6 : Float))
+  assert_approx(gap.get_f32([0, 1, 0, 0]), (25.0 : Float), (1.0e-6 : Float))
+
+  // 2. ReduceMean & ReduceSum
+  let m = @tensor.Tensor::from_f32_array([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+  let r_mean = @ops.reduce_mean_f32(m, Some([1]), None, keepdims=false)
+  assert_eq(r_mean.shape(), [2])
+  assert_approx(r_mean.get_f32([0]), (2.0 : Float), (1.0e-6 : Float))
+  assert_approx(r_mean.get_f32([1]), (5.0 : Float), (1.0e-6 : Float))
+  let r_sum = @ops.reduce_sum_f32(m, Some([0]), None, keepdims=true)
+  assert_eq(r_sum.shape(), [1, 3])
+  assert_eq(r_sum.to_f32_buffer(), [5.0, 7.0, 9.0])
+
+  // 3. LayerNormalization（[1, 4] 均值 2.5，方差 1.25，std = sqrt(1.25)）
+  let ln_in = @tensor.Tensor::from_f32_array([1, 4], [1.0, 2.0, 3.0, 4.0])
+  let ln_s = @tensor.Tensor::from_f32_array([4], [2.0, 2.0, 2.0, 2.0])
+  let ln_b = @tensor.Tensor::from_f32_array([4], [0.5, 0.5, 0.5, 0.5])
+  let ln_out = @ops.layer_norm_f32(
+    ln_in,
+    ln_s,
+    Some(ln_b),
+    axis=-1,
+    epsilon=(0.0 : Float),
+  )
+  let inv_std = 1.0 / 1.25.sqrt()
+  let expected0 = Float::from_double((1.0 - 2.5) * inv_std * 2.0 + 0.5)
+  let expected3 = Float::from_double((4.0 - 2.5) * inv_std * 2.0 + 0.5)
+  assert_approx(ln_out.get_f32([0, 0]), expected0, (1.0e-5 : Float))
+  assert_approx(ln_out.get_f32([0, 3]), expected3, (1.0e-5 : Float))
+}
