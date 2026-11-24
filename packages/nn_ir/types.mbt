@@ -56,7 +56,18 @@ pub(all) enum Op {
   Add
   Sub
   Mul
+  Div
+  Pow
+  Sqrt
+  Exp
+  Neg
   Relu
+  Clip(min~ : Float?, max~ : Float?)
+  Sigmoid
+  Tanh
+  Gelu
+  HardSwish
+  LeakyRelu(alpha~ : Float)
   Identity
   Softmax(axis~ : Int32)
   Flatten(axis~ : Int32)
@@ -103,7 +114,18 @@ pub fn Op::name(self : Op) -> String {
     Add => "Add"
     Sub => "Sub"
     Mul => "Mul"
+    Div => "Div"
+    Pow => "Pow"
+    Sqrt => "Sqrt"
+    Exp => "Exp"
+    Neg => "Neg"
     Relu => "Relu"
+    Clip(..) => "Clip"
+    Sigmoid => "Sigmoid"
+    Tanh => "Tanh"
+    Gelu => "Gelu"
+    HardSwish => "HardSwish"
+    LeakyRelu(..) => "LeakyRelu"
     Identity => "Identity"
     Softmax(..) => "Softmax"
     Flatten(..) => "Flatten"

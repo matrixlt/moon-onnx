@@ -55,7 +55,18 @@ pub(all) enum Op {
   Add
   Sub
   Mul
+  Div
+  Pow
+  Sqrt
+  Exp
+  Neg
   Relu
+  Clip(min~ : Float?, max~ : Float?)
+  Sigmoid
+  Tanh
+  Gelu
+  HardSwish
+  LeakyRelu(alpha~ : Float)
   Identity
   Softmax(axis~ : Int32)
   Flatten(axis~ : Int32)

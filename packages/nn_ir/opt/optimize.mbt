@@ -436,11 +436,57 @@ fn pass_pretranspose_gemm_weights(
 }
 
 ///|
-/// Pass 5：Conv + 尾部激活（Relu）融合。
-/// 当 `Conv(activation=NoAct)` 的输出仅被紧邻的 `Relu` 消费一次时，
+/// 从静态初始化器中提取单个 Float32 标量值（用于解析 Opset 11+ `Clip` 的 `min`/`max` 静态输入）。
+fn extract_static_scalar_f32(
+  initializers : Map[String, @tensor.Tensor],
+  name : String,
+) -> Float? {
+  if name == "" {
+    return None
+  }
+  match initializers.get(name) {
+    Some(t) if t.numel() == 1 && t.dtype() == @tensor.Float32 =>
+      Some(t.get_f32_flat(0)) catch {
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// 解析 `Clip` 节点的静态边界 `(min, max)`；若边界来自非常量运行期张量则返回 `None` 表示不可静态融合。
+fn resolve_static_clip_bounds(
+  node : @nn_ir.IrNode,
+  attr_min : Float?,
+  attr_max : Float?,
+  initializers : Map[String, @tensor.Tensor],
+) -> (Float?, Float?)? {
+  let lo = if node.inputs.length() >= 2 && node.inputs[1] != "" {
+    match extract_static_scalar_f32(initializers, node.inputs[1]) {
+      Some(v) => Some(v)
+      None => return None
+    }
+  } else {
+    attr_min
+  }
+  let hi = if node.inputs.length() >= 3 && node.inputs[2] != "" {
+    match extract_static_scalar_f32(initializers, node.inputs[2]) {
+      Some(v) => Some(v)
+      None => return None
+    }
+  } else {
+    attr_max
+  }
+  Some((lo, hi))
+}
+
+///|
+/// Pass 5：Conv + 尾部激活（Relu / Clip / ReLU6）融合。
+/// 当 `Conv(activation=NoAct)` 的输出仅被紧邻的 `Relu` 或静态边界 `Clip` 消费一次时，
 /// 将激活内联至卷积微内核写回阶段，直接消除整张特征图的额外读写与中间缓冲。
 fn pass_fold_conv_activation(
   nodes : Array[@nn_ir.IrNode],
+  initializers : Map[String, @tensor.Tensor],
   graph_outputs : Array[String],
 ) -> (Array[@nn_ir.IrNode], Int32) {
   let uses = count_tensor_uses(nodes, graph_outputs)
@@ -487,6 +533,65 @@ fn pass_fold_conv_activation(
             i = i + 2
             continue
           }
+        (
+          @nn_ir.Conv(
+            kernel_shape~,
+            strides~,
+            pads~,
+            dilations~,
+            group~,
+            auto_pad~,
+            activation=@nn_ir.NoAct,
+          ),
+          @nn_ir.Clip(min~, max~),
+        ) =>
+          if cur.outputs.length() == 1 &&
+            next.inputs.length() >= 1 &&
+            next.inputs[0] == cur.outputs[0] &&
+            uses.get(cur.outputs[0]) == Some(1) {
+            match resolve_static_clip_bounds(next, min, max, initializers) {
+              Some((Some(lo), Some(hi))) => {
+                kept.push({
+                  name: "\{cur.name}_clip",
+                  op: @nn_ir.Conv(
+                    kernel_shape~,
+                    strides~,
+                    pads~,
+                    dilations~,
+                    group~,
+                    auto_pad~,
+                    activation=@nn_ir.ClipAct(min=lo, max=hi),
+                  ),
+                  inputs: cur.inputs.copy(),
+                  outputs: next.outputs.copy(),
+                })
+                folded = folded + 1
+                i = i + 2
+                continue
+              }
+              Some((Some(lo), None)) if lo == (0.0 : Float) => {
+                // Clip(min=0, max=+inf) 等价于 Relu
+                kept.push({
+                  name: "\{cur.name}_relu",
+                  op: @nn_ir.Conv(
+                    kernel_shape~,
+                    strides~,
+                    pads~,
+                    dilations~,
+                    group~,
+                    auto_pad~,
+                    activation=@nn_ir.ReluAct,
+                  ),
+                  inputs: cur.inputs.copy(),
+                  outputs: next.outputs.copy(),
+                })
+                folded = folded + 1
+                i = i + 2
+                continue
+              }
+              _ => ()
+            }
+          }
         _ => ()
       }
     }
@@ -514,6 +619,7 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
   )
   let (n5, folded_conv_activation) = pass_fold_conv_activation(
     n4,
+    initializers,
     graph.outputs,
   )
   let (n6, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(

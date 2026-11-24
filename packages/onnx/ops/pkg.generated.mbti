@@ -14,15 +14,27 @@ pub fn avgpool_2d_f32(@tensor.Tensor, Array[Int32], Array[Int32], Array[Int32], 
 
 pub fn batch_norm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, epsilon? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn clip_f32(@tensor.Tensor, Float?, Float?, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn conv2d_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], Int32, @nn_ir.AutoPad, use_simd? : Bool, activation? : @nn_ir.FusedActivation, pool? : @tensor.BufferPool?, scratch_pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn conv2d_prepacked_f32(@tensor.Tensor, PackedConvWeight, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], @nn_ir.AutoPad, activation? : @nn_ir.FusedActivation, pool? : @tensor.BufferPool?, scratch_pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn div_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn exp_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn flatten_op(@tensor.Tensor, axis? : Int32) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn gelu_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn gemm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, alpha? : Float, beta? : Float, trans_a? : Bool, trans_b? : Bool, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn gemm_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB, @tensor.Tensor?, alpha? : Float, beta? : Float, trans_a? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn hard_swish_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn leaky_relu_f32(@tensor.Tensor, alpha? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn matmul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
@@ -32,17 +44,27 @@ pub fn maxpool_2d_f32(@tensor.Tensor, Array[Int32], Array[Int32], Array[Int32], 
 
 pub fn mul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn neg_f32(@tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn pack_conv2d_weight_f32(@tensor.Tensor, Int32) -> PackedConvWeight raise @tensor.TensorError
+
+pub fn pow_f32(@tensor.Tensor, @tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn relu_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn reshape_op(@tensor.Tensor, @tensor.Tensor, allowzero? : Bool) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn sigmoid_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn softmax_f32(@tensor.Tensor, Int32, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn sqrt_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn squeeze_op(@tensor.Tensor, Array[Int32]?, @tensor.Tensor?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn sub_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn tanh_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn transpose_op(@tensor.Tensor, Array[Int32]) -> @tensor.Tensor raise @tensor.TensorError
 

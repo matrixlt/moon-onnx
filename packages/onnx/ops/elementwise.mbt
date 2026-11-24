@@ -22,6 +22,8 @@ priv enum BinaryOp {
   BAdd
   BSub
   BMul
+  BDiv
+  BPow
 }
 
 ///|
@@ -31,6 +33,8 @@ fn apply_binary(op : BinaryOp, x : Float, y : Float) -> Float {
     BAdd => x + y
     BSub => x - y
     BMul => x * y
+    BDiv => x / y
+    BPow => Float::from_double(@math.pow(x.to_double(), y.to_double()))
   }
 }
 
@@ -59,6 +63,11 @@ fn binary_f32(
         BAdd => @vecmath.add_f32_v128(a_buf, b_buf, out, total)
         BSub => @vecmath.sub_f32_v128(a_buf, b_buf, out, total)
         BMul => @vecmath.mul_f32_v128(a_buf, b_buf, out, total)
+        BDiv => @vecmath.div_f32_v128(a_buf, b_buf, out, total)
+        BPow =>
+          for i = 0; i < total; i = i + 1 {
+            out[i] = apply_binary(op, a_buf[i], b_buf[i])
+          }
       }
     } else {
       for i = 0; i < total; i = i + 1 {
@@ -144,6 +153,82 @@ pub fn mul_f32(
 }
 
 ///|
+/// ONNX Div 算子（支持多向广播与可选 V128 SIMD 加速及 BufferPool 复用）。
+pub fn div_f32(
+  a : @tensor.Tensor,
+  b : @tensor.Tensor,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  binary_f32(BDiv, a, b, use_simd, pool)
+}
+
+///|
+/// ONNX Pow 算子（支持多向广播与 BufferPool 复用）。
+pub fn pow_f32(
+  a : @tensor.Tensor,
+  b : @tensor.Tensor,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  binary_f32(BPow, a, b, false, pool)
+}
+
+///|
+/// ONNX Sqrt 算子（支持标量与 V128 `f32x4_sqrt` 向量化路径及 BufferPool 复用）。
+pub fn sqrt_f32(
+  x : @tensor.Tensor,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  if use_simd {
+    @vecmath.sqrt_f32_v128(src, out, n)
+  } else {
+    for i = 0; i < n; i = i + 1 {
+      out[i] = Float::from_double(src[i].to_double().sqrt())
+    }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX Exp 算子（支持标量与 V128 向量化路径及 BufferPool 复用）。
+pub fn exp_f32(
+  x : @tensor.Tensor,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  if use_simd {
+    @vecmath.exp_f32_v128(src, out, n)
+  } else {
+    for i = 0; i < n; i = i + 1 {
+      out[i] = Float::from_double(@math.exp(src[i].to_double()))
+    }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX Neg 算子（逐元素取反，支持 BufferPool 复用）。
+pub fn neg_f32(
+  x : @tensor.Tensor,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  for i = 0; i < n; i = i + 1 {
+    out[i] = -src[i]
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
 /// ONNX Relu 算子（支持标量与 V128 `f32x4_pmax` 向量化路径及 BufferPool 复用）。
 pub fn relu_f32(
   x : @tensor.Tensor,
@@ -161,6 +246,160 @@ pub fn relu_f32(
       let v = src[i]
       out[i] = if v > zero { v } else { zero }
     }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX Clip 算子（支持可选 `min`/`max` 上下界、V128 向量化快速路径与 BufferPool 复用）。
+pub fn clip_f32(
+  x : @tensor.Tensor,
+  min_val : Float?,
+  max_val : Float?,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  match (min_val, max_val) {
+    (Some(lo), Some(hi)) =>
+      if use_simd {
+        @vecmath.clip_f32_v128(src, out, n, lo, hi)
+      } else {
+        for i = 0; i < n; i = i + 1 {
+          let v = src[i]
+          let c1 = if v < lo { lo } else { v }
+          out[i] = if c1 > hi { hi } else { c1 }
+        }
+      }
+    (Some(lo), None) =>
+      if use_simd && lo == (0.0 : Float) {
+        @vecmath.relu_f32_v128(src, out, n)
+      } else {
+        for i = 0; i < n; i = i + 1 {
+          let v = src[i]
+          out[i] = if v < lo { lo } else { v }
+        }
+      }
+    (None, Some(hi)) =>
+      for i = 0; i < n; i = i + 1 {
+        let v = src[i]
+        out[i] = if v > hi { hi } else { v }
+      }
+    (None, None) =>
+      for i = 0; i < n; i = i + 1 {
+        out[i] = src[i]
+      }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX Sigmoid 算子（支持标量与 V128 向量化路径及 BufferPool 复用）。
+pub fn sigmoid_f32(
+  x : @tensor.Tensor,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  if use_simd {
+    @vecmath.sigmoid_f32_v128(src, out, n)
+  } else {
+    for i = 0; i < n; i = i + 1 {
+      let d = src[i].to_double()
+      out[i] = Float::from_double(1.0 / (1.0 + @math.exp(-d)))
+    }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX Tanh 算子（支持标量与 V128 向量化路径及 BufferPool 复用）。
+pub fn tanh_f32(
+  x : @tensor.Tensor,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  if use_simd {
+    @vecmath.tanh_f32_v128(src, out, n)
+  } else {
+    for i = 0; i < n; i = i + 1 {
+      out[i] = Float::from_double(@math.tanh(src[i].to_double()))
+    }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX Gelu 算子（Tanh 近似：`0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))`）。
+pub fn gelu_f32(
+  x : @tensor.Tensor,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  if use_simd {
+    @vecmath.gelu_f32_v128(src, out, n)
+  } else {
+    let sqrt_2_over_pi = 0.7978845608028654
+    for i = 0; i < n; i = i + 1 {
+      let d = src[i].to_double()
+      let inner = sqrt_2_over_pi * (d + 0.044715 * d * d * d)
+      out[i] = Float::from_double(0.5 * d * (1.0 + @math.tanh(inner)))
+    }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX HardSwish 算子：`x * clamp(x / 6 + 0.5, 0, 1)`（MobileNetV3 高频激活）。
+pub fn hard_swish_f32(
+  x : @tensor.Tensor,
+  use_simd~ : Bool = false,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  if use_simd {
+    @vecmath.hard_swish_f32_v128(src, out, n)
+  } else {
+    let zero : Float = 0.0
+    let one : Float = 1.0
+    let sixth : Float = Float::from_double(1.0 / 6.0)
+    let half : Float = 0.5
+    for i = 0; i < n; i = i + 1 {
+      let v = src[i]
+      let t = v * sixth + half
+      let clamped = if t < zero { zero } else if t > one { one } else { t }
+      out[i] = v * clamped
+    }
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
+/// ONNX LeakyRelu 算子：`x >= 0 ? x : alpha * x`。
+pub fn leaky_relu_f32(
+  x : @tensor.Tensor,
+  alpha~ : Float = (0.01 : Float),
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  let zero : Float = 0.0
+  for i = 0; i < n; i = i + 1 {
+    let v = src[i]
+    out[i] = if v >= zero { v } else { alpha * v }
   }
   @tensor.Tensor::from_f32(x.shape(), out)
 }

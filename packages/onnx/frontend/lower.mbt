@@ -48,6 +48,18 @@ fn get_attr_float(
 }
 
 ///|
+/// 读取可选浮点属性，缺失时返回 None。
+fn get_attr_float_opt(
+  attrs : Array[@schema.AttributeProto],
+  name : String,
+) -> Float? {
+  match find_attr(attrs, name) {
+    Some(a) => a.f
+    None => None
+  }
+}
+
+///|
 /// 读取整数列表属性，缺失时返回 None。
 fn get_attr_ints_opt(
   attrs : Array[@schema.AttributeProto],
@@ -132,7 +144,23 @@ fn lower_node(
     "Add" => @nn_ir.Add
     "Sub" => @nn_ir.Sub
     "Mul" => @nn_ir.Mul
+    "Div" => @nn_ir.Div
+    "Pow" => @nn_ir.Pow
+    "Sqrt" => @nn_ir.Sqrt
+    "Exp" => @nn_ir.Exp
+    "Neg" => @nn_ir.Neg
     "Relu" => @nn_ir.Relu
+    "Clip" =>
+      @nn_ir.Clip(
+        min=get_attr_float_opt(attrs, "min"),
+        max=get_attr_float_opt(attrs, "max"),
+      )
+    "Sigmoid" => @nn_ir.Sigmoid
+    "Tanh" => @nn_ir.Tanh
+    "Gelu" => @nn_ir.Gelu
+    "HardSwish" => @nn_ir.HardSwish
+    "LeakyRelu" =>
+      @nn_ir.LeakyRelu(alpha=get_attr_float(attrs, "alpha", (0.01 : Float)))
     "Identity" => @nn_ir.Identity
     "MatMul" => @nn_ir.MatMul
     "Softmax" => {
@@ -195,9 +223,46 @@ fn lower_node(
                   }
                 }
                 None =>
-                  raise @nn_ir.InvalidAttribute(
-                    "Constant '\{node_name}' missing supported value attribute",
-                  )
+                  match find_attr(attrs, "value_float") {
+                    Some(a) =>
+                      match a.f {
+                        Some(v) =>
+                          @tensor.Tensor::from_f32([], FixedArray::make(1, v)) catch {
+                            e =>
+                              raise @nn_ir.InvalidAttribute(
+                                "Constant '\{node_name}': \{e}",
+                              )
+                          }
+                        None =>
+                          raise @nn_ir.InvalidAttribute(
+                            "Constant '\{node_name}' value_float empty",
+                          )
+                      }
+                    None =>
+                      match find_attr(attrs, "value_int") {
+                        Some(a) =>
+                          match a.i {
+                            Some(v) =>
+                              @tensor.Tensor::from_i64(
+                                [],
+                                FixedArray::make(1, v),
+                              ) catch {
+                                e =>
+                                  raise @nn_ir.InvalidAttribute(
+                                    "Constant '\{node_name}': \{e}",
+                                  )
+                              }
+                            None =>
+                              raise @nn_ir.InvalidAttribute(
+                                "Constant '\{node_name}' value_int empty",
+                              )
+                          }
+                        None =>
+                          raise @nn_ir.InvalidAttribute(
+                            "Constant '\{node_name}' missing supported value attribute",
+                          )
+                      }
+                  }
               }
           }
       }

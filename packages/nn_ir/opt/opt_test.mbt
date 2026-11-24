@@ -109,3 +109,87 @@ test "optimize_graph folds Conv+BN, Conv+bias, and pre-transposes Gemm weights" 
   let pt_w = opt_g.initializers.get(opt_g.nodes[1].inputs[1]).unwrap()
   assert_eq(pt_w.shape(), [2, 3])
 }
+
+///|
+/// 测试 MobileNetV2 典型结构：`Conv + BatchNormalization + Clip(0, 6)`（Opset 11+ 常量输入形式）
+/// 被一次性折叠为单个 `Conv+Clip` 节点，消除 BN 与 Clip 两次整图读写。
+test "optimize_graph folds Conv+BN+Clip(ReLU6) into single fused Conv+Clip" {
+  let w_conv = @tensor.Tensor::from_f32_array([2, 1, 3, 3], [
+    1.0, 0.0, -1.0, 0.5, 1.0, 0.5, -0.5, 0.0, 0.5, 0.2, 0.3, 0.4, -0.1, 0.5, -0.2,
+    0.1, 0.2, 0.3,
+  ])
+  let scale = @tensor.Tensor::from_f32_array([2], [1.0, 2.0])
+  let bias = @tensor.Tensor::from_f32_array([2], [0.0, 0.5])
+  let mean = @tensor.Tensor::from_f32_array([2], [0.0, 0.0])
+  let variance = @tensor.Tensor::from_f32_array([2], [1.0, 4.0])
+  let c_zero = @tensor.Tensor::from_f32([], FixedArray::make(1, (0.0 : Float)))
+  let c_six = @tensor.Tensor::from_f32([], FixedArray::make(1, (6.0 : Float)))
+
+  let inits : Map[String, @tensor.Tensor] = Map([
+    ("w", w_conv),
+    ("s", scale),
+    ("b", bias),
+    ("m", mean),
+    ("v", variance),
+  ])
+  let g : @nn_ir.IrGraph = {
+    name: "mobilenet_block",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: inits,
+    nodes: [
+      {
+        name: "c_min",
+        op: @nn_ir.Constant(value=c_zero),
+        inputs: [],
+        outputs: ["min_v"],
+      },
+      {
+        name: "c_max",
+        op: @nn_ir.Constant(value=c_six),
+        inputs: [],
+        outputs: ["max_v"],
+      },
+      {
+        name: "conv0",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([3, 3]),
+          strides=[1, 1],
+          pads=[1, 1, 1, 1],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["x", "w"],
+        outputs: ["t_conv"],
+      },
+      {
+        name: "bn0",
+        op: @nn_ir.BatchNormalization(epsilon=(0.0 : Float)),
+        inputs: ["t_conv", "s", "b", "m", "v"],
+        outputs: ["t_bn"],
+      },
+      {
+        name: "clip0",
+        op: @nn_ir.Clip(min=None, max=None),
+        inputs: ["t_bn", "min_v", "max_v"],
+        outputs: ["y"],
+      },
+    ],
+  }
+
+  let (opt_g, stats) = @opt.optimize_graph(g)
+  assert_eq(stats.lifted_constants, 2)
+  assert_eq(stats.folded_conv_bn, 1)
+  assert_eq(stats.folded_conv_activation, 1)
+  assert_eq(opt_g.nodes.length(), 1)
+  assert_eq(opt_g.nodes[0].op.name(), "Conv+Clip")
+  match opt_g.nodes[0].op {
+    @nn_ir.Conv(activation=@nn_ir.ClipAct(min~, max~), ..) => {
+      assert_eq(min, (0.0 : Float))
+      assert_eq(max, (6.0 : Float))
+    }
+    _ => fail("expected fused Conv+Clip")
+  }
+}

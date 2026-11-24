@@ -298,3 +298,77 @@ test "conv2d_prepacked_f32 fused Relu/Clip and V128 Depthwise Conv2D match scala
     }
   }
 }
+
+///|
+/// 验证 Tier-2a 逐元素数学与激活算子（Div / Pow / Sqrt / Exp / Neg / Clip / Sigmoid / Tanh / Gelu / HardSwish / LeakyRelu）
+/// 的标量与 V128 SIMD 路径数值一致性及广播正确性。
+test "Tier-2a elementwise math and activations match scalar and SIMD" {
+  let n = 13
+  let x = @tensor.Tensor::from_f32(
+    [n],
+    FixedArray::makei(n, fn(i) { Float::from_int(i - 6) * (0.6 : Float) }),
+  )
+  let pos = @tensor.Tensor::from_f32(
+    [n],
+    FixedArray::makei(n, fn(i) { Float::from_int(i + 1) * (0.5 : Float) }),
+  )
+  let two = @tensor.Tensor::from_f32([1], FixedArray::make(1, (2.0 : Float)))
+
+  // Div（同形 SIMD 与广播标量）
+  let div_sc = @ops.div_f32(x, pos, use_simd=false).to_f32_buffer()
+  let div_si = @ops.div_f32(x, pos, use_simd=true).to_f32_buffer()
+  for i = 0; i < n; i = i + 1 {
+    assert_approx(div_si[i], div_sc[i], (1.0e-6 : Float))
+  }
+  let pow_out = @ops.pow_f32(pos, two).to_f32_buffer()
+  for i = 0; i < n; i = i + 1 {
+    let v = pos.get_f32_flat(i)
+    assert_approx(pow_out[i], v * v, (1.0e-5 : Float))
+  }
+
+  // Sqrt / Exp / Neg
+  let sqrt_sc = @ops.sqrt_f32(pos, use_simd=false).to_f32_buffer()
+  let sqrt_si = @ops.sqrt_f32(pos, use_simd=true).to_f32_buffer()
+  let exp_sc = @ops.exp_f32(x, use_simd=false).to_f32_buffer()
+  let exp_si = @ops.exp_f32(x, use_simd=true).to_f32_buffer()
+  let neg_out = @ops.neg_f32(x).to_f32_buffer()
+  for i = 0; i < n; i = i + 1 {
+    assert_approx(sqrt_si[i], sqrt_sc[i], (1.0e-6 : Float))
+    assert_approx(exp_si[i], exp_sc[i], (1.0e-4 : Float))
+    assert_eq(neg_out[i], -x.get_f32_flat(i))
+  }
+
+  // Clip / Sigmoid / Tanh / Gelu / HardSwish / LeakyRelu
+  let clip_sc = @ops.clip_f32(
+    x,
+    Some((-1.0 : Float)),
+    Some((2.0 : Float)),
+    use_simd=false,
+  ).to_f32_buffer()
+  let clip_si = @ops.clip_f32(
+    x,
+    Some((-1.0 : Float)),
+    Some((2.0 : Float)),
+    use_simd=true,
+  ).to_f32_buffer()
+  let sig_sc = @ops.sigmoid_f32(x, use_simd=false).to_f32_buffer()
+  let sig_si = @ops.sigmoid_f32(x, use_simd=true).to_f32_buffer()
+  let tanh_sc = @ops.tanh_f32(x, use_simd=false).to_f32_buffer()
+  let tanh_si = @ops.tanh_f32(x, use_simd=true).to_f32_buffer()
+  let gelu_sc = @ops.gelu_f32(x, use_simd=false).to_f32_buffer()
+  let gelu_si = @ops.gelu_f32(x, use_simd=true).to_f32_buffer()
+  let hs_sc = @ops.hard_swish_f32(x, use_simd=false).to_f32_buffer()
+  let hs_si = @ops.hard_swish_f32(x, use_simd=true).to_f32_buffer()
+  let lr_out = @ops.leaky_relu_f32(x, alpha=(0.1 : Float)).to_f32_buffer()
+
+  for i = 0; i < n; i = i + 1 {
+    assert_eq(clip_si[i], clip_sc[i])
+    assert_approx(sig_si[i], sig_sc[i], (2.0e-4 : Float))
+    assert_approx(tanh_si[i], tanh_sc[i], (2.0e-4 : Float))
+    assert_approx(gelu_si[i], gelu_sc[i], (5.0e-4 : Float))
+    assert_approx(hs_si[i], hs_sc[i], (1.0e-5 : Float))
+    let v = x.get_f32_flat(i)
+    let expected_lr = if v >= (0.0 : Float) { v } else { v * (0.1 : Float) }
+    assert_approx(lr_out[i], expected_lr, (1.0e-6 : Float))
+  }
+}

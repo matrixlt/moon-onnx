@@ -113,9 +113,63 @@ fn eval_cpu_node(
         let b = ctx.require_tensor(n, ins, 1)
         @ops.mul_f32(a, b, use_simd~, pool=out_pool)
       }
+      @nn_ir.Div => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.div_f32(a, b, use_simd~, pool=out_pool)
+      }
+      @nn_ir.Pow => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.pow_f32(a, b, pool=out_pool)
+      }
+      @nn_ir.Sqrt => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.sqrt_f32(x, use_simd~, pool=out_pool)
+      }
+      @nn_ir.Exp => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.exp_f32(x, use_simd~, pool=out_pool)
+      }
+      @nn_ir.Neg => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.neg_f32(x, pool=out_pool)
+      }
       @nn_ir.Relu => {
         let x = ctx.require_tensor(n, ins, 0)
         @ops.relu_f32(x, use_simd~, pool=out_pool)
+      }
+      @nn_ir.Clip(min~, max~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let min_val = match ctx.optional_tensor(n, ins, 1) {
+          Some(t) => Some(t.get_f32_flat(0))
+          None => min
+        }
+        let max_val = match ctx.optional_tensor(n, ins, 2) {
+          Some(t) => Some(t.get_f32_flat(0))
+          None => max
+        }
+        @ops.clip_f32(x, min_val, max_val, use_simd~, pool=out_pool)
+      }
+      @nn_ir.Sigmoid => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.sigmoid_f32(x, use_simd~, pool=out_pool)
+      }
+      @nn_ir.Tanh => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.tanh_f32(x, use_simd~, pool=out_pool)
+      }
+      @nn_ir.Gelu => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.gelu_f32(x, use_simd~, pool=out_pool)
+      }
+      @nn_ir.HardSwish => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.hard_swish_f32(x, use_simd~, pool=out_pool)
+      }
+      @nn_ir.LeakyRelu(alpha~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.leaky_relu_f32(x, alpha~, pool=out_pool)
       }
       @nn_ir.Identity => ctx.require_tensor(n, ins, 0)
       @nn_ir.Softmax(axis~) => {
