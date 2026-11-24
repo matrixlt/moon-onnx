@@ -55,8 +55,19 @@ fn compute_spatial_out_and_pads(
 }
 
 ///|
-/// 预打包后的 2D 卷积静态权重：按 `group` 分组将 `W_g[C_out_g, C_in_g * kH * kW]`
-/// 转置并打包为 16 字节对齐的 `PackedMatrixB(K, C_out_g)`，消除推理热路径上的重复打包与分配。
+/// 将 IR 层的 `FusedActivation` 映射为 `ml_kernels/gemm` 的寄存器级 `Epilogue`。
+fn to_gemm_epilogue(act : @nn_ir.FusedActivation) -> @gemm.Epilogue {
+  match act {
+    @nn_ir.NoAct => @gemm.NoEpilogue
+    @nn_ir.ReluAct => @gemm.Relu
+    @nn_ir.ClipAct(min~, max~) => @gemm.Clip(min~, max~)
+  }
+}
+
+///|
+/// 预打包后的 2D 卷积静态权重：
+/// - 常规/分组卷积：按 `group` 将 `W_g[C_out_g, C_in_g * kH * kW]` 转置并打包为 16 字节对齐的 `PackedMatrixB(K, C_out_g)`；
+/// - 深度可分离卷积（`group == c_out && c_in_per_group == 1`）：直接保留紧凑 `depthwise_weight` 走零 `im2col` 专用 V128 内核。
 pub struct PackedConvWeight {
   c_out : Int32
   c_in_per_group : Int32
@@ -64,6 +75,7 @@ pub struct PackedConvWeight {
   kw : Int32
   group : Int32
   groups : Array[@gemm.PackedMatrixB]
+  depthwise_weight : FixedArray[Float]?
 }
 
 ///|
@@ -76,6 +88,15 @@ pub fn PackedConvWeight::shape(self : PackedConvWeight) -> Array[Int32] {
 /// 返回预打包卷积权重对应的分组数 `group`。
 pub fn PackedConvWeight::group(self : PackedConvWeight) -> Int32 {
   self.group
+}
+
+///|
+/// 返回该预打包权重是否命中深度可分离卷积（Depthwise Conv）专用路径。
+pub fn PackedConvWeight::is_depthwise(self : PackedConvWeight) -> Bool {
+  match self.depthwise_weight {
+    Some(_) => true
+    None => false
+  }
 }
 
 ///|
@@ -100,8 +121,20 @@ pub fn pack_conv2d_weight_f32(
     )
   }
   let c_out_per_group = c_out / group
-  let k = c_in_per_group * kh * kw
   let w_buf = w.to_f32_buffer()
+  // Depthwise Conv（group == c_out && c_in_per_group == 1）：无需打包 GEMM 面板，直接走零 im2col 专用内核
+  if group == c_out && c_in_per_group == 1 && c_out_per_group == 1 {
+    return {
+      c_out,
+      c_in_per_group,
+      kh,
+      kw,
+      group,
+      groups: [],
+      depthwise_weight: Some(w_buf),
+    }
+  }
+  let k = c_in_per_group * kh * kw
   let w_group_stride = c_out_per_group * k
   let groups = Array::makei(group, fn(g) {
     @gemm.pack_matrix_b_transposed_f32(
@@ -111,11 +144,11 @@ pub fn pack_conv2d_weight_f32(
       k,
     )
   })
-  { c_out, c_in_per_group, kh, kw, group, groups, }
+  { c_out, c_in_per_group, kh, kw, group, groups, depthwise_weight: None, }
 }
 
 ///|
-/// 使用预打包静态权重 `PackedConvWeight` 执行 2D Conv（V128 SIMD 零运行期权重打包 + 偏置融合 + BufferPool 复用）。
+/// 使用预打包静态权重 `PackedConvWeight` 执行 2D Conv（V128 SIMD 零运行期打包 + 偏置/激活融合 + Depthwise 直算 + BufferPool 复用）。
 pub fn conv2d_prepacked_f32(
   x : @tensor.Tensor,
   packed_w : PackedConvWeight,
@@ -124,6 +157,7 @@ pub fn conv2d_prepacked_f32(
   pads : Array[Int32],
   dilations : Array[Int32],
   auto_pad : @nn_ir.AutoPad,
+  activation~ : @nn_ir.FusedActivation = @nn_ir.NoAct,
   pool~ : @tensor.BufferPool? = None,
   scratch_pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
@@ -182,18 +216,50 @@ pub fn conv2d_prepacked_f32(
 
   let x_buf = x.to_f32_buffer()
   let out_spatial = out_h * out_w
+  let epilogue = to_gemm_epilogue(activation)
+  let out_buf = alloc_f32(pool, n_batch * c_out * out_spatial)
+  let in_batch_stride = c_in * in_h * in_w
+  let out_batch_stride = c_out * out_spatial
+
+  // 专用快速路径：Depthwise 2D Conv（零 im2col 分配 + 4-wide V128 向量化 + 融合偏置与激活）
+  match packed_w.depthwise_weight {
+    Some(dw_w) => {
+      for b = 0; b < n_batch; b = b + 1 {
+        @conv.depthwise_conv2d_f32(
+          x_buf,
+          b * in_batch_stride,
+          dw_w,
+          bias_buf,
+          c_out,
+          in_h,
+          in_w,
+          kh,
+          kw,
+          stride_h,
+          stride_w,
+          pad_top,
+          pad_left,
+          dil_h,
+          dil_w,
+          out_h,
+          out_w,
+          out_buf,
+          b * out_batch_stride,
+          epilogue~,
+        )
+      }
+      return @tensor.Tensor::from_f32([n_batch, c_out, out_h, out_w], out_buf)
+    }
+    None => ()
+  }
+
   let col_k = c_in_per_group * kh * kw
   let work_pool = match scratch_pool {
     Some(_) => scratch_pool
     None => pool
   }
-
-  let out_buf = alloc_f32(pool, n_batch * c_out * out_spatial)
   let col_t_buf = alloc_f32(work_pool, out_spatial * col_k)
-
-  let in_batch_stride = c_in * in_h * in_w
   let in_group_stride = c_in_per_group * in_h * in_w
-  let out_batch_stride = c_out * out_spatial
   let out_group_stride = c_out_per_group * out_spatial
 
   for b = 0; b < n_batch; b = b + 1 {
@@ -213,6 +279,7 @@ pub fn conv2d_prepacked_f32(
         out_buf,
         out_off,
         out_spatial,
+        epilogue~,
       )
     }
   }
@@ -223,7 +290,7 @@ pub fn conv2d_prepacked_f32(
 
 ///|
 /// ONNX 2D Conv 算子：底层复用 `matrixlt/ml_kernels/conv::im2col_2d_f32`
-/// 与 `matrixlt/ml_kernels/gemm`（支持标量、V128 SIMD 与 `BufferPool` 缓冲复用）。
+/// 与 `matrixlt/ml_kernels/gemm`（支持标量、V128 SIMD、融合激活与 `BufferPool` 缓冲复用）。
 pub fn conv2d_f32(
   x : @tensor.Tensor,
   w : @tensor.Tensor,
@@ -234,6 +301,7 @@ pub fn conv2d_f32(
   group : Int32,
   auto_pad : @nn_ir.AutoPad,
   use_simd~ : Bool = false,
+  activation~ : @nn_ir.FusedActivation = @nn_ir.NoAct,
   pool~ : @tensor.BufferPool? = None,
   scratch_pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
@@ -339,6 +407,25 @@ pub fn conv2d_f32(
         }
       }
     None => ()
+  }
+
+  // 标量/未预打包路径下的尾部融合激活
+  match activation {
+    @nn_ir.NoAct => ()
+    @nn_ir.ReluAct => {
+      let zero : Float = 0.0
+      for i = 0; i < out_buf.length(); i = i + 1 {
+        if out_buf[i] < zero {
+          out_buf[i] = zero
+        }
+      }
+    }
+    @nn_ir.ClipAct(min~, max~) =>
+      for i = 0; i < out_buf.length(); i = i + 1 {
+        let v = out_buf[i]
+        let lo = if v > min { v } else { min }
+        out_buf[i] = if lo < max { lo } else { max }
+      }
   }
 
   @tensor.Tensor::from_f32([n_batch, c_out, out_h, out_w], out_buf)

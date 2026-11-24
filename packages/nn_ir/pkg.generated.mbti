@@ -29,6 +29,13 @@ pub(all) enum AutoPad {
   Valid
 }
 
+#derive(Eq, @debug.Debug)
+pub(all) enum FusedActivation {
+  NoAct
+  ReluAct
+  ClipAct(min~ : Float, max~ : Float)
+}
+
 pub(all) struct IrGraph {
   name : String
   inputs : Array[String]
@@ -59,7 +66,7 @@ pub(all) enum Op {
   Constant(value~ : @tensor.Tensor)
   MatMul
   Gemm(alpha~ : Float, beta~ : Float, trans_a~ : Bool, trans_b~ : Bool)
-  Conv(kernel_shape~ : Array[Int32]?, strides~ : Array[Int32], pads~ : Array[Int32], dilations~ : Array[Int32], group~ : Int32, auto_pad~ : AutoPad)
+  Conv(kernel_shape~ : Array[Int32]?, strides~ : Array[Int32], pads~ : Array[Int32], dilations~ : Array[Int32], group~ : Int32, auto_pad~ : AutoPad, activation~ : FusedActivation)
   MaxPool(kernel_shape~ : Array[Int32], strides~ : Array[Int32], pads~ : Array[Int32], dilations~ : Array[Int32], ceil_mode~ : Bool, auto_pad~ : AutoPad)
   AveragePool(kernel_shape~ : Array[Int32], strides~ : Array[Int32], pads~ : Array[Int32], ceil_mode~ : Bool, count_include_pad~ : Bool, auto_pad~ : AutoPad)
   BatchNormalization(epsilon~ : Float)

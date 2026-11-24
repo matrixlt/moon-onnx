@@ -6,11 +6,13 @@ import {
 }
 
 // Values
+pub fn depthwise_conv2d_f32(FixedArray[Float], Int32, FixedArray[Float], FixedArray[Float]?, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float], Int32, epilogue? : @gemm.Epilogue) -> Unit
+
 pub fn im2col_2d_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
 
 pub fn im2col_2d_nhwc_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
 
-pub fn matmul_2d_prepacked_nchw_simd_f32(FixedArray[Float], Int32, @gemm.PackedMatrixB, FixedArray[Float]?, Int32, FixedArray[Float], Int32, Int32) -> Unit
+pub fn matmul_2d_prepacked_nchw_simd_f32(FixedArray[Float], Int32, @gemm.PackedMatrixB, FixedArray[Float]?, Int32, FixedArray[Float], Int32, Int32, epilogue? : @gemm.Epilogue) -> Unit
 
 pub fn matmul_2d_prepacked_simd_f32(FixedArray[Float], Int32, @gemm.PackedMatrixB, FixedArray[Float], Int32, Int32) -> Unit
 
@@ -29,6 +31,8 @@ pub fn pack_matrix_b_transposed_f32(FixedArray[Float], Int32, Int32, Int32) -> @
 // Types and methods
 
 // Type aliases
+pub using @gemm {type Epilogue}
+
 pub using @gemm {type PackedMatrixB}
 
 // Traits

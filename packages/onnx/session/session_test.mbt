@@ -40,6 +40,7 @@ fn build_mini_cnn_graph() -> @nn_ir.IrGraph raise {
           dilations=[1, 1],
           group=1,
           auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
         ),
         inputs: ["x", "conv.w", "conv.b"],
         outputs: ["c1"],

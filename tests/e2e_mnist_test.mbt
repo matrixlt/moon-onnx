@@ -77,9 +77,10 @@ test "real MNIST fixtures prepack static weights and achieve 100% BufferPool reu
 
   let (out1, profile) = cnn_simd.run_single_profiled(cnn_in)
   assert_eq(out1.shape(), [1, 10])
-  assert_eq(profile.ops.length(), 9)
+  // 优化后 2 组 Conv+bias+Relu 均融合为单个 Conv+Relu 节点（11 -> 7 节点）
+  assert_eq(profile.ops.length(), 7)
   assert_true(profile.total_us >= 0.0)
-  assert_true(profile.format_table().contains("Conv"))
+  assert_true(profile.format_table().contains("Conv+Relu"))
   let stats1 = cnn_simd.pool_stats()
   assert_true(stats1.misses > 0)
 

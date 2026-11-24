@@ -66,6 +66,7 @@ test "optimize_graph folds Conv+BN, Conv+bias, and pre-transposes Gemm weights" 
           dilations=[1, 1],
           group=1,
           auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
         ),
         inputs: ["x", "w_conv"],
         outputs: ["c0"],
@@ -76,6 +77,7 @@ test "optimize_graph folds Conv+BN, Conv+bias, and pre-transposes Gemm weights" 
         inputs: ["c0", "s", "b", "m", "v"],
         outputs: ["c1"],
       },
+      { name: "relu0", op: @nn_ir.Relu, inputs: ["c1"], outputs: ["r1"], },
       {
         name: "gemm0",
         op: @nn_ir.Gemm(
@@ -84,7 +86,7 @@ test "optimize_graph folds Conv+BN, Conv+bias, and pre-transposes Gemm weights" 
           trans_a=false,
           trans_b=true,
         ),
-        inputs: ["c1", "w_fc"],
+        inputs: ["r1", "w_fc"],
         outputs: ["y"],
       },
     ],
@@ -92,8 +94,10 @@ test "optimize_graph folds Conv+BN, Conv+bias, and pre-transposes Gemm weights" 
 
   let (opt_g, stats) = @opt.optimize_graph(g)
   assert_eq(stats.folded_conv_bn, 1)
+  assert_eq(stats.folded_conv_activation, 1)
   assert_eq(stats.pretransposed_gemm_weights, 1)
   assert_eq(opt_g.nodes.length(), 2)
+  assert_eq(opt_g.nodes[0].op.name(), "Conv+Relu")
 
   // ch0: factor = 2.0 / sqrt(4.0) = 1.0, fused_b[0] = (0 - 1) * 1 + 0.5 = -0.5
   let fused_b = opt_g.initializers.get(opt_g.nodes[0].inputs[2]).unwrap()

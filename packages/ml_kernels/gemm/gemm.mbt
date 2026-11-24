@@ -425,11 +425,55 @@ pub fn matmul_2d_prepacked_simd_f32(
 }
 
 ///|
+/// 预打包 NCHW 卷积微内核写回前的寄存器级融合激活配置。
+/// 在 `V128` 累加器写回内存前原地执行，避免独立激活算子的整张特征图读写开销。
+#derive(Debug, Eq)
+pub(all) enum Epilogue {
+  /// 无融合激活
+  NoEpilogue
+  /// 融合 ReLU（使用硬件 `f32x4_pmax(0.0, acc)`）
+  Relu
+  /// 融合区间裁剪（`min(max, max(min, acc))`，典型如 MobileNetV2 ReLU6 `[0.0, 6.0]`）
+  Clip(min~ : Float, max~ : Float)
+}
+
+///|
+/// 对单个 V128 累加器应用融合激活（无激活时零开销透传）。
+fn apply_epilogue_v128(v : V128, epilogue : Epilogue) -> V128 {
+  match epilogue {
+    NoEpilogue => v
+    Relu => @v128.f32x4_pmax(@v128.f32x4_splat((0.0 : Float)), v)
+    Clip(min~, max~) =>
+      @v128.f32x4_pmin(
+        @v128.f32x4_splat(max),
+        @v128.f32x4_pmax(@v128.f32x4_splat(min), v),
+      )
+  }
+}
+
+///|
+/// 对单个标量 Float32 应用融合激活（用于 `k == 0` 等边界路径）。
+pub fn apply_epilogue_scalar(x : Float, epilogue : Epilogue) -> Float {
+  match epilogue {
+    NoEpilogue => x
+    Relu => if x > (0.0 : Float) { x } else { (0.0 : Float) }
+    Clip(min~, max~) => {
+      let lo = if x > min { x } else { min }
+      if lo < max {
+        lo
+      } else {
+        max
+      }
+    }
+  }
+}
+
+///|
 /// 面向预打包 2D 卷积的专用 V128 SIMD GEMM 内核：
-/// 计算 `out_nchw[N, M] = (A[M, K] @ packed_b[K, N])^T + bias[N]`，其中：
+/// 计算 `out_nchw[N, M] = epilogue((A[M, K] @ packed_b[K, N])^T + bias[N])`，其中：
 /// - `A[M, K]` 为 `im2col_2d_nhwc_f32` 生成的转置感受野矩阵（`M = out_spatial`）；
 /// - `packed_b[K, N]` 为模型加载期一次性预打包的静态卷积权重 `W_g^T[K, C_out_g]`；
-/// - 可选 `bias` 直接融合为 V128 累加器初值，消除独立 bias 加法遍历；
+/// - 可选 `bias` 直接融合为 V128 累加器初值，`epilogue` 在写回内存前原地执行于 SIMD 寄存器中；
 /// - 结果直接按 NCHW 通道优先顺序写回 `out`，无需中间转置缓冲。
 pub fn matmul_2d_prepacked_nchw_simd_f32(
   a : FixedArray[Float],
@@ -440,6 +484,7 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
   out : FixedArray[Float],
   out_offset : Int32,
   m : Int32,
+  epilogue~ : Epilogue = NoEpilogue,
 ) -> Unit {
   let k = packed_b.k
   let n = packed_b.n
@@ -450,10 +495,11 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
   if k == 0 {
     let zero : Float = 0.0
     for ch = 0; ch < n; ch = ch + 1 {
-      let bv = match bias {
+      let raw = match bias {
         Some(b) => b[bias_offset + ch]
         None => zero
       }
+      let bv = apply_epilogue_scalar(raw, epilogue)
       let ch_base = out_offset + ch * m
       for i = 0; i < m; i = i + 1 {
         out[ch_base + i] = bv
@@ -508,6 +554,20 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
         b_ptr = b_ptr + b_row_bytes
       }
 
+      match epilogue {
+        NoEpilogue => ()
+        _ => {
+          c00 = apply_epilogue_v128(c00, epilogue)
+          c01 = apply_epilogue_v128(c01, epilogue)
+          c10 = apply_epilogue_v128(c10, epilogue)
+          c11 = apply_epilogue_v128(c11, epilogue)
+          c20 = apply_epilogue_v128(c20, epilogue)
+          c21 = apply_epilogue_v128(c21, epilogue)
+          c30 = apply_epilogue_v128(c30, epilogue)
+          c31 = apply_epilogue_v128(c31, epilogue)
+        }
+      }
+
       store_v128_4rows_nchw(out, out_offset, m, i, j, n, c00, c10, c20, c30)
       store_v128_4rows_nchw(out, out_offset, m, i, j + 4, n, c01, c11, c21, c31)
       i = i + 4
@@ -526,6 +586,8 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
         c1 = @v128.f32x4_relaxed_madd(av, bv1, c1)
         b_ptr = b_ptr + b_row_bytes
       }
+      c0 = apply_epilogue_v128(c0, epilogue)
+      c1 = apply_epilogue_v128(c1, epilogue)
       store_v128_1row_nchw(out, out_offset, m, i, j, n, c0)
       store_v128_1row_nchw(out, out_offset, m, i, j + 4, n, c1)
       i = i + 1
@@ -559,6 +621,15 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
         c3 = @v128.f32x4_relaxed_madd(@v128.f32x4_splat(a[a_r3 + p]), bv, c3)
         b_ptr = b_ptr + b_row_bytes
       }
+      match epilogue {
+        NoEpilogue => ()
+        _ => {
+          c0 = apply_epilogue_v128(c0, epilogue)
+          c1 = apply_epilogue_v128(c1, epilogue)
+          c2 = apply_epilogue_v128(c2, epilogue)
+          c3 = apply_epilogue_v128(c3, epilogue)
+        }
+      }
       store_v128_4rows_nchw(out, out_offset, m, i, j, n, c0, c1, c2, c3)
       i = i + 4
     }
@@ -573,6 +644,7 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
         c0 = @v128.f32x4_relaxed_madd(av, bv, c0)
         b_ptr = b_ptr + b_row_bytes
       }
+      c0 = apply_epilogue_v128(c0, epilogue)
       store_v128_1row_nchw(out, out_offset, m, i, j, n, c0)
       i = i + 1
     }

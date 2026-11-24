@@ -6,6 +6,7 @@ pub(all) struct OptStats {
   eliminated_identities : Int32
   folded_conv_bn : Int32
   folded_conv_bias : Int32
+  folded_conv_activation : Int32
   pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }
@@ -435,6 +436,67 @@ fn pass_pretranspose_gemm_weights(
 }
 
 ///|
+/// Pass 5：Conv + 尾部激活（Relu）融合。
+/// 当 `Conv(activation=NoAct)` 的输出仅被紧邻的 `Relu` 消费一次时，
+/// 将激活内联至卷积微内核写回阶段，直接消除整张特征图的额外读写与中间缓冲。
+fn pass_fold_conv_activation(
+  nodes : Array[@nn_ir.IrNode],
+  graph_outputs : Array[String],
+) -> (Array[@nn_ir.IrNode], Int32) {
+  let uses = count_tensor_uses(nodes, graph_outputs)
+  let kept : Array[@nn_ir.IrNode] = []
+  let mut folded = 0
+  let mut i = 0
+
+  while i < nodes.length() {
+    let cur = nodes[i]
+    if i + 1 < nodes.length() {
+      let next = nodes[i + 1]
+      match (cur.op, next.op) {
+        (
+          @nn_ir.Conv(
+            kernel_shape~,
+            strides~,
+            pads~,
+            dilations~,
+            group~,
+            auto_pad~,
+            activation=@nn_ir.NoAct,
+          ),
+          @nn_ir.Relu,
+        ) =>
+          if cur.outputs.length() == 1 &&
+            next.inputs.length() == 1 &&
+            next.inputs[0] == cur.outputs[0] &&
+            uses.get(cur.outputs[0]) == Some(1) {
+            kept.push({
+              name: "\{cur.name}_relu",
+              op: @nn_ir.Conv(
+                kernel_shape~,
+                strides~,
+                pads~,
+                dilations~,
+                group~,
+                auto_pad~,
+                activation=@nn_ir.ReluAct,
+              ),
+              inputs: cur.inputs.copy(),
+              outputs: next.outputs.copy(),
+            })
+            folded = folded + 1
+            i = i + 2
+            continue
+          }
+        _ => ()
+      }
+    }
+    kept.push(cur)
+    i = i + 1
+  }
+  (kept, folded)
+}
+
+///|
 /// 对 IrGraph 执行完整图优化管线，返回优化后的新 IrGraph 与各 Pass 统计信息。
 pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
   let initializers = clone_initializers(graph.initializers)
@@ -450,23 +512,28 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     initializers,
     graph.outputs,
   )
-  let (n5, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(
-    n4, initializers,
+  let (n5, folded_conv_activation) = pass_fold_conv_activation(
+    n4,
+    graph.outputs,
   )
-  let (n6, eliminated_dead_nodes) = pass_dce(n5, graph.outputs)
+  let (n6, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(
+    n5, initializers,
+  )
+  let (n7, eliminated_dead_nodes) = pass_dce(n6, graph.outputs)
 
   let optimized : @nn_ir.IrGraph = {
     name: graph.name,
     inputs: graph.inputs.copy(),
     outputs: graph.outputs.copy(),
     initializers,
-    nodes: n6,
+    nodes: n7,
   }
   let stats : OptStats = {
     lifted_constants,
     eliminated_identities,
     folded_conv_bn,
     folded_conv_bias,
+    folded_conv_activation,
     pretransposed_gemm_weights,
     eliminated_dead_nodes,
   }

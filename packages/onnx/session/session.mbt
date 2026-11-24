@@ -565,7 +565,15 @@ fn eval_node(
           pool=out_pool,
         )
       }
-      @nn_ir.Conv(strides~, pads~, dilations~, group~, auto_pad~, ..) => {
+      @nn_ir.Conv(
+        strides~,
+        pads~,
+        dilations~,
+        group~,
+        auto_pad~,
+        activation~,
+        ..
+      ) => {
         let x = require_tensor(env, n, ins, 0)
         let b = optional_tensor(env, n, ins, 2)
         if use_simd && ins.length() >= 2 {
@@ -580,6 +588,7 @@ fn eval_node(
                 pads,
                 dilations,
                 auto_pad,
+                activation~,
                 pool=out_pool,
                 scratch_pool=Some(scratch_pool),
               )
@@ -597,6 +606,7 @@ fn eval_node(
           group,
           auto_pad,
           use_simd~,
+          activation~,
           pool=out_pool,
           scratch_pool=Some(scratch_pool),
         )

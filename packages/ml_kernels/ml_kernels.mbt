@@ -4,6 +4,9 @@
 pub type PackedMatrixB = @gemm.PackedMatrixB
 
 ///|
+pub type Epilogue = @gemm.Epilogue
+
+///|
 /// 标量缓存友好 2D 矩阵乘法便捷入口。
 pub fn matmul_2d_scalar_f32(
   a : FixedArray[Float],
@@ -71,7 +74,7 @@ pub fn matmul_2d_prepacked_simd_f32(
 }
 
 ///|
-/// 使用预打包转置权重执行 NCHW 输出 + 融合偏置的 V128 SIMD GEMM（供 2D 卷积热路径使用）。
+/// 使用预打包转置权重执行 NCHW 输出 + 融合偏置/激活的 V128 SIMD GEMM（供 2D 卷积热路径使用）。
 pub fn matmul_2d_prepacked_nchw_simd_f32(
   a : FixedArray[Float],
   a_offset : Int32,
@@ -81,9 +84,18 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
   out : FixedArray[Float],
   out_offset : Int32,
   m : Int32,
+  epilogue~ : Epilogue = @gemm.NoEpilogue,
 ) -> Unit {
   @gemm.matmul_2d_prepacked_nchw_simd_f32(
-    a, a_offset, packed_b, bias, bias_offset, out, out_offset, m,
+    a,
+    a_offset,
+    packed_b,
+    bias,
+    bias_offset,
+    out,
+    out_offset,
+    m,
+    epilogue~,
   )
 }
 
@@ -142,5 +154,53 @@ pub fn im2col_2d_nhwc_f32(
   @conv.im2col_2d_nhwc_f32(
     input, in_base, channels, in_h, in_w, kh, kw, stride_h, stride_w, pad_top, pad_left,
     dil_h, dil_w, out_h, out_w, col_t,
+  )
+}
+
+///|
+/// 专用零 `im2col` 深度可分离 2D 卷积（Depthwise Conv2D）便捷入口。
+pub fn depthwise_conv2d_f32(
+  input : FixedArray[Float],
+  in_base : Int32,
+  weight : FixedArray[Float],
+  bias : FixedArray[Float]?,
+  channels : Int32,
+  in_h : Int32,
+  in_w : Int32,
+  kh : Int32,
+  kw : Int32,
+  stride_h : Int32,
+  stride_w : Int32,
+  pad_top : Int32,
+  pad_left : Int32,
+  dil_h : Int32,
+  dil_w : Int32,
+  out_h : Int32,
+  out_w : Int32,
+  out : FixedArray[Float],
+  out_base : Int32,
+  epilogue~ : Epilogue = @gemm.NoEpilogue,
+) -> Unit {
+  @conv.depthwise_conv2d_f32(
+    input,
+    in_base,
+    weight,
+    bias,
+    channels,
+    in_h,
+    in_w,
+    kh,
+    kw,
+    stride_h,
+    stride_w,
+    pad_top,
+    pad_left,
+    dil_h,
+    dil_w,
+    out_h,
+    out_w,
+    out,
+    out_base,
+    epilogue~,
   )
 }

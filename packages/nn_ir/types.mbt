@@ -37,6 +37,18 @@ pub(all) enum AutoPad {
 }
 
 ///|
+/// 融合至卷积算子尾部的逐元素激活函数（在 SIMD 累加器写回前原地执行，消除独立激活节点读写）。
+#derive(Debug, Eq)
+pub(all) enum FusedActivation {
+  /// 无融合激活
+  NoAct
+  /// ReLU 激活：`max(0.0, x)`
+  ReluAct
+  /// 区间裁剪激活：`min(max, max(min, x))`（例如 MobileNetV2 的 ReLU6 即 `[0.0, 6.0]`）
+  ClipAct(min~ : Float, max~ : Float)
+}
+
+///|
 /// 强类型算子代数数据类型（ADT）。
 /// 在模型加载期即完成字符串 op_type 与动态 AttributeProto 的解析与校验，
 /// 运行期只需通过穷尽模式匹配分派，无字符串查找开销。
@@ -63,6 +75,7 @@ pub(all) enum Op {
     dilations~ : Array[Int32],
     group~ : Int32,
     auto_pad~ : AutoPad,
+    activation~ : FusedActivation,
   )
   MaxPool(
     kernel_shape~ : Array[Int32],
@@ -101,7 +114,12 @@ pub fn Op::name(self : Op) -> String {
     Constant(..) => "Constant"
     MatMul => "MatMul"
     Gemm(..) => "Gemm"
-    Conv(..) => "Conv"
+    Conv(activation~, ..) =>
+      match activation {
+        NoAct => "Conv"
+        ReluAct => "Conv+Relu"
+        ClipAct(..) => "Conv+Clip"
+      }
     MaxPool(..) => "MaxPool"
     AveragePool(..) => "AveragePool"
     BatchNormalization(..) => "BatchNormalization"

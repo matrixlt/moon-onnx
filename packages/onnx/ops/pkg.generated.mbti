@@ -14,9 +14,9 @@ pub fn avgpool_2d_f32(@tensor.Tensor, Array[Int32], Array[Int32], Array[Int32], 
 
 pub fn batch_norm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, epsilon? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
-pub fn conv2d_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], Int32, @nn_ir.AutoPad, use_simd? : Bool, pool? : @tensor.BufferPool?, scratch_pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+pub fn conv2d_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], Int32, @nn_ir.AutoPad, use_simd? : Bool, activation? : @nn_ir.FusedActivation, pool? : @tensor.BufferPool?, scratch_pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
-pub fn conv2d_prepacked_f32(@tensor.Tensor, PackedConvWeight, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], @nn_ir.AutoPad, pool? : @tensor.BufferPool?, scratch_pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+pub fn conv2d_prepacked_f32(@tensor.Tensor, PackedConvWeight, @tensor.Tensor?, Array[Int32], Array[Int32], Array[Int32], @nn_ir.AutoPad, activation? : @nn_ir.FusedActivation, pool? : @tensor.BufferPool?, scratch_pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn flatten_op(@tensor.Tensor, axis? : Int32) -> @tensor.Tensor raise @tensor.TensorError
 
@@ -58,8 +58,10 @@ pub struct PackedConvWeight {
   kw : Int32
   group : Int32
   groups : Array[@gemm.PackedMatrixB]
+  depthwise_weight : FixedArray[Float]?
 }
 pub fn PackedConvWeight::group(Self) -> Int32
+pub fn PackedConvWeight::is_depthwise(Self) -> Bool
 pub fn PackedConvWeight::shape(Self) -> Array[Int32]
 
 // Type aliases

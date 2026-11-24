@@ -1,8 +1,14 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "matrixlt/ml_kernels/gemm"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
-pub fn matmul_2d_prepacked_nchw_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float]?, Int32, FixedArray[Float], Int32, Int32) -> Unit
+pub fn apply_epilogue_scalar(Float, Epilogue) -> Float
+
+pub fn matmul_2d_prepacked_nchw_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float]?, Int32, FixedArray[Float], Int32, Int32, epilogue? : Epilogue) -> Unit
 
 pub fn matmul_2d_prepacked_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float], Int32, Int32) -> Unit
 
@@ -17,6 +23,13 @@ pub fn pack_matrix_b_transposed_f32(FixedArray[Float], Int32, Int32, Int32) -> P
 // Errors
 
 // Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) enum Epilogue {
+  NoEpilogue
+  Relu
+  Clip(min~ : Float, max~ : Float)
+}
+
 pub struct PackedMatrixB {
   data : FixedArray[Byte]
   k : Int32

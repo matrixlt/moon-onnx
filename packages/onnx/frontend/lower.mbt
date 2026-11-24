@@ -226,7 +226,15 @@ fn lower_node(
       }
       let group = get_attr_int(attrs, "group", 1)
       let auto_pad = parse_auto_pad(attrs, node_name)
-      @nn_ir.Conv(kernel_shape~, strides~, pads~, dilations~, group~, auto_pad~)
+      @nn_ir.Conv(
+        kernel_shape~,
+        strides~,
+        pads~,
+        dilations~,
+        group~,
+        auto_pad~,
+        activation=@nn_ir.NoAct,
+      )
     }
     "MaxPool" => {
       let kernel_shape = match get_attr_ints_opt(attrs, "kernel_shape") {

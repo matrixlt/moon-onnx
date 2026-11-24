@@ -1,7 +1,13 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "matrixlt/ml_kernels/conv"
 
+import {
+  "matrixlt/ml_kernels/gemm",
+}
+
 // Values
+pub fn depthwise_conv2d_f32(FixedArray[Float], Int32, FixedArray[Float], FixedArray[Float]?, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float], Int32, epilogue? : @gemm.Epilogue) -> Unit
+
 pub fn im2col_2d_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
 
 pub fn im2col_2d_nhwc_f32(FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, FixedArray[Float]) -> Unit
