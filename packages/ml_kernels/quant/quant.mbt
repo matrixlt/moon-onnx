@@ -41,74 +41,86 @@ pub fn round_half_to_even(x : Double) -> Int32 {
 }
 
 ///|
-/// 逐元素线性量化（`Float32 -> UInt8`）：`y = saturate_u8(round_even(x / scale) + zp)`。
+/// 逐元素线性量化（`Float32 -> UInt8`）：`y = saturate_u8(round_even(x / scale) + zp)`，支持 Arena 零拷贝偏移。
 pub fn quantize_u8_per_tensor(
   src : FixedArray[Float],
   scale : Float,
   zero_point : Byte,
   dst : FixedArray[Byte],
   n : Int32,
+  src_off~ : Int32 = 0,
+  dst_off~ : Int32 = 0,
 ) -> Unit {
   let inv_s = 1.0 / scale.to_double()
   let zp = zero_point.to_int()
   for i = 0; i < n; i = i + 1 {
-    let q = round_half_to_even(src[i].to_double() * inv_s) + zp
-    dst[i] = u8_to_byte(q)
+    let q = round_half_to_even(src[src_off + i].to_double() * inv_s) + zp
+    dst[dst_off + i] = u8_to_byte(q)
   }
 }
 
 ///|
-/// 逐元素线性量化（`Float32 -> Int8`）：`y = saturate_i8(round_even(x / scale) + zp)`。
+/// 逐元素线性量化（`Float32 -> Int8`）：`y = saturate_i8(round_even(x / scale) + zp)`，支持 Arena 零拷贝偏移。
 pub fn quantize_i8_per_tensor(
   src : FixedArray[Float],
   scale : Float,
   zero_point : Byte,
   dst : FixedArray[Byte],
   n : Int32,
+  src_off~ : Int32 = 0,
+  dst_off~ : Int32 = 0,
 ) -> Unit {
   let inv_s = 1.0 / scale.to_double()
   let zp = byte_to_i8(zero_point)
   for i = 0; i < n; i = i + 1 {
-    let q = round_half_to_even(src[i].to_double() * inv_s) + zp
-    dst[i] = i8_to_byte(q)
+    let q = round_half_to_even(src[src_off + i].to_double() * inv_s) + zp
+    dst[dst_off + i] = i8_to_byte(q)
   }
 }
 
 ///|
-/// 逐元素线性反量化（`UInt8 -> Float32`）：`y = (x - zp) * scale`。
+/// 逐元素线性反量化（`UInt8 -> Float32`）：`y = (x - zp) * scale`，支持 Arena 零拷贝偏移。
 pub fn dequantize_u8_per_tensor(
   src : FixedArray[Byte],
   scale : Float,
   zero_point : Byte,
   dst : FixedArray[Float],
   n : Int32,
+  src_off~ : Int32 = 0,
+  dst_off~ : Int32 = 0,
 ) -> Unit {
   let s = scale.to_double()
   let zp = zero_point.to_int()
   for i = 0; i < n; i = i + 1 {
-    dst[i] = Float::from_double((src[i].to_int() - zp).to_double() * s)
+    dst[dst_off + i] = Float::from_double(
+      (src[src_off + i].to_int() - zp).to_double() * s,
+    )
   }
 }
 
 ///|
-/// 逐元素线性反量化（`Int8 -> Float32`）：`y = (x - zp) * scale`。
+/// 逐元素线性反量化（`Int8 -> Float32`）：`y = (x - zp) * scale`，支持 Arena 零拷贝偏移。
 pub fn dequantize_i8_per_tensor(
   src : FixedArray[Byte],
   scale : Float,
   zero_point : Byte,
   dst : FixedArray[Float],
   n : Int32,
+  src_off~ : Int32 = 0,
+  dst_off~ : Int32 = 0,
 ) -> Unit {
   let s = scale.to_double()
   let zp = byte_to_i8(zero_point)
   for i = 0; i < n; i = i + 1 {
-    dst[i] = Float::from_double((byte_to_i8(src[i]) - zp).to_double() * s)
+    dst[dst_off + i] = Float::from_double(
+      (byte_to_i8(src[src_off + i]) - zp).to_double() * s,
+    )
   }
 }
 
 ///|
 /// 将右矩阵 `B[K, N]` 转置为按列连续的 `BT[N, K]`，使 `V128` 16 字节向量加载能够沿 `K` 轴全速连续读取。
-fn transpose_bytes_kn_to_nk(
+pub fn transpose_bytes_kn_to_nk(
   b : FixedArray[Byte],
   k : Int32,
   n : Int32,
@@ -147,6 +159,8 @@ pub fn qlinear_matmul_i8_scalar(
   m : Int32,
   k : Int32,
   n : Int32,
+  a_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   let az = byte_to_i8(a_zp)
   let bz = byte_to_i8(b_zp)
@@ -156,8 +170,8 @@ pub fn qlinear_matmul_i8_scalar(
     y_scale.to_double()
 
   for i = 0; i < m; i = i + 1 {
-    let a_row = i * k
-    let y_row = i * n
+    let a_row = a_off + i * k
+    let y_row = out_off + i * n
     for j = 0; j < n; j = j + 1 {
       let mut acc = 0
       for kk = 0; kk < k; kk = kk + 1 {
@@ -186,6 +200,8 @@ pub fn qlinear_matmul_u8_scalar(
   m : Int32,
   k : Int32,
   n : Int32,
+  a_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   let az = a_zp.to_int()
   let bz = b_zp.to_int()
@@ -195,8 +211,8 @@ pub fn qlinear_matmul_u8_scalar(
     y_scale.to_double()
 
   for i = 0; i < m; i = i + 1 {
-    let a_row = i * k
-    let y_row = i * n
+    let a_row = a_off + i * k
+    let y_row = out_off + i * n
     for j = 0; j < n; j = j + 1 {
       let mut acc = 0
       for kk = 0; kk < k; kk = kk + 1 {
@@ -211,24 +227,23 @@ pub fn qlinear_matmul_u8_scalar(
 }
 
 ///|
-/// V128 SIMD 硬件加速版有符号 `Int8` 量化矩阵乘法：
-/// 每轮迭代通过 `v128.load` + `i16x8.extend_*_i8x16_s` + `i16x8.sub` + 2× `i32x4.dot_i16x8_s`
-/// 一次完成 16 路 INT8 乘加累加，与标量参考实现逐位完全一致。
-pub fn qlinear_matmul_i8_v128(
+/// V128 SIMD 硬件加速版有符号 `Int8` 量化矩阵乘法（预转置右矩阵 `BT[N, K]`，零运行期转置开销）。
+pub fn qlinear_matmul_i8_pretransposed_v128(
   a : FixedArray[Byte],
+  a_off : Int32,
   a_scale : Float,
   a_zp : Byte,
-  b : FixedArray[Byte],
+  bt : FixedArray[Byte],
   b_scale : Float,
   b_zp : Byte,
   y_scale : Float,
   y_zp : Byte,
   out : FixedArray[Byte],
+  out_off : Int32,
   m : Int32,
   k : Int32,
   n : Int32,
 ) -> Unit {
-  let bt = transpose_bytes_kn_to_nk(b, k, n)
   let az = byte_to_i8(a_zp)
   let bz = byte_to_i8(b_zp)
   let yz = byte_to_i8(y_zp)
@@ -241,8 +256,8 @@ pub fn qlinear_matmul_i8_v128(
   let k_vec = k - k % 16
 
   for i = 0; i < m; i = i + 1 {
-    let a_row = i * k
-    let y_row = i * n
+    let a_row = a_off + i * k
+    let y_row = out_off + i * n
     for j = 0; j < n; j = j + 1 {
       let bt_row = j * k
       let mut acc_v = v_zero
@@ -272,10 +287,10 @@ pub fn qlinear_matmul_i8_v128(
 }
 
 ///|
-/// V128 SIMD 硬件加速版无符号 `UInt8` 量化矩阵乘法：
-/// 每轮迭代通过 `v128.load` + `i16x8.extend_*_i8x16_u` + `i16x8.sub` + 2× `i32x4.dot_i16x8_s`
-/// 一次完成 16 路 UINT8 乘加累加，与标量参考实现逐位完全一致。
-pub fn qlinear_matmul_u8_v128(
+/// V128 SIMD 硬件加速版有符号 `Int8` 量化矩阵乘法：
+/// 每轮迭代通过 `v128.load` + `i16x8.extend_*_i8x16_s` + `i16x8.sub` + 2× `i32x4.dot_i16x8_s`
+/// 一次完成 16 路 INT8 乘加累加，与标量参考实现逐位完全一致。
+pub fn qlinear_matmul_i8_v128(
   a : FixedArray[Byte],
   a_scale : Float,
   a_zp : Byte,
@@ -288,8 +303,34 @@ pub fn qlinear_matmul_u8_v128(
   m : Int32,
   k : Int32,
   n : Int32,
+  a_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   let bt = transpose_bytes_kn_to_nk(b, k, n)
+  qlinear_matmul_i8_pretransposed_v128(
+    a, a_off, a_scale, a_zp, bt, b_scale, b_zp, y_scale, y_zp, out, out_off, m, k,
+    n,
+  )
+}
+
+///|
+/// V128 SIMD 硬件加速版无符号 `UInt8` 量化矩阵乘法（预转置右矩阵 `BT[N, K]`，零运行期转置开销）。
+pub fn qlinear_matmul_u8_pretransposed_v128(
+  a : FixedArray[Byte],
+  a_off : Int32,
+  a_scale : Float,
+  a_zp : Byte,
+  bt : FixedArray[Byte],
+  b_scale : Float,
+  b_zp : Byte,
+  y_scale : Float,
+  y_zp : Byte,
+  out : FixedArray[Byte],
+  out_off : Int32,
+  m : Int32,
+  k : Int32,
+  n : Int32,
+) -> Unit {
   let az = a_zp.to_int()
   let bz = b_zp.to_int()
   let yz = y_zp.to_int()
@@ -302,8 +343,8 @@ pub fn qlinear_matmul_u8_v128(
   let k_vec = k - k % 16
 
   for i = 0; i < m; i = i + 1 {
-    let a_row = i * k
-    let y_row = i * n
+    let a_row = a_off + i * k
+    let y_row = out_off + i * n
     for j = 0; j < n; j = j + 1 {
       let bt_row = j * k
       let mut acc_v = v_zero
@@ -330,6 +371,33 @@ pub fn qlinear_matmul_u8_v128(
       out[y_row + j] = u8_to_byte(q)
     }
   }
+}
+
+///|
+/// V128 SIMD 硬件加速版无符号 `UInt8` 量化矩阵乘法：
+/// 每轮迭代通过 `v128.load` + `i16x8.extend_*_i8x16_u` + `i16x8.sub` + 2× `i32x4.dot_i16x8_s`
+/// 一次完成 16 路 UINT8 乘加累加，与标量参考实现逐位完全一致。
+pub fn qlinear_matmul_u8_v128(
+  a : FixedArray[Byte],
+  a_scale : Float,
+  a_zp : Byte,
+  b : FixedArray[Byte],
+  b_scale : Float,
+  b_zp : Byte,
+  y_scale : Float,
+  y_zp : Byte,
+  out : FixedArray[Byte],
+  m : Int32,
+  k : Int32,
+  n : Int32,
+  a_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
+) -> Unit {
+  let bt = transpose_bytes_kn_to_nk(b, k, n)
+  qlinear_matmul_u8_pretransposed_v128(
+    a, a_off, a_scale, a_zp, bt, b_scale, b_zp, y_scale, y_zp, out, out_off, m, k,
+    n,
+  )
 }
 
 ///|

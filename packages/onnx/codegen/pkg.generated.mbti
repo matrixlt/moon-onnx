@@ -37,6 +37,11 @@ pub struct AotArtifact {
   input_shapes : Array[(String, Array[Int32])]
   output_shapes : Array[(String, Array[Int32])]
   node_count : Int32
+  arena_f32_elems : Int32
+  arena_f32_naive_elems : Int32
+  arena_byte_elems : Int32
+  scratch_f32_elems : Int32
+  mode_used : CodegenMode
 }
 
 pub struct ArenaPlan {
@@ -51,8 +56,26 @@ pub(all) struct CodegenConfig {
   struct_name : String
   use_simd : Bool
   optimize : Bool
+  target : CodegenTarget
+  mode : CodegenMode
+  embed_weights : Bool
 }
 pub fn CodegenConfig::default() -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) enum CodegenMode {
+  Arena
+  Tensor
+}
+pub impl Show for CodegenMode
+
+#derive(Eq, @debug.Debug)
+pub(all) enum CodegenTarget {
+  TargetWasm
+  TargetWasmGc
+  TargetNative
+}
+pub impl Show for CodegenTarget
 
 #derive(Eq, @debug.Debug)
 pub(all) struct TensorAlloc {
@@ -78,6 +101,7 @@ pub(all) enum WeightKind {
   RawF32
   PackedMatB(trans_b~ : Bool)
   PackedConv(group~ : Int32)
+  RawBytes(trans_b~ : Bool)
 }
 
 // Type aliases

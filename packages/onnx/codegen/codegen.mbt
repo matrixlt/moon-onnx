@@ -24,6 +24,45 @@ pub impl Show for CodegenError with fn output(self, logger) {
 }
 
 ///|
+/// AOT 编译目标平台（用于自适应选择最优 SIMD / 标量内核路径）：
+/// - `TargetWasm`   ：线性内存 WebAssembly，启用预打包字节 V128 SIMD（19×~25× 提速）
+/// - `TargetWasmGc` ：Wasm-GC 托管数组目标，避开 GC 字节数组 `v128_load` 退化，采用原生 Float 数组路径
+/// - `TargetNative` ：本地 Native 目标，启用完整 V128 SIMD 与预打包权重
+#derive(Debug, Eq)
+pub(all) enum CodegenTarget {
+  TargetWasm
+  TargetWasmGc
+  TargetNative
+}
+
+///|
+pub impl Show for CodegenTarget with fn output(self, logger) {
+  match self {
+    TargetWasm => logger.write_string("wasm")
+    TargetWasmGc => logger.write_string("wasm-gc")
+    TargetNative => logger.write_string("native")
+  }
+}
+
+///|
+/// AOT 代码生成模式：
+/// - `Arena`  ：编译期静态内存 Arena 规划，零 `Tensor` / 零 `BufferPool` / 推理热路径 0 堆分配（推荐默认）
+/// - `Tensor` ：基于 `@ops` 的通用张量模式（支持全部算子与多输入多输出图）
+#derive(Debug, Eq)
+pub(all) enum CodegenMode {
+  Arena
+  Tensor
+}
+
+///|
+pub impl Show for CodegenMode with fn output(self, logger) {
+  match self {
+    Arena => logger.write_string("arena")
+    Tensor => logger.write_string("tensor")
+  }
+}
+
+///|
 /// AOT 代码生成配置选项。
 pub(all) struct CodegenConfig {
   /// 生成的运行时结构体名称（默认 `"CompiledModel"`）
@@ -32,24 +71,39 @@ pub(all) struct CodegenConfig {
   use_simd : Bool
   /// 编译前是否先执行 `@opt.optimize_graph` 图优化管线（默认 `true`）
   optimize : Bool
+  /// 目标平台（默认 `TargetWasm`）
+  target : CodegenTarget
+  /// 代码生成模式（默认 `Arena`，遇到不支持算子时自动回退至 `Tensor`）
+  mode : CodegenMode
+  /// 是否将权重二进制块直接内嵌为 MoonBit `Bytes` 常量段（实现单文件 `.wasm` 零外部加载）
+  embed_weights : Bool
 }
 
 ///|
-/// 返回默认 AOT 代码生成配置（结构体名 `"CompiledModel"`、开启图优化与 V128 SIMD）。
+/// 返回默认 AOT 代码生成配置（结构体名 `"CompiledModel"`、Arena 零分配模式、开启图优化与 V128 SIMD）。
 pub fn CodegenConfig::default() -> CodegenConfig {
-  { struct_name: "CompiledModel", use_simd: true, optimize: true, }
+  {
+    struct_name: "CompiledModel",
+    use_simd: true,
+    optimize: true,
+    target: TargetWasm,
+    mode: Arena,
+    embed_weights: false,
+  }
 }
 
 ///|
 /// 编译期静态权重的存储与加载形态。
 #derive(Debug, Eq)
 pub(all) enum WeightKind {
-  /// 原始 Float32 张量（偏置、BN/LN 缩放等）
+  /// 原始 Float32 张量（偏置、BN/LN 缩放、Depthwise 卷积核等）
   RawF32
   /// 预打包 2D 矩阵权重（`MatMul` / `Gemm` 右矩阵，支持预转置标志）
   PackedMatB(trans_b~ : Bool)
   /// 预打包 4D 卷积核（含普通卷积与零 `im2col` Depthwise 卷积）
   PackedConv(group~ : Int32)
+  /// 原始 1 字节量化权重（`Int8` / `UInt8`，`trans_b=true` 时在加载期预转置为 `[N, K]`）
+  RawBytes(trans_b~ : Bool)
 }
 
 ///|
@@ -68,7 +122,7 @@ pub(all) struct WeightEntry {
 /// `onnx2mbt` AOT 静态编译产物：
 /// - `mbt_source`：零 `Map`、零 Protobuf、零动态分派的纯 MoonBit 推理源码
 /// - `pkg_config`：仅包含该模型实际依赖的最小 `moon.pkg`
-/// - `weights_bin`：按小端序紧凑拼接的纯 Float32 权重二进制块
+/// - `weights_bin`：按小端序紧凑拼接的权重二进制块（Float32 为 4 字节，Int8/UInt8 为 1 字节）
 pub struct AotArtifact {
   mbt_source : String
   pkg_config : String
@@ -77,6 +131,11 @@ pub struct AotArtifact {
   input_shapes : Array[(String, Array[Int32])]
   output_shapes : Array[(String, Array[Int32])]
   node_count : Int32
+  arena_f32_elems : Int32
+  arena_f32_naive_elems : Int32
+  arena_byte_elems : Int32
+  scratch_f32_elems : Int32
+  mode_used : CodegenMode
 }
 
 ///|
@@ -524,6 +583,19 @@ pub fn infer_static_shapes(
         }
         out
       }
+      @nn_ir.QuantizeLinear(..) | @nn_ir.DequantizeLinear(..) =>
+        req_shape(ins[0]).copy()
+      @nn_ir.QLinearMatMul => {
+        let sa = req_shape(ins[0])
+        let sb = req_shape(ins[3])
+        if sa.length() == 2 && sb.length() == 2 {
+          [sa[0], sb[1]]
+        } else {
+          let out = sa.copy()
+          out[out.length() - 1] = sb[sb.length() - 1]
+          out
+        }
+      }
       other =>
         raise UnsupportedOp(
           "shape inference not yet implemented for '\{other.name()}' in AOT compiler",
@@ -550,6 +622,7 @@ fn is_aot_view_op(op : @nn_ir.Op) -> Bool {
 
 ///|
 /// 将 `IrGraph` 编译为独立、零 `Map`、零 Protobuf 的纯 MoonBit 静态推理代码与紧凑权重二进制包。
+/// 默认启用 `Arena` 模式（编译期静态内存区间复用 + 零堆分配 + 零 `Tensor` 依赖），遇到多输出或特殊算子时自动回退至 `Tensor` 模式。
 pub fn compile_graph_to_mbt(
   raw_graph : @nn_ir.IrGraph,
   input_shapes : Map[String, Array[Int32]],
@@ -566,6 +639,12 @@ pub fn compile_graph_to_mbt(
   }
 
   let shapes = infer_static_shapes(graph, input_shapes)
+  let dtypes = infer_static_dtypes(graph, Map([]))
+
+  if config.mode == Arena && can_emit_arena(graph, shapes, dtypes) {
+    let (f32_plan, byte_plan) = plan_static_arenas(graph, shapes, dtypes)
+    return emit_arena_model(graph, shapes, dtypes, f32_plan, byte_plan, config)
+  }
 
   // 1. 扫描所有节点，收集真正被消费的静态权重及其打包方式，同时构建紧凑 weights.bin
   let weight_entries : Array[WeightEntry] = []
@@ -586,6 +665,7 @@ pub fn compile_graph_to_mbt(
           "\{name}#mat"
         }
       PackedConv(group~) => "\{name}#conv_g\{group}"
+      RawBytes(..) => "\{name}#bytes"
     }
     match weight_key_to_field.get(key) {
       Some(f) => return f
@@ -1151,7 +1231,7 @@ pub fn compile_graph_to_mbt(
   for i = 0; i < weight_entries.length(); i = i + 1 {
     let w = weight_entries[i]
     let ty = match w.kind {
-      RawF32 => "@tensor.Tensor"
+      RawF32 | RawBytes(..) => "@tensor.Tensor"
       PackedMatB(..) => "@gemm.PackedMatrixB"
       PackedConv(..) => "@ops.PackedConvWeight"
     }
@@ -1175,7 +1255,7 @@ pub fn compile_graph_to_mbt(
     let w = weight_entries[i]
     let sh_str = fmt_int_array(w.shape)
     match w.kind {
-      RawF32 =>
+      RawF32 | RawBytes(..) =>
         src.write_string(
           "  let \{w.field_name} = load_weight_f32(weights, \{w.byte_offset}, \{sh_str})\n",
         )
@@ -1281,6 +1361,11 @@ pub fn compile_graph_to_mbt(
   }
   let weights_bin = Bytes::makei(cur_byte_offset, fn(i) { flat_bytes[i] })
 
+  if config.embed_weights {
+    src.write_string("\n")
+    emit_embedded_weights_section(src, sname, weights_bin, true)
+  }
+
   let in_sh_list = Array::makei(graph.inputs.length(), fn(i) {
     let name = graph.inputs[i]
     (name, shapes.get(name).unwrap())
@@ -1298,5 +1383,10 @@ pub fn compile_graph_to_mbt(
     input_shapes: in_sh_list,
     output_shapes: out_sh_list,
     node_count: graph.nodes.length(),
+    arena_f32_elems: 0,
+    arena_f32_naive_elems: 0,
+    arena_byte_elems: 0,
+    scratch_f32_elems: 0,
+    mode_used: Tensor,
   }
 }

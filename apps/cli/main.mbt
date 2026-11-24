@@ -19,10 +19,10 @@ fn print_usage() -> Unit {
     "      Run inference and print per-operator execution latency breakdown",
   )
   println(
-    "  moon-onnx compile <model.onnx> <out_dir> [--input-shape=1,1,28,28] [--struct=CompiledModel] [--backend=scalar|simd]",
+    "  moon-onnx compile <model.onnx> <out_dir> [--input-shape=1,1,28,28] [--struct=CompiledModel] [--target=wasm|wasm-gc|native] [--mode=arena|tensor] [--embed-weights]",
   )
   println(
-    "      AOT-compile an ONNX model into standalone zero-Map MoonBit code + weights.bin (onnx2mbt)",
+    "      AOT-compile an ONNX model into zero-allocation Arena MoonBit code + weights.bin (or embedded single-file Wasm)",
   )
   println("  moon-onnx version")
   println("      Show engine version")
@@ -188,7 +188,18 @@ fn find_flag_value(args : Array[String], prefix : String) -> String? {
 }
 
 ///|
-/// 执行 `compile` 子命令（`onnx2mbt`）：将 `.onnx` 模型静态编译为独立 MoonBit 源码 + `weights.bin`。
+/// 检查命令行参数数组中是否存在指定布尔开关标志。
+fn has_flag(args : Array[String], flag : String) -> Bool {
+  for i = 0; i < args.length(); i = i + 1 {
+    if args[i] == flag {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// 执行 `compile` 子命令（`onnx2mbt`）：将 `.onnx` 模型静态编译为独立零分配 MoonBit 源码 + `weights.bin`。
 fn handle_compile(args : Array[String]) -> Unit {
   let pos = positional_args(args, 2)
   if pos.length() < 2 {
@@ -211,6 +222,17 @@ fn handle_compile(args : Array[String]) -> Unit {
     Some("scalar") => false
     _ => true
   }
+  let target : @codegen.CodegenTarget = match
+    find_flag_value(args, "--target=") {
+    Some("wasm-gc") => @codegen.TargetWasmGc
+    Some("native") => @codegen.TargetNative
+    _ => @codegen.TargetWasm
+  }
+  let mode : @codegen.CodegenMode = match find_flag_value(args, "--mode=") {
+    Some("tensor") => @codegen.Tensor
+    _ => @codegen.Arena
+  }
+  let embed_weights = has_flag(args, "--embed-weights")
 
   try {
     let m = @onnx.load_model_from_file(model_path)
@@ -227,6 +249,9 @@ fn handle_compile(args : Array[String]) -> Unit {
       struct_name,
       use_simd,
       optimize: true,
+      target,
+      mode,
+      embed_weights,
     }
     let art = @onnx.compile_model_to_mbt(m, input_shapes, config=cfg)
 
@@ -253,23 +278,39 @@ fn handle_compile(args : Array[String]) -> Unit {
         return
       }
     }
-    @fs.write_bytes_to_file("\{out_dir}/weights.bin", art.weights_bin) catch {
-      @fs.IOError(msg) => {
-        println("Failed to write weights.bin: \{msg}")
-        @env.exit(1)
-        return
+    if !embed_weights {
+      @fs.write_bytes_to_file("\{out_dir}/weights.bin", art.weights_bin) catch {
+        @fs.IOError(msg) => {
+          println("Failed to write weights.bin: \{msg}")
+          @env.exit(1)
+          return
+        }
       }
     }
-    println("onnx2mbt AOT Compilation Successful!")
+    println("onnx2mbt v2 AOT Compilation Successful!")
     println("  Model        : \{model_path}")
     println("  Output Dir   : \{out_dir}")
     println("  Struct Name  : \{struct_name}")
-    println("  SIMD Enabled : \{use_simd}")
-    println("  Fused Nodes  : \{art.node_count}")
     println(
-      "  Weights Blob : \{art.weights.length()} tensors (\{art.weights_bin.length()} bytes)",
+      "  Codegen Mode : \{art.mode_used} | Target: \{target} | SIMD: \{use_simd}",
     )
-    println("  Generated    : model.mbt, moon.pkg, weights.bin")
+    println("  Fused Nodes  : \{art.node_count}")
+    if art.mode_used == @codegen.Arena {
+      let peak_b = art.arena_f32_elems * 4
+      let naive_b = art.arena_f32_naive_elems * 4
+      let scratch_b = art.scratch_f32_elems * 4
+      println(
+        "  Static Arena : \{peak_b} B peak vs \{naive_b} B naive (Byte Arena: \{art.arena_byte_elems} B, Shared Scratch: \{scratch_b} B)",
+      )
+    }
+    println(
+      "  Weights Blob : \{art.weights.length()} tensors (\{art.weights_bin.length()} bytes, embedded=\{embed_weights})",
+    )
+    if embed_weights {
+      println("  Generated    : model.mbt (weights embedded), moon.pkg")
+    } else {
+      println("  Generated    : model.mbt, moon.pkg, weights.bin")
+    }
   } catch {
     err => {
       println("Compile failed: \{err}")
