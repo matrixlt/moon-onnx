@@ -1,0 +1,31 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/moon_onnx_wasm_bench"
+
+// Values
+pub fn bench_conv2d_scalar(Int32) -> Float
+
+pub fn bench_conv2d_simd(Int32) -> Float
+
+pub fn bench_depthwise_scalar(Int32) -> Float
+
+pub fn bench_depthwise_simd(Int32) -> Float
+
+pub fn bench_gemm128_scalar(Int32) -> Float
+
+pub fn bench_gemm128_simd(Int32) -> Float
+
+pub fn bench_gemm64_scalar(Int32) -> Float
+
+pub fn bench_gemm64_simd(Int32) -> Float
+
+pub fn bench_relu65k_scalar(Int32) -> Float
+
+pub fn bench_relu65k_simd_bytes(Int32) -> Float
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
