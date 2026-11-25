@@ -479,6 +479,17 @@ fn lower_node(
         clip=get_attr_float_opt(attrs, "clip"),
       )
     "Equal" => @nn_ir.Equal
+    "Less" => @nn_ir.Less
+    "Greater" => @nn_ir.Greater
+    "LessOrEqual" => @nn_ir.LessOrEqual
+    "GreaterOrEqual" => @nn_ir.GreaterOrEqual
+    "Not" => @nn_ir.Not
+    "And" => @nn_ir.And
+    "Where" => @nn_ir.Where
+    "Erf" => @nn_ir.Erf
+    "Range" => @nn_ir.Range
+    "Expand" => @nn_ir.Expand
+    "Tile" => @nn_ir.Tile
     "ConstantOfShape" => {
       // ONNX 规范：未提供 `value` 属性时默认填充单元素 `Float32(0.0)`
       let fill_val = match find_attr(attrs, "value") {

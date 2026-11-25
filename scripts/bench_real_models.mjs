@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 真实开源生产模型（Silero VAD v5 + MobileNetV2-12）Wasm AOT 端到端编译、精度对齐（vs ORT）与性能基准脚本。
+// 真实开源生产模型（Silero VAD v5 + MobileNetV2-12 + all-MiniLM-L6-v2 Transformer）Wasm AOT 端到端编译、精度对齐（vs ORT）与性能基准脚本。
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -8,6 +8,7 @@ import { performance } from "node:perf_hooks";
 
 const repoRoot = process.cwd();
 const modelDir = process.env.REAL_MODELS_DIR ?? "/tmp/real_models";
+const modelFilter = process.env.MODEL_FILTER ?? "";
 const workDir = "/tmp/moon_onnx_real_aot_bench";
 const moonEnv = {
   ...process.env,
@@ -55,7 +56,7 @@ function argmax(arr) {
 fs.rmSync(workDir, { recursive: true, force: true });
 fs.mkdirSync(workDir, { recursive: true });
 
-const targets = [
+const allTargets = [
   {
     id: "silero_vad_wasm",
     label: "Silero VAD 16kHz (wasm V128 Arena)",
@@ -110,7 +111,39 @@ const targets = [
     buildTarget: "wasm-gc",
     kind: "mobilenet",
   },
+  {
+    id: "minilm_l6_wasm",
+    label: "all-MiniLM-L6-v2 (wasm V128 Arena)",
+    model: path.join(modelDir, "all-MiniLM-L6-v2.onnx"),
+    struct: "MiniLmL6",
+    cliArgs: [
+      "--input-shape=input_ids:1,16;attention_mask:1,16;token_type_ids:1,16",
+      "--target=wasm",
+      "--mode=arena",
+    ],
+    buildTarget: "wasm",
+    kind: "minilm",
+  },
+  {
+    id: "minilm_l6_wasmgc",
+    label: "all-MiniLM-L6-v2 (wasm-gc Arena)",
+    model: path.join(modelDir, "all-MiniLM-L6-v2.onnx"),
+    struct: "MiniLmL6",
+    cliArgs: [
+      "--input-shape=input_ids:1,16;attention_mask:1,16;token_type_ids:1,16",
+      "--target=wasm-gc",
+      "--mode=arena",
+    ],
+    buildTarget: "wasm-gc",
+    kind: "minilm",
+  },
 ];
+
+const targets = allTargets.filter(
+  (t) =>
+    fs.existsSync(t.model) &&
+    (!modelFilter || t.id.includes(modelFilter) || t.kind.includes(modelFilter))
+);
 
 // 1. 使用 onnx2mbt AOT 编译所有目标
 for (const t of targets) {
@@ -157,7 +190,9 @@ import {
   const exportsList =
     t.kind === "silero"
       ? `["set_weight_u32", "init_model", "set_audio_f32", "set_state_f32", "run_infer", "get_prob_f32", "get_state_f32", "get_arena_bytes"]`
-      : `["set_weight_u32", "init_model", "set_input_f32", "run_infer", "get_output_f32", "get_arena_bytes"]`;
+      : t.kind === "minilm"
+        ? `["set_weight_u32", "init_model", "set_ids_i32", "set_mask_i32", "set_tok_i32", "run_infer", "get_output_f32", "get_arena_bytes"]`
+        : `["set_weight_u32", "init_model", "set_input_f32", "run_infer", "get_output_f32", "get_arena_bytes"]`;
   fs.writeFileSync(
     path.join(dir, "moon.pkg"),
     `${basePkg}
@@ -209,7 +244,33 @@ pub fn run_infer() -> Int32 {
 pub fn get_prob_f32() -> Float { prob_out[0] }
 pub fn get_state_f32(idx : Int32) -> Float { state_out[idx] }
 `
-      : `${weightLoaderSnippet}
+      : t.kind === "minilm"
+        ? `${weightLoaderSnippet}
+let ids_buf : FixedArray[Int64] = FixedArray::make(16, (0 : Int64))
+let mask_buf : FixedArray[Int64] = FixedArray::make(16, (0 : Int64))
+let tok_buf : FixedArray[Int64] = FixedArray::make(16, (0 : Int64))
+let out_buf : FixedArray[Float] = FixedArray::make(6144, (0.0 : Float))
+let model_ref : Ref[${t.struct}?] = { val: None }
+
+pub fn init_model() -> Int32 {
+  model_ref.val = Some(${t.struct}::load(Bytes::makei(${weightBytes}, fn(i) { w_buf[i] })))
+  1
+}
+pub fn set_ids_i32(idx : Int32, val : Int32) -> Unit { ids_buf[idx] = val.to_int64() }
+pub fn set_mask_i32(idx : Int32, val : Int32) -> Unit { mask_buf[idx] = val.to_int64() }
+pub fn set_tok_i32(idx : Int32, val : Int32) -> Unit { tok_buf[idx] = val.to_int64() }
+pub fn run_infer() -> Int32 {
+  match model_ref.val {
+    Some(m) => {
+      m.forward_into(ids_buf, mask_buf, tok_buf, out_buf)
+      1
+    }
+    None => -1
+  }
+}
+pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
+`
+        : `${weightLoaderSnippet}
 let in_buf : FixedArray[Float] = FixedArray::make(150528, (0.0 : Float))
 let out_buf : FixedArray[Float] = FixedArray::make(1000, (0.0 : Float))
 let model_ref : Ref[${t.struct}?] = { val: None }
@@ -247,16 +308,23 @@ for (const t of targets) {
 // 4. 在 Node.js V8 中加载并对比 ORT Golden 输出 + 基准测试
 console.log("=== Real Open-Source Models Wasm AOT Benchmark (vs Official ORT 1.32.0) ===");
 
-const audio1 = readF32(path.join(modelDir, "silero_audio1.f32"));
-const audio2 = readF32(path.join(modelDir, "silero_audio2.f32"));
-const out1Gold = readF32(path.join(modelDir, "silero_out1_golden.f32"));
-const st1Gold = readF32(path.join(modelDir, "silero_state1_golden.f32"));
-const out2Gold = readF32(path.join(modelDir, "silero_out2_golden.f32"));
-const st2Gold = readF32(path.join(modelDir, "silero_state2_golden.f32"));
+const hasSilero = targets.some((t) => t.kind === "silero");
+const audio1 = hasSilero ? readF32(path.join(modelDir, "silero_audio1.f32")) : null;
+const audio2 = hasSilero ? readF32(path.join(modelDir, "silero_audio2.f32")) : null;
+const out1Gold = hasSilero ? readF32(path.join(modelDir, "silero_out1_golden.f32")) : null;
+const st1Gold = hasSilero ? readF32(path.join(modelDir, "silero_state1_golden.f32")) : null;
+const out2Gold = hasSilero ? readF32(path.join(modelDir, "silero_out2_golden.f32")) : null;
+const st2Gold = hasSilero ? readF32(path.join(modelDir, "silero_state2_golden.f32")) : null;
 
-const mnIn = readF32(path.join(modelDir, "mobilenetv2_input.f32"));
-const mnGold = readF32(path.join(modelDir, "mobilenetv2_golden.f32"));
-const mnGoldTop = argmax(mnGold);
+const hasMobileNet = targets.some((t) => t.kind === "mobilenet");
+const mnIn = hasMobileNet ? readF32(path.join(modelDir, "mobilenetv2_input.f32")) : null;
+const mnGold = hasMobileNet ? readF32(path.join(modelDir, "mobilenetv2_golden.f32")) : null;
+const mnGoldTop = hasMobileNet ? argmax(mnGold) : null;
+
+const hasMiniLm = targets.some((t) => t.kind === "minilm");
+const minilmIds16 = [101, 2054, 2003, 1996, 3007, 1997, 2605, 1029, 102, 0, 0, 0, 0, 0, 0, 0];
+const minilmMask16 = [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0];
+const minilmGold16 = hasMiniLm ? readF32(path.join(modelDir, "minilm_s16_golden.f32")) : null;
 
 for (const t of targets) {
   const dir = path.join(workDir, t.id);
@@ -334,6 +402,30 @@ for (const t of targets) {
 
     console.log(
       `  ${t.label.padEnd(36)} | wasm=${(wasmBytes.length / 1024).toFixed(1).padStart(5)} KB (gz ${(gzBytes.length / 1024).toFixed(1).padStart(4)} KB) | arena=${arenaKB.padStart(6)} KB | inst=${instMs.toFixed(2)}ms | diff=${worst.toExponential(2)} | ${avgMs.toFixed(2)} ms/frame (${(1 / rtf).toFixed(1)}x RT)`
+    );
+  } else if (t.kind === "minilm") {
+    for (let i = 0; i < 16; i++) {
+      exp.set_ids_i32(i, minilmIds16[i]);
+      exp.set_mask_i32(i, minilmMask16[i]);
+      exp.set_tok_i32(i, 0);
+    }
+    exp.run_infer();
+    const out = new Float32Array(6144);
+    for (let i = 0; i < 6144; i++) out[i] = exp.get_output_f32(i);
+    const diff = maxAbsDiff(out, minilmGold16);
+    if (diff > 1e-4) {
+      throw new Error(`${t.id} accuracy mismatch: diff=${diff}`);
+    }
+
+    // 预热 + 5 次完整 6 层 BERT Transformer（seq=16）推理计时
+    exp.run_infer();
+    const iters = 5;
+    const t0 = performance.now();
+    for (let r = 0; r < iters; r++) exp.run_infer();
+    const avgMs = (performance.now() - t0) / iters;
+
+    console.log(
+      `  ${t.label.padEnd(36)} | wasm=${(wasmBytes.length / 1024).toFixed(1).padStart(5)} KB (gz ${(gzBytes.length / 1024).toFixed(1).padStart(4)} KB) | arena=${arenaKB.padStart(6)} KB | inst=${instMs.toFixed(2)}ms | diff=${diff.toExponential(2)} | ${avgMs.toFixed(1)} ms (${(1000 / avgMs).toFixed(1)} emb/s)`
     );
   } else {
     for (let i = 0; i < mnIn.length; i++) exp.set_input_f32(i, mnIn[i]);

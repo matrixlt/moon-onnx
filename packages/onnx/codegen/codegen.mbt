@@ -79,6 +79,8 @@ pub(all) struct CodegenConfig {
   embed_weights : Bool
   /// 编译期冻结的静态输入常量（例如 Silero VAD 的 `sr = 16000`），用于折叠 `Equal`/`If` 分支特化
   frozen_inputs : Map[String, @tensor.Tensor]
+  /// 可选输入张量数据类型声明（缺失项默认 `Float32`；NLP 模型如 `input_ids` / `attention_mask` 为 `Int64`）
+  input_dtypes : Map[String, @tensor.DType]
 }
 
 ///|
@@ -92,6 +94,7 @@ pub fn CodegenConfig::default() -> CodegenConfig {
     mode: Arena,
     embed_weights: false,
     frozen_inputs: Map([]),
+    input_dtypes: Map([]),
   }
 }
 
@@ -304,13 +307,18 @@ pub fn compile_graph_to_mbt(
     raw_graph
   }
   // 执行编译期特化（冻结输入、`If` 分支内联、静态 `Shape`/元数据常量折叠、冗余 `Cast` 消除）
-  let graph = specialize_graph(base_graph, input_shapes, config.frozen_inputs)
+  let graph = specialize_graph(
+    base_graph,
+    input_shapes,
+    config.frozen_inputs,
+    input_dtypes=config.input_dtypes,
+  )
   if graph.inputs.length() == 0 || graph.outputs.length() == 0 {
     raise UnsupportedGraph("graph must have at least 1 input and 1 output")
   }
 
   let shapes = infer_static_shapes(graph, input_shapes)
-  let dtypes = infer_static_dtypes(graph, Map([]))
+  let dtypes = infer_static_dtypes(graph, config.input_dtypes)
 
   if config.mode == Arena && can_emit_arena(graph, shapes, dtypes) {
     let (f32_plan, byte_plan) = plan_static_arenas(graph, shapes, dtypes)

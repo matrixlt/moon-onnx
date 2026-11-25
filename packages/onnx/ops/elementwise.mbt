@@ -457,3 +457,33 @@ pub fn softmax_f32(
   }
   @tensor.Tensor::from_f32(shape, out)
 }
+
+///|
+/// 双精度高斯误差函数 `erf(x)`（Abramowitz & Stegun 7.1.26，全定义域最大误差 < 1.5e-7，满足 Float32 精确 GELU 需求）。
+fn erf_double(x : Double) -> Double {
+  let sign = if x < 0.0 { -1.0 } else { 1.0 }
+  let ax = if x < 0.0 { -x } else { x }
+  let t = 1.0 / (1.0 + 0.3275911 * ax)
+  let poly = (
+      (((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) *
+      t +
+      0.254829592
+    ) *
+    t
+  sign * (1.0 - poly * @math.exp(-(ax * ax)))
+}
+
+///|
+/// ONNX `Erf` 算子：逐元素计算高斯误差函数 `erf(x)`（支持 BufferPool 复用）。
+pub fn erf_f32(
+  x : @tensor.Tensor,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  for i = 0; i < n; i = i + 1 {
+    out[i] = Float::from_double(erf_double(src[i].to_double()))
+  }
+  @tensor.Tensor::from_f32(x.shape(), out)
+}

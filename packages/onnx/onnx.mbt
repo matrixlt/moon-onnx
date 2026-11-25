@@ -108,7 +108,16 @@ pub fn compile_model_to_mbt(
   let graph = @frontend.lower_onnx_model(m) catch {
     e => raise @session.IrErr("\{e}")
   }
-  @codegen.compile_graph_to_mbt(graph, input_shapes, config~) catch {
+  let merged_dtypes : Map[String, @tensor.DType] = Map([])
+  for i = 0; i < m.inputs.length(); i = i + 1 {
+    match m.inputs[i].dtype {
+      Some(dt) => merged_dtypes[m.inputs[i].name] = dt
+      None => ()
+    }
+  }
+  config.input_dtypes.each(fn(k, v) { merged_dtypes[k] = v })
+  let eff_cfg : CodegenConfig = { ..config, input_dtypes: merged_dtypes, }
+  @codegen.compile_graph_to_mbt(graph, input_shapes, config=eff_cfg) catch {
     e => raise @session.IrErr("AOT codegen failed: \{e}")
   }
 }

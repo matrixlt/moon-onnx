@@ -87,7 +87,24 @@ pub fn infer_static_dtypes(
     let out_dt : @tensor.DType = match node.op {
       @nn_ir.Cast(to~) => to
       @nn_ir.Shape(..) => @tensor.Int64
+      @nn_ir.Equal
+      | @nn_ir.Less
+      | @nn_ir.Greater
+      | @nn_ir.LessOrEqual
+      | @nn_ir.GreaterOrEqual
+      | @nn_ir.Not
+      | @nn_ir.And => @tensor.Bool
+      @nn_ir.Where =>
+        if node.inputs.length() >= 2 {
+          match dtypes.get(node.inputs[1]) {
+            Some(dt) => dt
+            None => @tensor.Float32
+          }
+        } else {
+          @tensor.Float32
+        }
       @nn_ir.Constant(value~) => value.dtype()
+      @nn_ir.ConstantOfShape(value~) => value.dtype()
       @nn_ir.DequantizeLinear(..) => @tensor.Float32
       @nn_ir.QuantizeLinear(..) =>
         if node.inputs.length() >= 3 && node.inputs[2] != "" {

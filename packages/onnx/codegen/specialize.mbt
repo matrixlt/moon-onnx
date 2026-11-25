@@ -100,11 +100,50 @@ fn infer_node_output_shapes(
         e => raise ShapeError("node '\{node.name}': \{e}")
       }
     }
-    @nn_ir.Equal => {
+    @nn_ir.Equal
+    | @nn_ir.Less
+    | @nn_ir.Greater
+    | @nn_ir.LessOrEqual
+    | @nn_ir.GreaterOrEqual
+    | @nn_ir.And => {
       let sa = req_shape(ins[0])
       let sb = req_shape(ins[1])
       @tensor.broadcast_shape(sa, sb) catch {
         e => raise ShapeError("node '\{node.name}': \{e}")
+      }
+    }
+    @nn_ir.Where => {
+      let sc = req_shape(ins[0])
+      let sx = req_shape(ins[1])
+      let sy = req_shape(ins[2])
+      let xy = @tensor.broadcast_shape(sx, sy) catch {
+        e => raise ShapeError("node '\{node.name}': \{e}")
+      }
+      @tensor.broadcast_shape(sc, xy) catch {
+        e => raise ShapeError("node '\{node.name}': \{e}")
+      }
+    }
+    @nn_ir.Expand => {
+      let sx = req_shape(ins[0])
+      match read_const_ints(ins[1]) {
+        Some(target) =>
+          @tensor.broadcast_shape(sx, target) catch {
+            e => raise ShapeError("node '\{node.name}': \{e}")
+          }
+        None =>
+          raise ShapeError(
+            "Expand '\{node.name}': shape tensor '\{ins[1]}' must be static",
+          )
+      }
+    }
+    @nn_ir.Tile => {
+      let sx = req_shape(ins[0])
+      match read_const_ints(ins[1]) {
+        Some(reps) => Array::makei(sx.length(), fn(d) { sx[d] * reps[d] })
+        None =>
+          raise ShapeError(
+            "Tile '\{node.name}': repeats tensor '\{ins[1]}' must be static",
+          )
       }
     }
     @nn_ir.Sqrt
@@ -115,6 +154,8 @@ fn infer_node_output_shapes(
     | @nn_ir.Sigmoid
     | @nn_ir.Tanh
     | @nn_ir.Gelu
+    | @nn_ir.Erf
+    | @nn_ir.Not
     | @nn_ir.HardSwish
     | @nn_ir.LeakyRelu(..)
     | @nn_ir.Identity
@@ -781,6 +822,7 @@ pub fn specialize_graph(
   graph : @nn_ir.IrGraph,
   input_shapes : Map[String, Array[Int32]],
   frozen_inputs : Map[String, @tensor.Tensor],
+  input_dtypes~ : Map[String, @tensor.DType] = Map([]),
 ) -> @nn_ir.IrGraph raise CodegenError {
   // 1. 克隆初始权重并吸收冻结输入
   let initializers : Map[String, @tensor.Tensor] = Map([])
@@ -873,7 +915,10 @@ pub fn specialize_graph(
       Some(s) => shapes[name] = s.copy()
       None => ()
     }
-    dtypes[name] = @tensor.Float32
+    dtypes[name] = match input_dtypes.get(name) {
+      Some(dt) => dt
+      None => @tensor.Float32
+    }
   }
 
   let folded_nodes : Array[@nn_ir.IrNode] = []

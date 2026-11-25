@@ -101,6 +101,17 @@ pub(all) enum Op {
   Resize(mode~ : String, coordinate_transformation_mode~ : String, nearest_mode~ : String)
   Lstm(hidden_size~ : Int32?, direction~ : String, layout~ : Int32, clip~ : Float?)
   Equal
+  Less
+  Greater
+  LessOrEqual
+  GreaterOrEqual
+  Not
+  And
+  Where
+  Erf
+  Range
+  Expand
+  Tile
   ConstantOfShape(value~ : @tensor.Tensor)
   If(then_branch~ : IrGraph, else_branch~ : IrGraph)
 }

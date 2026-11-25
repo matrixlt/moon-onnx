@@ -129,7 +129,7 @@ fn fmt_gemm_epilogue(act : @nn_ir.FusedActivation) -> String {
 }
 
 ///|
-/// 检查当前图是否满足 Zero-Allocation Arena 模式编译条件（全部输入输出为 Float32 且全部算子均有零分配缓冲内核）。
+/// 检查当前图是否满足 Zero-Allocation Arena 模式编译条件（支持 Float32/Int64 输入、Float32 输出与 Transformer 全算子）。
 fn can_emit_arena(
   graph : @nn_ir.IrGraph,
   shapes : Map[String, Array[Int32]],
@@ -138,9 +138,11 @@ fn can_emit_arena(
   if graph.inputs.length() == 0 || graph.outputs.length() == 0 {
     return false
   }
+  let input_or_alias_i64 : Map[String, Bool] = Map([])
   for i = 0; i < graph.inputs.length(); i = i + 1 {
     match dtypes.get(graph.inputs[i]) {
       Some(@tensor.Float32) | None => ()
+      Some(@tensor.Int64) => input_or_alias_i64[graph.inputs[i]] = true
       _ => return false
     }
   }
@@ -163,6 +165,11 @@ fn can_emit_arena(
     if !is_split && (node.outputs.length() != 1 || node.outputs[0] == "") {
       return false
     }
+    if is_arena_alias_op(node.op) &&
+      ins.length() > 0 &&
+      input_or_alias_i64.contains(ins[0]) {
+      input_or_alias_i64[node.outputs[0]] = true
+    }
     let ok = match node.op {
       @nn_ir.Identity
       | @nn_ir.Flatten(..)
@@ -173,6 +180,7 @@ fn can_emit_arena(
       | @nn_ir.Sigmoid
       | @nn_ir.Tanh
       | @nn_ir.Gelu
+      | @nn_ir.Erf
       | @nn_ir.HardSwish
       | @nn_ir.LeakyRelu(..)
       | @nn_ir.Sqrt
@@ -181,6 +189,16 @@ fn can_emit_arena(
       | @nn_ir.GlobalAveragePool
       | @nn_ir.Softmax(..)
       | @nn_ir.LayerNormalization(..) => true
+      @nn_ir.Transpose(..) =>
+        match (shapes.get(ins[0]), dtypes.get(ins[0])) {
+          (Some(sx), Some(@tensor.Float32) | None) =>
+            sx.length() >= 1 && sx.length() <= 4
+          _ => false
+        }
+      @nn_ir.Cast(to~) =>
+        to == @tensor.Float32 &&
+        ins.length() >= 1 &&
+        input_or_alias_i64.contains(ins[0])
       @nn_ir.Clip(..) => {
         let lo_ok = ins.length() < 2 ||
           ins[1] == "" ||
@@ -190,19 +208,17 @@ fn can_emit_arena(
           graph.initializers.contains(ins[2])
         lo_ok && hi_ok
       }
-      @nn_ir.Add | @nn_ir.Sub | @nn_ir.Mul | @nn_ir.Div | @nn_ir.Pow =>
+      @nn_ir.Add | @nn_ir.Sub | @nn_ir.Mul | @nn_ir.Div =>
+        match shapes.get(node.outputs[0]) {
+          Some(so) => so.length() <= 4
+          None => false
+        }
+      @nn_ir.Pow =>
         match (shapes.get(ins[0]), shapes.get(ins[1])) {
           (Some(sa), Some(sb)) => {
             let same = sa == sb
-            let bias_last = sb.length() == 1 &&
-              sa.length() >= 1 &&
-              sa[sa.length() - 1] == sb[0]
-            let bias_2d = sa.length() == 2 &&
-              sb.length() == 2 &&
-              sb[0] == 1 &&
-              sb[1] == sa[1]
             let scalar_b = sb.length() == 0 || (sb.length() == 1 && sb[0] == 1)
-            same || bias_last || bias_2d || scalar_b
+            same || scalar_b
           }
           _ => false
         }
@@ -225,9 +241,12 @@ fn can_emit_arena(
       @nn_ir.MatMul =>
         match (shapes.get(ins[0]), shapes.get(ins[1])) {
           (Some(sa), Some(sb)) =>
-            sa.length() == 2 &&
-            sb.length() == 2 &&
-            graph.initializers.contains(ins[1])
+            (
+              sa.length() >= 2 &&
+              sb.length() == 2 &&
+              graph.initializers.contains(ins[1])
+            ) ||
+            (sa.length() >= 2 && sa.length() == sb.length())
           _ => false
         }
       @nn_ir.Gemm(..) =>
@@ -282,11 +301,15 @@ fn can_emit_arena(
           }
           _ => false
         }
-      @nn_ir.Gather(..) =>
-        match (dtypes.get(ins[0]), graph.initializers.get(ins[1])) {
-          (Some(@tensor.Float32) | None, Some(_)) => true
+      @nn_ir.Gather(..) => {
+        let data_ok = match dtypes.get(ins[0]) {
+          Some(@tensor.Float32) | None => true
           _ => false
         }
+        let idx_ok = graph.initializers.contains(ins[1]) ||
+          input_or_alias_i64.contains(ins[1])
+        data_ok && idx_ok
+      }
       @nn_ir.Split(..) => {
         let dt_ok = match dtypes.get(ins[0]) {
           Some(@tensor.Float32) | None => true
@@ -523,6 +546,7 @@ fn emit_arena_model(
   let mut need_softmax = false
   let mut need_layernorm = false
   let mut need_gelu = false
+  let mut need_erf = false
   let mut need_reflect = false
   let mut need_f32_loader = false
   let mut need_byte_loader = false
@@ -728,21 +752,58 @@ fn emit_arena_model(
       }
       @nn_ir.MatMul => {
         need_gemm = true
-        need_f32_loader = true
         let (a_buf, a_off) = resolve_f32_loc(ins[0])
         let (y_buf, y_off) = resolve_f32_loc(out_n)
         let sa = shapes.get(ins[0]).unwrap()
         let sb = shapes.get(ins[1]).unwrap()
-        if use_packed_f32_simd {
-          let wf = reg_weight(ins[1], PackedMatB(trans_b=false))
-          body.write_string(
-            "  @gemm.matmul_2d_prepacked_simd_f32(\{a_buf}, \{a_off}, self.\{wf}, \{y_buf}, \{y_off}, \{sa[0]})\n",
-          )
+        if sb.length() == 2 && graph.initializers.contains(ins[1]) {
+          // N-D × 2D 静态权重投影（[B, S, K] @ [K, N] -> [B*S, K] @ [K, N]）
+          need_f32_loader = true
+          let k_dim = sa[sa.length() - 1]
+          let n_dim = sb[1]
+          let mut m_tot = 1
+          for d = 0; d < sa.length() - 1; d = d + 1 {
+            m_tot = m_tot * sa[d]
+          }
+          if use_packed_f32_simd {
+            let wf = reg_weight(ins[1], PackedMatB(trans_b=false))
+            body.write_string(
+              "  @gemm.matmul_2d_prepacked_simd_f32(\{a_buf}, \{a_off}, self.\{wf}, \{y_buf}, \{y_off}, \{m_tot})\n",
+            )
+          } else {
+            let wf = reg_weight(ins[1], RawF32)
+            body.write_string(
+              "  @gemm.matmul_2d_scalar_f32(\{a_buf}, \{a_off}, self.\{wf}, 0, \{y_buf}, \{y_off}, \{m_tot}, \{k_dim}, \{n_dim})\n",
+            )
+          }
         } else {
-          let wf = reg_weight(ins[1], RawF32)
-          body.write_string(
-            "  @gemm.matmul_2d_scalar_f32(\{a_buf}, \{a_off}, self.\{wf}, 0, \{y_buf}, \{y_off}, \{sa[0]}, \{sa[1]}, \{sb[1]})\n",
-          )
+          // 2D/3D/4D 动态批量矩阵乘（多头自注意力 Q@K^T 与 P@V）
+          let (b_buf, b_off) = resolve_f32_loc(ins[1])
+          let r = sa.length()
+          let m_dim = sa[r - 2]
+          let k_dim = sa[r - 1]
+          let n_dim = sb[r - 1]
+          let mut batches = 1
+          for d = 0; d < r - 2; d = d + 1 {
+            batches = batches * sa[d]
+          }
+          let mat_a = m_dim * k_dim
+          let mat_b = k_dim * n_dim
+          let mat_y = m_dim * n_dim
+          let mm_fn = if use_packed_f32_simd {
+            "@gemm.matmul_2d_simd_f32"
+          } else {
+            "@gemm.matmul_2d_scalar_f32"
+          }
+          if batches == 1 {
+            body.write_string(
+              "  \{mm_fn}(\{a_buf}, \{a_off}, \{b_buf}, \{b_off}, \{y_buf}, \{y_off}, \{m_dim}, \{k_dim}, \{n_dim})\n",
+            )
+          } else {
+            body.write_string(
+              "  for bm_i = 0; bm_i < \{batches}; bm_i = bm_i + 1 { \{mm_fn}(\{a_buf}, \{a_off} + bm_i * \{mat_a}, \{b_buf}, \{b_off} + bm_i * \{mat_b}, \{y_buf}, \{y_off} + bm_i * \{mat_y}, \{m_dim}, \{k_dim}, \{n_dim}) }\n",
+            )
+          }
         }
       }
       @nn_ir.Gemm(alpha~, beta~, trans_a~, trans_b~) => {
@@ -811,6 +872,12 @@ fn emit_arena_model(
         let (y_buf, y_off) = resolve_f32_loc(out_n)
         let sa = shapes.get(ins[0]).unwrap()
         let sb = shapes.get(ins[1]).unwrap()
+        let a_numel = @tensor.num_elements(sa) catch {
+          e => raise ShapeError("\{e}")
+        }
+        let b_numel = @tensor.num_elements(sb) catch {
+          e => raise ShapeError("\{e}")
+        }
         let op_sym = match node.op {
           @nn_ir.Add => "+"
           @nn_ir.Sub => "-"
@@ -821,21 +888,78 @@ fn emit_arena_model(
           body.write_string(
             "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = \{a_buf}[\{a_off} + k_i] \{op_sym} \{b_buf}[\{b_off} + k_i] }\n",
           )
+        } else if b_numel == 1 {
+          body.write_string("  let bs_v = \{b_buf}[\{b_off}]\n")
+          body.write_string(
+            "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = \{a_buf}[\{a_off} + k_i] \{op_sym} bs_v }\n",
+          )
+        } else if a_numel == 1 {
+          body.write_string("  let as_v = \{a_buf}[\{a_off}]\n")
+          body.write_string(
+            "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = as_v \{op_sym} \{b_buf}[\{b_off} + k_i] }\n",
+          )
+        } else if sb.length() == 1 &&
+          out_sh.length() >= 1 &&
+          sa == out_sh &&
+          sb[0] == out_sh[out_sh.length() - 1] {
+          let cols = out_sh[out_sh.length() - 1]
+          let rows = out_numel / cols
+          body.write_string(
+            "  for r_i = 0; r_i < \{rows}; r_i = r_i + 1 { let base_i = r_i * \{cols}; for c_i = 0; c_i < \{cols}; c_i = c_i + 1 { \{y_buf}[\{y_off} + base_i + c_i] = \{a_buf}[\{a_off} + base_i + c_i] \{op_sym} \{b_buf}[\{b_off} + c_i] } }\n",
+          )
+        } else if sa.length() == 1 &&
+          out_sh.length() >= 1 &&
+          sb == out_sh &&
+          sa[0] == out_sh[out_sh.length() - 1] {
+          // 对称偏置加：[C] op [..., C]（PyTorch Transformer 线性层偏置常见顺序）
+          let cols = out_sh[out_sh.length() - 1]
+          let rows = out_numel / cols
+          body.write_string(
+            "  for r_i = 0; r_i < \{rows}; r_i = r_i + 1 { let base_i = r_i * \{cols}; for c_i = 0; c_i < \{cols}; c_i = c_i + 1 { \{y_buf}[\{y_off} + base_i + c_i] = \{a_buf}[\{a_off} + c_i] \{op_sym} \{b_buf}[\{b_off} + base_i + c_i] } }\n",
+          )
         } else {
-          let b_numel = @tensor.num_elements(sb) catch {
-            e => raise ShapeError("\{e}")
+          // 通用 1D~4D 静态展开广播（例如 Attention Mask [1,12,S,S] + [1,1,1,S]）
+          let rank = out_sh.length()
+          let a_bs = @tensor.broadcast_strides(
+            sa,
+            @tensor.compute_strides(sa),
+            out_sh,
+          ) catch {
+            e => raise TensorErr("\{e}")
           }
-          if b_numel == 1 {
+          let b_bs = @tensor.broadcast_strides(
+            sb,
+            @tensor.compute_strides(sb),
+            out_sh,
+          ) catch {
+            e => raise TensorErr("\{e}")
+          }
+          let o_st = @tensor.compute_strides(out_sh)
+          for d = 0; d < rank; d = d + 1 {
             body.write_string(
-              "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = \{a_buf}[\{a_off} + k_i] \{op_sym} \{b_buf}[\{b_off}] }\n",
+              "  for bd_\{d} = 0; bd_\{d} < \{out_sh[d]}; bd_\{d} = bd_\{d} + 1 {\n",
             )
-          } else {
-            // 沿最后一维广播 [..., N] op [N]
-            let cols = sa[sa.length() - 1]
-            let rows = out_numel / cols
-            body.write_string(
-              "  for r_i = 0; r_i < \{rows}; r_i = r_i + 1 { let base_i = r_i * \{cols}; for c_i = 0; c_i < \{cols}; c_i = c_i + 1 { \{y_buf}[\{y_off} + base_i + c_i] = \{a_buf}[\{a_off} + base_i + c_i] \{op_sym} \{b_buf}[\{b_off} + c_i] } }\n",
-            )
+          }
+          let ea = StringBuilder()
+          let eb = StringBuilder()
+          let ey = StringBuilder()
+          ea.write_string("\{a_off}")
+          eb.write_string("\{b_off}")
+          ey.write_string("\{y_off}")
+          for d = 0; d < rank; d = d + 1 {
+            if a_bs[d] != 0 {
+              ea.write_string(" + bd_\{d} * \{a_bs[d]}")
+            }
+            if b_bs[d] != 0 {
+              eb.write_string(" + bd_\{d} * \{b_bs[d]}")
+            }
+            ey.write_string(" + bd_\{d} * \{o_st[d]}")
+          }
+          body.write_string(
+            "    \{y_buf}[\{ey.to_string()}] = \{a_buf}[\{ea.to_string()}] \{op_sym} \{b_buf}[\{eb.to_string()}]\n",
+          )
+          for _d = 0; _d < rank; _d = _d + 1 {
+            body.write_string("  }\n")
           }
         }
       }
@@ -948,6 +1072,15 @@ fn emit_arena_model(
         let (y_buf, y_off) = resolve_f32_loc(out_n)
         body.write_string(
           "  gelu_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{out_numel})\n",
+        )
+      }
+      @nn_ir.Erf => {
+        need_math = true
+        need_erf = true
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        body.write_string(
+          "  erf_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{out_numel})\n",
         )
       }
       @nn_ir.Softmax(axis~) => {
@@ -1333,6 +1466,47 @@ fn emit_arena_model(
           body.write_string("  }\n")
         }
       }
+      @nn_ir.Transpose(perm~) => {
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let sx = shapes.get(ins[0]).unwrap()
+        let rank = sx.length()
+        let eff_perm = if perm.length() == rank {
+          perm
+        } else {
+          Array::makei(rank, fn(d) { rank - 1 - d })
+        }
+        let in_strides = @tensor.compute_strides(sx)
+        let out_strides = @tensor.compute_strides(out_sh)
+        // 展开 1D~4D 静态转置循环，零堆分配完成多头注意力 [B,S,H,D] <-> [B,H,S,D] 等重排
+        for d = 0; d < rank; d = d + 1 {
+          body.write_string(
+            "  for tr_\{d} = 0; tr_\{d} < \{out_sh[d]}; tr_\{d} = tr_\{d} + 1 {\n",
+          )
+        }
+        let src_expr = StringBuilder()
+        let dst_expr = StringBuilder()
+        src_expr.write_string("\{x_off}")
+        dst_expr.write_string("\{y_off}")
+        for d = 0; d < rank; d = d + 1 {
+          src_expr.write_string(" + tr_\{d} * \{in_strides[eff_perm[d]]}")
+          dst_expr.write_string(" + tr_\{d} * \{out_strides[d]}")
+        }
+        body.write_string(
+          "    \{y_buf}[\{dst_expr.to_string()}] = \{x_buf}[\{src_expr.to_string()}]\n",
+        )
+        for _d = 0; _d < rank; _d = _d + 1 {
+          body.write_string("  }\n")
+        }
+      }
+      @nn_ir.Cast(to~) => {
+        let _ = to
+        let in_param = input_param_of.get(ins[0]).unwrap()
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        body.write_string(
+          "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = Float::from_int(\{in_param}[k_i].to_int()) }\n",
+        )
+      }
       @nn_ir.Gather(axis~) => {
         let (x_buf, x_off) = resolve_f32_loc(ins[0])
         let (y_buf, y_off) = resolve_f32_loc(out_n)
@@ -1348,21 +1522,42 @@ fn emit_arena_model(
         for d = ax + 1; d < rank; d = d + 1 {
           inner = inner * sd[d]
         }
-        let idx_buf = graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
-            e => raise TensorErr("\{e}")
+        match graph.initializers.get(ins[1]) {
+          Some(idx_t) => {
+            let idx_buf = idx_t.to_i64_buffer() catch {
+              e => raise TensorErr("\{e}")
+            }
+            let idx_len = idx_buf.length()
+            for k = 0; k < idx_len; k = k + 1 {
+              let raw = idx_buf[k].to_int()
+              let norm = if raw < 0 { raw + axis_dim } else { raw }
+              if outer == 1 {
+                body.write_string(
+                  "  for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[\{y_off + k * inner} + g_j] = \{x_buf}[\{x_off + norm * inner} + g_j] }\n",
+                )
+              } else {
+                body.write_string(
+                  "  for g_o = 0; g_o < \{outer}; g_o = g_o + 1 { for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[\{y_off} + (g_o * \{idx_len} + \{k}) * \{inner} + g_j] = \{x_buf}[\{x_off} + (g_o * \{axis_dim} + \{norm}) * \{inner} + g_j] } }\n",
+                )
+              }
+            }
           }
-        let idx_len = idx_buf.length()
-        for k = 0; k < idx_len; k = k + 1 {
-          let raw = idx_buf[k].to_int()
-          let norm = if raw < 0 { raw + axis_dim } else { raw }
-          if outer == 1 {
-            body.write_string(
-              "  for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[\{y_off + k * inner} + g_j] = \{x_buf}[\{x_off + norm * inner} + g_j] }\n",
-            )
-          } else {
-            body.write_string(
-              "  for g_o = 0; g_o < \{outer}; g_o = g_o + 1 { for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[\{y_off} + (g_o * \{idx_len} + \{k}) * \{inner} + g_j] = \{x_buf}[\{x_off} + (g_o * \{axis_dim} + \{norm}) * \{inner} + g_j] } }\n",
-            )
+          None => {
+            // 动态 Int64 输入索引查表（如 Transformer Embedding 表查表）
+            let idx_param = input_param_of.get(ins[1]).unwrap()
+            let idx_sh = shapes.get(ins[1]).unwrap()
+            let idx_len = @tensor.num_elements(idx_sh) catch {
+              e => raise ShapeError("\{e}")
+            }
+            if outer == 1 {
+              body.write_string(
+                "  for g_k = 0; g_k < \{idx_len}; g_k = g_k + 1 { let raw_idx = \{idx_param}[g_k].to_int(); let norm_idx = if raw_idx < 0 { raw_idx + \{axis_dim} } else { raw_idx }; let src_b = \{x_off} + norm_idx * \{inner}; let dst_b = \{y_off} + g_k * \{inner}; for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[dst_b + g_j] = \{x_buf}[src_b + g_j] } }\n",
+              )
+            } else {
+              body.write_string(
+                "  for g_o = 0; g_o < \{outer}; g_o = g_o + 1 { for g_k = 0; g_k < \{idx_len}; g_k = g_k + 1 { let raw_idx = \{idx_param}[g_k].to_int(); let norm_idx = if raw_idx < 0 { raw_idx + \{axis_dim} } else { raw_idx }; let src_b = \{x_off} + (g_o * \{axis_dim} + norm_idx) * \{inner}; let dst_b = \{y_off} + (g_o * \{idx_len} + g_k) * \{inner}; for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[dst_b + g_j] = \{x_buf}[src_b + g_j] } } }\n",
+              )
+            }
           }
         }
       }
@@ -1746,6 +1941,28 @@ fn emit_arena_model(
     src.write_string("  }\n}\n\n")
   }
 
+  if need_erf {
+    src.write_string("///|\n")
+    src.write_string(
+      "/// 零分配高斯误差函数 Erf（Abramowitz & Stegun 7.1.26，最大误差 < 1.5e-7）。\n",
+    )
+    src.write_string(
+      "fn erf_f32(x : FixedArray[Float], x_off : Int32, y : FixedArray[Float], y_off : Int32, n : Int32) -> Unit {\n",
+    )
+    src.write_string("  for i = 0; i < n; i = i + 1 {\n")
+    src.write_string("    let v = x[x_off + i].to_double()\n")
+    src.write_string("    let sign = if v < 0.0 { -1.0 } else { 1.0 }\n")
+    src.write_string("    let ax = if v < 0.0 { -v } else { v }\n")
+    src.write_string("    let t = 1.0 / (1.0 + 0.3275911 * ax)\n")
+    src.write_string(
+      "    let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t\n",
+    )
+    src.write_string(
+      "    y[y_off + i] = Float::from_double(sign * (1.0 - poly * @math.exp(-ax * ax)))\n",
+    )
+    src.write_string("  }\n}\n\n")
+  }
+
   if need_softmax {
     src.write_string("///|\n")
     src.write_string("/// 零分配数值稳定 Softmax。\n")
@@ -1982,14 +2199,22 @@ fn emit_arena_model(
   }
 
   // forward_into（真正 0 堆分配热路径）
+  fn input_arr_type(name : String) -> String {
+    match dtypes.get(name) {
+      Some(@tensor.Int64) => "FixedArray[Int64]"
+      _ => "FixedArray[Float]"
+    }
+  }
+
   if single_io {
     let (final_buf, final_off) = resolve_f32_loc(out_names[0])
+    let in_ty = input_arr_type(in_names[0])
     src.write_string("///|\n")
     src.write_string(
       "/// 零堆分配前向推理入口：将输入 `input[\{in_lens[0]}]` 推理结果直接写入调用方缓冲 `output[\{out_lens[0]}]`。\n",
     )
     src.write_string(
-      "pub fn \{sname}::forward_into(\n  self : \{sname},\n  input : FixedArray[Float],\n  output : FixedArray[Float],\n) -> Unit {\n",
+      "pub fn \{sname}::forward_into(\n  self : \{sname},\n  input : \{in_ty},\n  output : FixedArray[Float],\n) -> Unit {\n",
     )
     src.write_string(body.to_string())
     src.write_string("  for k_i = 0; k_i < \{out_lens[0]}; k_i = k_i + 1 {\n")
@@ -2002,7 +2227,7 @@ fn emit_arena_model(
       "/// 便捷前向推理入口：返回新分配的 `FixedArray[Float]` 输出结果。\n",
     )
     src.write_string(
-      "pub fn \{sname}::forward_f32(\n  self : \{sname},\n  input : FixedArray[Float],\n) -> FixedArray[Float] {\n",
+      "pub fn \{sname}::forward_f32(\n  self : \{sname},\n  input : \{in_ty},\n) -> FixedArray[Float] {\n",
     )
     src.write_string(
       "  let out = FixedArray::make(\{out_lens[0]}, (0.0 : Float))\n",
@@ -2016,7 +2241,8 @@ fn emit_arena_model(
     )
     src.write_string("pub fn \{sname}::forward_into(\n  self : \{sname},\n")
     for k = 0; k < in_names.length(); k = k + 1 {
-      src.write_string("  in_\{k} : FixedArray[Float],\n")
+      let in_ty = input_arr_type(in_names[k])
+      src.write_string("  in_\{k} : \{in_ty},\n")
     }
     for k = 0; k < out_names.length(); k = k + 1 {
       src.write_string("  out_\{k} : FixedArray[Float],\n")
@@ -2037,7 +2263,8 @@ fn emit_arena_model(
     )
     src.write_string("pub fn \{sname}::forward_f32(\n  self : \{sname},\n")
     for k = 0; k < in_names.length(); k = k + 1 {
-      src.write_string("  in_\{k} : FixedArray[Float],\n")
+      let in_ty = input_arr_type(in_names[k])
+      src.write_string("  in_\{k} : \{in_ty},\n")
     }
     src.write_string(") -> Array[FixedArray[Float]] {\n")
     for k = 0; k < out_names.length(); k = k + 1 {

@@ -148,6 +148,28 @@ pub(all) enum Op {
   )
   /// 逐元素相等比较（支持 NumPy 广播，输出 `Bool` 张量）
   Equal
+  /// 逐元素小于比较（支持 NumPy 广播，输出 `Bool` 张量）
+  Less
+  /// 逐元素大于比较（支持 NumPy 广播，输出 `Bool` 张量）
+  Greater
+  /// 逐元素小于等于比较（支持 NumPy 广播，输出 `Bool` 张量）
+  LessOrEqual
+  /// 逐元素大于等于比较（支持 NumPy 广播，输出 `Bool` 张量）
+  GreaterOrEqual
+  /// 逐元素布尔取反
+  Not
+  /// 逐元素布尔与（支持 NumPy 广播）
+  And
+  /// 逐元素三目选择 `Where(condition, X, Y)`（支持三向 NumPy 广播）
+  Where
+  /// 高斯误差函数 `erf(x)`（PyTorch/HuggingFace 精确 GELU 核心算子）
+  Erf
+  /// 等差一维序列生成 `Range(start, limit, delta)`
+  Range
+  /// 多向广播张量扩展 `Expand(input, shape)`
+  Expand
+  /// 沿各维度重复平铺张量 `Tile(input, repeats)`
+  Tile
   /// 按输入 1D 形状张量填充标量常量的张量生成算子（默认 `Float32(0.0)`）
   ConstantOfShape(value~ : @tensor.Tensor)
   /// ONNX 条件控制流算子：根据标量布尔条件选择执行 `then_branch` 或 `else_branch` 子图
@@ -209,6 +231,17 @@ pub fn Op::name(self : Op) -> String {
     Resize(..) => "Resize"
     Lstm(..) => "LSTM"
     Equal => "Equal"
+    Less => "Less"
+    Greater => "Greater"
+    LessOrEqual => "LessOrEqual"
+    GreaterOrEqual => "GreaterOrEqual"
+    Not => "Not"
+    And => "And"
+    Where => "Where"
+    Erf => "Erf"
+    Range => "Range"
+    Expand => "Expand"
+    Tile => "Tile"
     ConstantOfShape(..) => "ConstantOfShape"
     If(..) => "If"
   }

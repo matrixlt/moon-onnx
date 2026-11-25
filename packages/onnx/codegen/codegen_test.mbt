@@ -552,3 +552,192 @@ test "compile_graph_to_mbt specializes If branch and emits multi-IO Arena code" 
   assert_true(art.mbt_source.contains("out_1 : FixedArray[Float]"))
   assert_true(!art.pkg_config.contains("matrixlt/tensor"))
 }
+
+///|
+/// 验证迷你 BERT/Transformer 编码块（含 `Int64` 输入、动态 `Gather` 词嵌入、
+/// `Unsqueeze -> Cast` 掩码、9 节点融合 `LayerNormalization`、多头 `Transpose`、
+/// 批量动态 `Q@K^T` 与 4D 广播掩码 `Add`、`Softmax` 以及 `Erf` GELU）
+/// 可完整编译为零堆分配 `Arena` 模式且无 `matrixlt/tensor` 依赖。
+test "Transformer encoder block compiles to zero-allocation Arena mode with Int64 inputs" {
+  let emb_w = @tensor.Tensor::full_f32([16, 8], (0.1 : Float))
+  let w_q = @tensor.Tensor::full_f32([8, 8], (0.05 : Float))
+  let b_q = @tensor.Tensor::full_f32([8], (0.01 : Float))
+  let ln_g = @tensor.Tensor::full_f32([8], (1.0 : Float))
+  let ln_b = @tensor.Tensor::full_f32([8], (0.0 : Float))
+  let sh_4d = @tensor.Tensor::from_i64([4], [1, 4, 2, 4])
+  let sh_3d = @tensor.Tensor::from_i64([3], [1, 4, 8])
+  let inv_sqrt_d = @tensor.Tensor::from_f32_array([], [0.5])
+  let mask_scale = @tensor.Tensor::from_f32_array([], [-10000.0])
+  let one_f = @tensor.Tensor::from_f32_array([], [1.0])
+  let ax1 = @tensor.Tensor::from_i64([1], [1])
+  let ax2 = @tensor.Tensor::from_i64([1], [2])
+
+  let g : @nn_ir.IrGraph = {
+    name: "mini_bert",
+    inputs: ["input_ids", "attention_mask"],
+    outputs: ["hidden"],
+    initializers: Map([
+      ("emb_w", emb_w),
+      ("w_q", w_q),
+      ("b_q", b_q),
+      ("ln_g", ln_g),
+      ("ln_b", ln_b),
+      ("sh_4d", sh_4d),
+      ("sh_3d", sh_3d),
+      ("inv_sqrt_d", inv_sqrt_d),
+      ("mask_scale", mask_scale),
+      ("one_f", one_f),
+      ("ax1", ax1),
+      ("ax2", ax2),
+    ]),
+    nodes: [
+      {
+        name: "emb",
+        op: @nn_ir.Gather(axis=0),
+        inputs: ["emb_w", "input_ids"],
+        outputs: ["x0"],
+      },
+      {
+        name: "ln0",
+        op: @nn_ir.LayerNormalization(axis=-1, epsilon=(1.0e-12 : Float)),
+        inputs: ["x0", "ln_g", "ln_b"],
+        outputs: ["x1"],
+      },
+      // attention_mask [1, 4] -> [1, 1, 1, 4] -> f32 -> (1 - m) * -10000
+      {
+        name: "u1",
+        op: @nn_ir.Unsqueeze(axes=None),
+        inputs: ["attention_mask", "ax1"],
+        outputs: ["m1"],
+      },
+      {
+        name: "u2",
+        op: @nn_ir.Unsqueeze(axes=None),
+        inputs: ["m1", "ax2"],
+        outputs: ["m2"],
+      },
+      {
+        name: "cast_m",
+        op: @nn_ir.Cast(to=@tensor.Float32),
+        inputs: ["m2"],
+        outputs: ["mf"],
+      },
+      {
+        name: "sub_m",
+        op: @nn_ir.Sub,
+        inputs: ["one_f", "mf"],
+        outputs: ["inv_m"],
+      },
+      {
+        name: "mul_m",
+        op: @nn_ir.Mul,
+        inputs: ["inv_m", "mask_scale"],
+        outputs: ["ext_mask"],
+      },
+      // Q projection + symmetric bias [8] + [1, 4, 8]
+      {
+        name: "mm_q",
+        op: @nn_ir.MatMul,
+        inputs: ["x1", "w_q"],
+        outputs: ["q_raw"],
+      },
+      {
+        name: "add_bq",
+        op: @nn_ir.Add,
+        inputs: ["b_q", "q_raw"],
+        outputs: ["q_lin"],
+      },
+      {
+        name: "r_q",
+        op: @nn_ir.Reshape(allowzero=false),
+        inputs: ["q_lin", "sh_4d"],
+        outputs: ["q_4d"],
+      },
+      {
+        name: "t_q",
+        op: @nn_ir.Transpose(perm=[0, 2, 1, 3]),
+        inputs: ["q_4d"],
+        outputs: ["q_h"],
+      },
+      {
+        name: "t_k",
+        op: @nn_ir.Transpose(perm=[0, 2, 3, 1]),
+        inputs: ["q_4d"],
+        outputs: ["k_h"],
+      },
+      // Batched dynamic Q @ K^T -> [1, 2, 4, 4]
+      {
+        name: "qk",
+        op: @nn_ir.MatMul,
+        inputs: ["q_h", "k_h"],
+        outputs: ["scores"],
+      },
+      {
+        name: "sc",
+        op: @nn_ir.Mul,
+        inputs: ["scores", "inv_sqrt_d"],
+        outputs: ["scores_sc"],
+      },
+      // 4D broadcast add: [1, 2, 4, 4] + [1, 1, 1, 4]
+      {
+        name: "add_mask",
+        op: @nn_ir.Add,
+        inputs: ["scores_sc", "ext_mask"],
+        outputs: ["masked"],
+      },
+      {
+        name: "sm",
+        op: @nn_ir.Softmax(axis=-1),
+        inputs: ["masked"],
+        outputs: ["probs"],
+      },
+      // Batched dynamic P @ V -> [1, 2, 4, 4]
+      {
+        name: "pv",
+        op: @nn_ir.MatMul,
+        inputs: ["probs", "q_h"],
+        outputs: ["ctx"],
+      },
+      {
+        name: "t_c",
+        op: @nn_ir.Transpose(perm=[0, 2, 1, 3]),
+        inputs: ["ctx"],
+        outputs: ["ctx_t"],
+      },
+      {
+        name: "r_c",
+        op: @nn_ir.Reshape(allowzero=false),
+        inputs: ["ctx_t", "sh_3d"],
+        outputs: ["ctx_3d"],
+      },
+      { name: "erf0", op: @nn_ir.Erf, inputs: ["ctx_3d"], outputs: ["hidden"], },
+    ],
+  }
+
+  let art = @codegen.compile_graph_to_mbt(
+    g,
+    Map([("input_ids", [1, 4]), ("attention_mask", [1, 4])]),
+    config={
+      ..@codegen.CodegenConfig::default(),
+      struct_name: "MiniBertL1",
+      target: @codegen.TargetWasm,
+      input_dtypes: Map([
+        ("input_ids", @tensor.Int64),
+        ("attention_mask", @tensor.Int64),
+      ]),
+    },
+  )
+  assert_eq(art.mode_used, @codegen.Arena)
+  assert_eq(art.input_shapes, [
+    ("input_ids", [1, 4]),
+    ("attention_mask", [1, 4]),
+  ])
+  assert_eq(art.output_shapes, [("hidden", [1, 4, 8])])
+  assert_true(art.arena_f32_elems < art.arena_f32_naive_elems)
+  assert_true(art.mbt_source.contains("in_0 : FixedArray[Int64]"))
+  assert_true(art.mbt_source.contains("in_1 : FixedArray[Int64]"))
+  assert_true(art.mbt_source.contains("fn erf_f32("))
+  assert_true(art.mbt_source.contains("fn layernorm_f32("))
+  assert_true(art.mbt_source.contains("fn softmax_f32("))
+  assert_true(!art.pkg_config.contains("matrixlt/tensor"))
+}

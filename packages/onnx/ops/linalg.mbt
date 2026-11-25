@@ -303,28 +303,35 @@ pub fn gemm_prepacked_f32(
 }
 
 ///|
-/// 使用预打包权重矩阵 `PackedMatrixB` 执行 2D V128 SIMD `MatMul`（运行期零权重打包开销，支持 BufferPool）。
+/// 使用预打包权重矩阵 `PackedMatrixB` 执行 V128 SIMD `MatMul`（支持 2D 与任意高维 `[..., M, K] @ [K, N]`，零权重打包开销）。
 pub fn matmul_prepacked_f32(
   a : @tensor.Tensor,
   packed_b : @gemm.PackedMatrixB,
   pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
-  if a.rank() != 2 {
+  let sa = a.shape()
+  let rank = sa.length()
+  if rank < 2 {
     raise @tensor.ShapeMismatch(
-      "matmul_prepacked_f32: A must be 2D matrix, got rank \{a.rank()}",
+      "matmul_prepacked_f32: A must have rank >= 2, got rank \{rank}",
     )
   }
-  let sa = a.shape()
-  let m = sa[0]
-  let k = sa[1]
+  let k = sa[rank - 1]
   let (kb, n) = packed_b.dims()
   if k != kb {
     raise @tensor.ShapeMismatch(
       "matmul_prepacked_f32: inner dimension mismatch (\{k} vs \{kb})",
     )
   }
+  let mut m = 1
+  for d = 0; d < rank - 1; d = d + 1 {
+    m = m * sa[d]
+  }
+  let out_shape = sa.copy()
+  out_shape[rank - 1] = n
+
   let a_buf = a.to_f32_buffer()
   let out = alloc_f32(pool, m * n)
   @gemm.matmul_2d_prepacked_simd_f32(a_buf, 0, packed_b, out, 0, m)
-  @tensor.Tensor::from_f32([m, n], out)
+  @tensor.Tensor::from_f32(out_shape, out)
 }

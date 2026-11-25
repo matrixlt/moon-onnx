@@ -210,7 +210,7 @@ fn eval_cpu_node(
       @nn_ir.Constant(value~) => value
       @nn_ir.MatMul => {
         let a = ctx.require_tensor(n, ins, 0)
-        if use_simd && a.rank() == 2 && ins.length() >= 2 {
+        if use_simd && a.rank() >= 2 && ins.length() >= 2 {
           match ctx.packed_weights.get(ins[1]) {
             Some(pb) => return @ops.matmul_prepacked_f32(a, pb, pool=out_pool)
             None => ()
@@ -590,6 +590,61 @@ fn eval_cpu_node(
         let a = ctx.require_tensor(n, ins, 0)
         let b = ctx.require_tensor(n, ins, 1)
         @ops.equal_op(a, b)
+      }
+      @nn_ir.Less => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.less_op(a, b)
+      }
+      @nn_ir.Greater => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.greater_op(a, b)
+      }
+      @nn_ir.LessOrEqual => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.less_or_equal_op(a, b)
+      }
+      @nn_ir.GreaterOrEqual => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.greater_or_equal_op(a, b)
+      }
+      @nn_ir.Not => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.not_op(x)
+      }
+      @nn_ir.And => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.and_op(a, b)
+      }
+      @nn_ir.Where => {
+        let cond = ctx.require_tensor(n, ins, 0)
+        let x = ctx.require_tensor(n, ins, 1)
+        let y = ctx.require_tensor(n, ins, 2)
+        @ops.where_op(cond, x, y, pool=out_pool)
+      }
+      @nn_ir.Erf => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.erf_f32(x, pool=out_pool)
+      }
+      @nn_ir.Range => {
+        let start = ctx.require_tensor(n, ins, 0)
+        let limit = ctx.require_tensor(n, ins, 1)
+        let delta = ctx.require_tensor(n, ins, 2)
+        @ops.range_op(start, limit, delta)
+      }
+      @nn_ir.Expand => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let shape_t = ctx.require_tensor(n, ins, 1)
+        @ops.expand_op(x, shape_t, pool=out_pool)
+      }
+      @nn_ir.Tile => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let reps_t = ctx.require_tensor(n, ins, 1)
+        @ops.tile_op(x, reps_t, pool=out_pool)
       }
       @nn_ir.ConstantOfShape(value~) => {
         let shape_t = ctx.require_tensor(n, ins, 0)

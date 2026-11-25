@@ -335,6 +335,7 @@ fn handle_compile(args : Array[String]) -> Unit {
       mode,
       embed_weights,
       frozen_inputs,
+      input_dtypes: Map([]),
     }
     let art = @onnx.compile_model_to_mbt(m, input_shapes, config=cfg)
 

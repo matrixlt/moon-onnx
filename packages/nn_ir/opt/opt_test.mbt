@@ -193,3 +193,85 @@ test "optimize_graph folds Conv+BN+Clip(ReLU6) into single fused Conv+Clip" {
     _ => fail("expected fused Conv+Clip")
   }
 }
+
+///|
+/// 验证 9 节点 PyTorch 分解版 LayerNorm 子图被自动模式融合为单个 `@nn_ir.LayerNormalization` 算子。
+test "pass_fold_layernorm fuses 9-node PyTorch decomposed LayerNorm" {
+  let c_two = @tensor.Tensor::from_f32_array([], [2.0])
+  let c_eps = @tensor.Tensor::from_f32_array([], [1.0e-12])
+  let gamma = @tensor.Tensor::from_f32_array([4], [1.0, 2.0, 0.5, 1.5])
+  let beta = @tensor.Tensor::from_f32_array([4], [0.1, -0.1, 0.2, 0.0])
+  let g : @nn_ir.IrGraph = {
+    name: "decomposed_ln",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: Map([
+      ("two", c_two),
+      ("eps", c_eps),
+      ("gamma", gamma),
+      ("beta", beta),
+    ]),
+    nodes: [
+      {
+        name: "m1",
+        op: @nn_ir.ReduceMean(
+          axes=Some([-1]),
+          keepdims=true,
+          noop_with_empty_axes=false,
+        ),
+        inputs: ["x"],
+        outputs: ["mean"],
+      },
+      { name: "s1", op: @nn_ir.Sub, inputs: ["x", "mean"], outputs: ["diff"], },
+      { name: "p1", op: @nn_ir.Pow, inputs: ["diff", "two"], outputs: ["sq"], },
+      {
+        name: "m2",
+        op: @nn_ir.ReduceMean(
+          axes=Some([-1]),
+          keepdims=true,
+          noop_with_empty_axes=false,
+        ),
+        inputs: ["sq"],
+        outputs: ["var"],
+      },
+      {
+        name: "a1",
+        op: @nn_ir.Add,
+        inputs: ["var", "eps"],
+        outputs: ["var_eps"],
+      },
+      { name: "sq1", op: @nn_ir.Sqrt, inputs: ["var_eps"], outputs: ["std"], },
+      {
+        name: "d1",
+        op: @nn_ir.Div,
+        inputs: ["diff", "std"],
+        outputs: ["norm"],
+      },
+      {
+        name: "mul1",
+        op: @nn_ir.Mul,
+        inputs: ["norm", "gamma"],
+        outputs: ["scaled"],
+      },
+      {
+        name: "add2",
+        op: @nn_ir.Add,
+        inputs: ["scaled", "beta"],
+        outputs: ["y"],
+      },
+    ],
+  }
+
+  let (opt_g, stats) = @opt.optimize_graph(g)
+  assert_eq(stats.folded_layernorm, 1)
+  assert_eq(opt_g.nodes.length(), 1)
+  assert_eq(opt_g.nodes[0].inputs, ["x", "gamma", "beta"])
+  assert_eq(opt_g.nodes[0].outputs, ["y"])
+  match opt_g.nodes[0].op {
+    @nn_ir.LayerNormalization(axis~, epsilon~) => {
+      assert_eq(axis, -1)
+      assert_true((epsilon - (1.0e-12 : Float)).abs() < (1.0e-15 : Float))
+    }
+    _ => fail("expected fused LayerNormalization")
+  }
+}

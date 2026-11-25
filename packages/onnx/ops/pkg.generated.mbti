@@ -10,6 +10,8 @@ import {
 // Values
 pub fn add_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn and_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn avgpool_2d_f32(@tensor.Tensor, Array[Int32], Array[Int32], Array[Int32], Bool, Bool, @nn_ir.AutoPad, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn batch_norm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, epsilon? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
@@ -32,7 +34,11 @@ pub fn div_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor
 
 pub fn equal_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn erf_f32(@tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn exp_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn expand_op(@tensor.Tensor, @tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn flatten_op(@tensor.Tensor, axis? : Int32) -> @tensor.Tensor raise @tensor.TensorError
 
@@ -46,11 +52,19 @@ pub fn gemm_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB, @tensor.Tensor?, 
 
 pub fn global_avgpool_f32(@tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn greater_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn greater_or_equal_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn hard_swish_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn layer_norm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, axis? : Int32, epsilon? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn leaky_relu_f32(@tensor.Tensor, alpha? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn less_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn less_or_equal_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn lstm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, hidden_size? : Int32?, direction? : String, layout? : Int32, clip? : Float?) -> Array[@tensor.Tensor] raise @tensor.TensorError
 
@@ -64,6 +78,8 @@ pub fn mul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor
 
 pub fn neg_f32(@tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn not_op(@tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn pack_conv2d_weight_f32(@tensor.Tensor, Int32) -> PackedConvWeight raise @tensor.TensorError
 
 pub fn pad_f32(@tensor.Tensor, Array[Int32], String, Float, Array[Int32]?, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
@@ -73,6 +89,8 @@ pub fn pow_f32(@tensor.Tensor, @tensor.Tensor, pool? : @tensor.BufferPool?) -> @
 pub fn qlinear_matmul_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, use_simd? : Bool) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn quantize_linear_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, axis? : Int32) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn range_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn reduce_mean_f32(@tensor.Tensor, Array[Int32]?, @tensor.Tensor?, keepdims? : Bool, noop_with_empty_axes? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
@@ -102,9 +120,13 @@ pub fn sub_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor
 
 pub fn tanh_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn tile_op(@tensor.Tensor, @tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn transpose_op(@tensor.Tensor, Array[Int32]) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn unsqueeze_op(@tensor.Tensor, Array[Int32]?, @tensor.Tensor?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn where_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 // Errors
 

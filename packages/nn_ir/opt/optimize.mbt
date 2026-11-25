@@ -7,6 +7,7 @@ pub(all) struct OptStats {
   folded_conv_bn : Int32
   folded_conv_bias : Int32
   folded_conv_activation : Int32
+  folded_layernorm : Int32
   pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }
@@ -630,6 +631,180 @@ fn pass_fold_conv_activation(
 }
 
 ///|
+/// Pass 6：Transformer 分解态 `LayerNormalization` 9 节点模式融合。
+/// PyTorch Opset 11~16 导出的 BERT / MiniLM / RoBERTa / ViT 模型会将 `LayerNorm` 展开为：
+/// `ReduceMean(ax=-1) -> Sub -> Pow(2) -> ReduceMean(ax=-1) -> Add(eps) -> Sqrt -> Div -> Mul(gamma) -> [Add(beta)]`
+/// 将该子图融合为单个双精度累加的 `@nn_ir.LayerNormalization` 节点，可大幅削减节点数与 8 份中间激活读写。
+fn pass_fold_layernorm(
+  nodes : Array[@nn_ir.IrNode],
+  initializers : Map[String, @tensor.Tensor],
+  graph_outputs : Array[String],
+) -> (Array[@nn_ir.IrNode], Int32) {
+  let uses = count_tensor_uses(nodes, graph_outputs)
+  let kept : Array[@nn_ir.IrNode] = []
+  let mut folded = 0
+  let mut i = 0
+  let n = nodes.length()
+
+  while i < n {
+    if i + 7 < n {
+      let n_rm1 = nodes[i]
+      let n_sub = nodes[i + 1]
+      let n_pow = nodes[i + 2]
+      let n_rm2 = nodes[i + 3]
+      let n_add_eps = nodes[i + 4]
+      let n_sqrt = nodes[i + 5]
+      let n_div = nodes[i + 6]
+      let n_mul = nodes[i + 7]
+
+      match
+        (
+          n_rm1.op,
+          n_sub.op,
+          n_pow.op,
+          n_rm2.op,
+          n_add_eps.op,
+          n_sqrt.op,
+          n_div.op,
+          n_mul.op,
+        ) {
+        (
+          @nn_ir.ReduceMean(axes=Some(ax1), keepdims=true, ..),
+          @nn_ir.Sub,
+          @nn_ir.Pow,
+          @nn_ir.ReduceMean(axes=Some(ax2), keepdims=true, ..),
+          @nn_ir.Add,
+          @nn_ir.Sqrt,
+          @nn_ir.Div,
+          @nn_ir.Mul,
+        ) if ax1.length() == 1 && ax2.length() == 1 && ax1[0] == ax2[0] => {
+          let x_name = n_rm1.inputs[0]
+          let mean_name = n_rm1.outputs[0]
+          let diff_name = n_sub.outputs[0]
+          let sq_name = n_pow.outputs[0]
+          let var_name = n_rm2.outputs[0]
+          let veps_name = n_add_eps.outputs[0]
+          let std_name = n_sqrt.outputs[0]
+          let norm_name = n_div.outputs[0]
+          let scaled_name = n_mul.outputs[0]
+
+          // 校验拓扑连通性与中间张量使用计数，确保无外部旁路消费
+          let chain_ok = n_sub.inputs.length() == 2 &&
+            n_sub.inputs[0] == x_name &&
+            n_sub.inputs[1] == mean_name &&
+            uses.get(mean_name) == Some(1) &&
+            n_pow.inputs.length() == 2 &&
+            n_pow.inputs[0] == diff_name &&
+            extract_static_scalar_f32(initializers, n_pow.inputs[1]) ==
+            Some((2.0 : Float)) &&
+            uses.get(diff_name) == Some(2) &&
+            n_rm2.inputs.length() >= 1 &&
+            n_rm2.inputs[0] == sq_name &&
+            uses.get(sq_name) == Some(1) &&
+            uses.get(var_name) == Some(1) &&
+            n_sqrt.inputs.length() == 1 &&
+            n_sqrt.inputs[0] == veps_name &&
+            uses.get(veps_name) == Some(1) &&
+            n_div.inputs.length() == 2 &&
+            n_div.inputs[0] == diff_name &&
+            n_div.inputs[1] == std_name &&
+            uses.get(std_name) == Some(1) &&
+            uses.get(norm_name) == Some(1)
+
+          // 解析 Add(var, eps) 或 Add(eps, var) 中的静态 epsilon 标量
+          let eps_opt : Float? = if chain_ok && n_add_eps.inputs.length() == 2 {
+            if n_add_eps.inputs[0] == var_name {
+              extract_static_scalar_f32(initializers, n_add_eps.inputs[1])
+            } else if n_add_eps.inputs[1] == var_name {
+              extract_static_scalar_f32(initializers, n_add_eps.inputs[0])
+            } else {
+              None
+            }
+          } else {
+            None
+          }
+
+          // 解析 Mul(norm, gamma) 或 Mul(gamma, norm) 中的 1D 静态缩放权重
+          let gamma_opt : String? = if chain_ok && n_mul.inputs.length() == 2 {
+            let cand = if n_mul.inputs[0] == norm_name {
+              n_mul.inputs[1]
+            } else if n_mul.inputs[1] == norm_name {
+              n_mul.inputs[0]
+            } else {
+              ""
+            }
+            match initializers.get(cand) {
+              Some(gt) if gt.rank() == 1 && gt.dtype() == @tensor.Float32 =>
+                Some(cand)
+              _ => None
+            }
+          } else {
+            None
+          }
+
+          match (eps_opt, gamma_opt) {
+            (Some(eps), Some(gamma_name)) if eps >= (0.0 : Float) => {
+              // 检查紧邻的第 9 个节点是否为可选 bias Add(scaled, beta)
+              let mut fused_with_bias = false
+              if i + 8 < n && uses.get(scaled_name) == Some(1) {
+                let n_add_b = nodes[i + 8]
+                match n_add_b.op {
+                  @nn_ir.Add if n_add_b.inputs.length() == 2 => {
+                    let cand_b = if n_add_b.inputs[0] == scaled_name {
+                      n_add_b.inputs[1]
+                    } else if n_add_b.inputs[1] == scaled_name {
+                      n_add_b.inputs[0]
+                    } else {
+                      ""
+                    }
+                    match initializers.get(cand_b) {
+                      Some(bt) if bt.rank() == 1 &&
+                        bt.dtype() == @tensor.Float32 => {
+                        kept.push({
+                          name: "\{n_rm1.name}_fused_ln",
+                          op: @nn_ir.LayerNormalization(
+                            axis=ax1[0],
+                            epsilon=eps,
+                          ),
+                          inputs: [x_name, gamma_name, cand_b],
+                          outputs: n_add_b.outputs.copy(),
+                        })
+                        folded = folded + 1
+                        i = i + 9
+                        fused_with_bias = true
+                      }
+                      _ => ()
+                    }
+                  }
+                  _ => ()
+                }
+              }
+              if fused_with_bias {
+                continue
+              }
+              kept.push({
+                name: "\{n_rm1.name}_fused_ln",
+                op: @nn_ir.LayerNormalization(axis=ax1[0], epsilon=eps),
+                inputs: [x_name, gamma_name],
+                outputs: n_mul.outputs.copy(),
+              })
+              folded = folded + 1
+              i = i + 8
+              continue
+            }
+            _ => ()
+          }
+        }
+        _ => ()
+      }
+    }
+    kept.push(nodes[i])
+    i = i + 1
+  }
+  (kept, folded)
+}
+
+///|
 /// 递归优化 `If` 控制流节点内部的 `then_branch` 与 `else_branch` 子图，累加统计信息。
 fn pass_optimize_subgraphs(
   nodes : Array[@nn_ir.IrNode],
@@ -640,6 +815,7 @@ fn pass_optimize_subgraphs(
   let mut conv_bn = 0
   let mut conv_bias = 0
   let mut conv_act = 0
+  let mut ln_fold = 0
   let mut gemm_pt = 0
   let mut dead = 0
 
@@ -656,6 +832,7 @@ fn pass_optimize_subgraphs(
         conv_act = conv_act +
           s1.folded_conv_activation +
           s2.folded_conv_activation
+        ln_fold = ln_fold + s1.folded_layernorm + s2.folded_layernorm
         gemm_pt = gemm_pt +
           s1.pretransposed_gemm_weights +
           s2.pretransposed_gemm_weights
@@ -678,6 +855,7 @@ fn pass_optimize_subgraphs(
       folded_conv_bn: conv_bn,
       folded_conv_bias: conv_bias,
       folded_conv_activation: conv_act,
+      folded_layernorm: ln_fold,
       pretransposed_gemm_weights: gemm_pt,
       eliminated_dead_nodes: dead,
     },
@@ -706,17 +884,22 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     initializers,
     graph.outputs,
   )
-  let (n6, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(
-    n5, initializers,
+  let (n6, folded_layernorm) = pass_fold_layernorm(
+    n5,
+    initializers,
+    graph.outputs,
   )
-  let (n7, eliminated_dead_nodes) = pass_dce(n6, graph.outputs)
+  let (n7, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(
+    n6, initializers,
+  )
+  let (n8, eliminated_dead_nodes) = pass_dce(n7, graph.outputs)
 
   let optimized : @nn_ir.IrGraph = {
     name: graph.name,
     inputs: graph.inputs.copy(),
     outputs: graph.outputs.copy(),
     initializers,
-    nodes: n7,
+    nodes: n8,
   }
   let stats : OptStats = {
     lifted_constants: lifted_constants + sub_stats.lifted_constants,
@@ -726,6 +909,7 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     folded_conv_bias: folded_conv_bias + sub_stats.folded_conv_bias,
     folded_conv_activation: folded_conv_activation +
     sub_stats.folded_conv_activation,
+    folded_layernorm: folded_layernorm + sub_stats.folded_layernorm,
     pretransposed_gemm_weights: pretransposed_gemm_weights +
     sub_stats.pretransposed_gemm_weights,
     eliminated_dead_nodes: eliminated_dead_nodes +

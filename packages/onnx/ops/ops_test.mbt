@@ -729,3 +729,95 @@ test "Equal and ConstantOfShape match ONNX semantics" {
   assert_eq(cb[0], (7 : Int64))
   assert_eq(cb[5], (7 : Int64))
 }
+
+///|
+/// 验证 Transformer/NLP 核心算子套件：`Erf`、关系比较、逻辑 `Not`/`And`、`Where`、`Range`、`Expand`、`Tile` 及 3D 预打包 `MatMul`。
+test "Transformer/NLP ops match ONNX semantics" {
+  fn read_bools(t : @tensor.Tensor) -> FixedArray[Bool] {
+    let c = t.contiguous() catch { _ => abort("contiguous failed") }
+    match c.data {
+      @tensor.Bool(buf) => buf
+      _ => abort("expected Bool tensor")
+    }
+  }
+
+  // 1. Erf（高斯误差函数，校验对称性与经典真值）
+  let ex = @tensor.Tensor::from_f32_array([4], [0.0, 1.0, -1.0, 2.0])
+  let ey = @ops.erf_f32(ex)
+  assert_approx(ey.get_f32([0]), (0.0 : Float), (1.0e-6 : Float))
+  assert_approx(ey.get_f32([1]), (0.8427008 : Float), (1.0e-5 : Float))
+  assert_approx(ey.get_f32([2]), (-0.8427008 : Float), (1.0e-5 : Float))
+  assert_approx(ey.get_f32([3]), (0.9953223 : Float), (1.0e-5 : Float))
+
+  // 2. 比较与逻辑算子 + Where（含广播）
+  let a = @tensor.Tensor::from_f32_array([3], [1.0, 2.0, 3.0])
+  let b = @tensor.Tensor::from_f32_array([1], [2.0])
+  let lt = @ops.less_op(a, b)
+  let gt = @ops.greater_op(a, b)
+  let le = @ops.less_or_equal_op(a, b)
+  let ge = @ops.greater_or_equal_op(a, b)
+  assert_eq(read_bools(lt), [true, false, false])
+  assert_eq(read_bools(gt), [false, false, true])
+  assert_eq(read_bools(le), [true, true, false])
+  assert_eq(read_bools(ge), [false, true, true])
+
+  let not_lt = @ops.not_op(lt)
+  assert_eq(read_bools(not_lt), [false, true, true])
+  let and_r = @ops.and_op(le, ge)
+  assert_eq(read_bools(and_r), [false, true, false])
+
+  let neg_inf = @tensor.Tensor::from_f32_array([1], [-10000.0])
+  let w_out = @ops.where_op(le, a, neg_inf)
+  assert_approx(w_out.get_f32([0]), (1.0 : Float), (1.0e-5 : Float))
+  assert_approx(w_out.get_f32([1]), (2.0 : Float), (1.0e-5 : Float))
+  assert_approx(w_out.get_f32([2]), (-10000.0 : Float), (1.0e-5 : Float))
+
+  // 3. Range（Int64 与 Float32，含负步长）
+  let r_i64 = @ops.range_op(
+    @tensor.Tensor::from_i64([], [0]),
+    @tensor.Tensor::from_i64([], [5]),
+    @tensor.Tensor::from_i64([], [2]),
+  )
+  assert_eq(r_i64.shape(), [3])
+  assert_eq(r_i64.to_i64_buffer(), [(0 : Int64), 2, 4])
+
+  let r_f32 = @ops.range_op(
+    @tensor.Tensor::from_f32_array([], [3.0]),
+    @tensor.Tensor::from_f32_array([], [0.0]),
+    @tensor.Tensor::from_f32_array([], [-1.5]),
+  )
+  assert_eq(r_f32.shape(), [2])
+  assert_approx(r_f32.get_f32([0]), (3.0 : Float), (1.0e-5 : Float))
+  assert_approx(r_f32.get_f32([1]), (1.5 : Float), (1.0e-5 : Float))
+
+  // 4. Expand 与 Tile
+  let base = @tensor.Tensor::from_f32_array([1, 3], [10.0, 20.0, 30.0])
+  let exp_t = @ops.expand_op(base, @tensor.Tensor::from_i64([2], [2, 3]))
+  assert_eq(exp_t.shape(), [2, 3])
+  assert_approx(exp_t.get_f32([1, 2]), (30.0 : Float), (1.0e-5 : Float))
+
+  let tiled = @ops.tile_op(base, @tensor.Tensor::from_i64([2], [2, 2]))
+  assert_eq(tiled.shape(), [2, 6])
+  assert_approx(tiled.get_f32([1, 4]), (20.0 : Float), (1.0e-5 : Float))
+
+  // 5. 3D 预打包 MatMul（[B=2, S=3, K=4] @ [K=4, N=5]）对齐通用 matmul_f32
+  let ma = @tensor.Tensor::from_f32_array(
+    [2, 3, 4],
+    Array::makei(24, fn(i) { Float::from_int(i - 10) * (0.25 : Float) }),
+  )
+  let mb = @tensor.Tensor::from_f32_array(
+    [4, 5],
+    Array::makei(20, fn(i) { Float::from_int(i + 1) * (0.1 : Float) }),
+  )
+  let packed_b = @gemm.pack_matrix_b_f32(mb.to_f32_buffer(), 0, 4, 5)
+  let ref_mm = @ops.matmul_f32(ma, mb)
+  let simd_mm = @ops.matmul_prepacked_f32(ma, packed_b)
+  assert_eq(simd_mm.shape(), [2, 3, 5])
+  for i = 0; i < 30; i = i + 1 {
+    assert_approx(
+      simd_mm.get_f32_flat(i),
+      ref_mm.get_f32_flat(i),
+      (1.0e-5 : Float),
+    )
+  }
+}
