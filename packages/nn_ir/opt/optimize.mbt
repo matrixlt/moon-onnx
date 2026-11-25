@@ -187,9 +187,13 @@ fn pass_fold_conv_bn(
               ) =>
                 try {
                   let ws = w_t.shape()
-                  if ws.length() == 4 {
+                  if ws.length() == 4 || ws.length() == 3 {
                     let c_out = ws[0]
-                    let per_oc = ws[1] * ws[2] * ws[3]
+                    let per_oc = if ws.length() == 4 {
+                      ws[1] * ws[2] * ws[3]
+                    } else {
+                      ws[1] * ws[2]
+                    }
                     let w_buf = w_t.to_f32_buffer()
                     let s_buf = scale_t.to_f32_buffer()
                     let bb_buf = bn_bias_t.to_f32_buffer()

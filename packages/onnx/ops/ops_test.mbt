@@ -482,3 +482,201 @@ test "Tier-2b reduction and normalization ops (GlobalAvgPool/ReduceMean/ReduceSu
   assert_approx(ln_out.get_f32([0, 0]), expected0, (1.0e-5 : Float))
   assert_approx(ln_out.get_f32([0, 3]), expected3, (1.0e-5 : Float))
 }
+
+///|
+/// 验证原生 1D 卷积（普通 Conv1D 与 Depthwise Conv1D，含融合 ReLU/Clip）的标量与预打包 V128 SIMD 一致性。
+test "Conv1D (standard & depthwise) prepacked V128 matches scalar reference" {
+  let x = @tensor.Tensor::from_f32(
+    [2, 4, 15],
+    FixedArray::makei(2 * 4 * 15, fn(i) {
+      Float::from_int(i % 13 - 6) * (0.25 : Float)
+    }),
+  )
+  let w = @tensor.Tensor::from_f32(
+    [6, 4, 3],
+    FixedArray::makei(6 * 4 * 3, fn(i) {
+      Float::from_int(i % 9 - 4) * (0.2 : Float)
+    }),
+  )
+  let b = @tensor.Tensor::from_f32_array([6], [0.1, -0.2, 0.3, 0.0, -0.1, 0.2])
+
+  let pw = @ops.pack_conv2d_weight_f32(w, 1)
+  let ref_y = @ops.conv2d_f32(
+    x,
+    w,
+    Some(b),
+    [2],
+    [1, 1],
+    [1],
+    1,
+    @nn_ir.NotSet,
+    use_simd=false,
+    activation=@nn_ir.ReluAct,
+  )
+  let pre_y = @ops.conv2d_prepacked_f32(
+    x,
+    pw,
+    Some(b),
+    [2],
+    [1, 1],
+    [1],
+    @nn_ir.NotSet,
+    activation=@nn_ir.ReluAct,
+  )
+  assert_eq(pre_y.shape(), [2, 6, 8])
+  let r_buf = ref_y.to_f32_buffer()
+  let p_buf = pre_y.to_f32_buffer()
+  for i = 0; i < r_buf.length(); i = i + 1 {
+    assert_approx(p_buf[i], r_buf[i], (1.0e-5 : Float))
+  }
+
+  // Depthwise Conv1D (group == c_in == c_out == 4)
+  let dw_w = @tensor.Tensor::from_f32(
+    [4, 1, 3],
+    FixedArray::makei(12, fn(i) { Float::from_int(i - 5) * (0.15 : Float) }),
+  )
+  let dw_pw = @ops.pack_conv2d_weight_f32(dw_w, 4)
+  assert_true(dw_pw.is_depthwise())
+  let dw_ref = @ops.conv2d_f32(
+    x,
+    dw_w,
+    None,
+    [1],
+    [1, 1],
+    [1],
+    4,
+    @nn_ir.NotSet,
+    use_simd=false,
+    activation=@nn_ir.ClipAct(min=(0.0 : Float), max=(6.0 : Float)),
+  ).to_f32_buffer()
+  let dw_fast = @ops.conv2d_prepacked_f32(
+    x,
+    dw_pw,
+    None,
+    [1],
+    [1, 1],
+    [1],
+    @nn_ir.NotSet,
+    activation=@nn_ir.ClipAct(min=(0.0 : Float), max=(6.0 : Float)),
+  ).to_f32_buffer()
+  for i = 0; i < dw_ref.length(); i = i + 1 {
+    assert_approx(dw_fast[i], dw_ref[i], (1.0e-5 : Float))
+  }
+}
+
+///|
+/// 验证 ONNX `Resize` 算子：4D Nearest 2× 上采样、4D Bilinear（`align_corners`）与 3D 线性插值。
+test "Resize supports 4D nearest/bilinear and 3D linear interpolation" {
+  let img = @tensor.Tensor::from_f32_array([1, 1, 2, 2], [1.0, 3.0, 5.0, 7.0])
+  let scales_2x = @tensor.Tensor::from_f32_array([4], [1.0, 1.0, 2.0, 2.0])
+
+  // 1. Nearest 2x（asymmetric + floor：每个像素复制为 2x2 块）
+  let near = @ops.resize_f32(
+    img,
+    Some(scales_2x),
+    None,
+    mode="nearest",
+    coordinate_transformation_mode="asymmetric",
+    nearest_mode="floor",
+  )
+  assert_eq(near.shape(), [1, 1, 4, 4])
+  assert_eq(near.get_f32([0, 0, 0, 0]), (1.0 : Float))
+  assert_eq(near.get_f32([0, 0, 0, 1]), (1.0 : Float))
+  assert_eq(near.get_f32([0, 0, 0, 2]), (3.0 : Float))
+  assert_eq(near.get_f32([0, 0, 3, 3]), (7.0 : Float))
+
+  // 2. Bilinear align_corners [1,1,2,2] -> [1,1,3,3]（中点精确为四角均值 4.0）
+  let target_sz = @tensor.Tensor::from_i64([4], [1, 1, 3, 3])
+  let bilin = @ops.resize_f32(
+    img,
+    None,
+    Some(target_sz),
+    mode="linear",
+    coordinate_transformation_mode="align_corners",
+  )
+  assert_eq(bilin.shape(), [1, 1, 3, 3])
+  assert_approx(bilin.get_f32([0, 0, 0, 0]), (1.0 : Float), (1.0e-5 : Float))
+  assert_approx(bilin.get_f32([0, 0, 0, 1]), (2.0 : Float), (1.0e-5 : Float))
+  assert_approx(bilin.get_f32([0, 0, 1, 1]), (4.0 : Float), (1.0e-5 : Float))
+  assert_approx(bilin.get_f32([0, 0, 2, 2]), (7.0 : Float), (1.0e-5 : Float))
+
+  // 3. 3D Linear align_corners [1,1,2] -> [1,1,3]
+  let sig = @tensor.Tensor::from_f32_array([1, 1, 2], [2.0, 6.0])
+  let sig_sz = @tensor.Tensor::from_i64([3], [1, 1, 3])
+  let sig_out = @ops.resize_f32(
+    sig,
+    None,
+    Some(sig_sz),
+    mode="linear",
+    coordinate_transformation_mode="align_corners",
+  )
+  assert_eq(sig_out.shape(), [1, 1, 3])
+  assert_approx(sig_out.get_f32([0, 0, 1]), (4.0 : Float), (1.0e-5 : Float))
+}
+
+///|
+/// 验证 ONNX `LSTM` 算子（门序 `i, o, f, c`）：单向解析解对齐、初始状态传递与双向输出形状。
+test "LSTM matches analytical single-step reference and supports bidirectional & layout=1" {
+  // 单步、H=1、input_size=2、W=全 1、R=全 0、B=全 0、x=[1.0, 0.0]
+  // 所有 4 门预激活均为 1.0 => i=o=f=sigmoid(1.0), c_tilde=tanh(1.0)
+  // c_1 = i * c_tilde, h_1 = o * tanh(c_1)
+  let x = @tensor.Tensor::from_f32_array([1, 1, 2], [1.0, 0.0])
+  let w = @tensor.Tensor::full_f32([1, 4, 2], (1.0 : Float))
+  let r = @tensor.Tensor::zeros_f32([1, 4, 1])
+  let outs = @ops.lstm_f32(
+    x,
+    w,
+    r,
+    None,
+    None,
+    None,
+    None,
+    None,
+    hidden_size=Some(1),
+  )
+  assert_eq(outs.length(), 3)
+  assert_eq(outs[0].shape(), [1, 1, 1, 1]) // Y
+  assert_eq(outs[1].shape(), [1, 1, 1]) // Y_h
+  assert_eq(outs[2].shape(), [1, 1, 1]) // Y_c
+
+  let sig1 = 1.0 / (1.0 + @math.exp(-1.0))
+  let tanh1 = @math.tanh(1.0)
+  let exp_c = sig1 * tanh1
+  let exp_h = sig1 * @math.tanh(exp_c)
+  assert_approx(
+    outs[2].get_f32([0, 0, 0]),
+    Float::from_double(exp_c),
+    (1.0e-5 : Float),
+  )
+  assert_approx(
+    outs[1].get_f32([0, 0, 0]),
+    Float::from_double(exp_h),
+    (1.0e-5 : Float),
+  )
+  assert_approx(
+    outs[0].get_f32([0, 0, 0, 0]),
+    Float::from_double(exp_h),
+    (1.0e-5 : Float),
+  )
+
+  // 双向 + layout=1（batch-first: [B=2, S=4, D=3]）
+  let xb = @tensor.Tensor::full_f32([2, 4, 3], (0.5 : Float))
+  let wb = @tensor.Tensor::full_f32([2, 8, 3], (0.2 : Float))
+  let rb = @tensor.Tensor::full_f32([2, 8, 2], (0.1 : Float))
+  let b_outs = @ops.lstm_f32(
+    xb,
+    wb,
+    rb,
+    None,
+    None,
+    None,
+    None,
+    None,
+    hidden_size=Some(2),
+    direction="bidirectional",
+    layout=1,
+  )
+  assert_eq(b_outs[0].shape(), [2, 4, 2, 2]) // [B, S, num_dirs, H]
+  assert_eq(b_outs[1].shape(), [2, 2, 2]) // [B, num_dirs, H]
+  assert_eq(b_outs[2].shape(), [2, 2, 2])
+}

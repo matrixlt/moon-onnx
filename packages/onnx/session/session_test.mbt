@@ -631,3 +631,278 @@ test "End-to-end INT8 QuantizeLinear -> QLinearMatMul -> DequantizeLinear (Scala
   // 量化推理结果与 Float32 基准误差在半个量化步长附近
   assert_true(@session.max_abs_diff_f32(out_si, ref_f32) <= (0.06 : Float))
 }
+
+///|
+/// 端到端验证 Silero VAD 风格流式语音端点检测流水线：
+/// `Audio[1,1,32] -> Conv1D+BN+Relu -> Depthwise Conv1D+Relu -> Transpose -> LSTM(流式 h/c 状态传递) -> Gemm -> Sigmoid`。
+/// 校验图优化折叠 Conv1D+BN+Relu、多输出 LSTM 状态跨帧传递及 Scalar vs V128 SIMD 数值一致。
+test "End-to-end Silero VAD-style streaming audio pipeline (Conv1D + LSTM + stateful h/c)" {
+  let w_c1 = @tensor.Tensor::from_f32(
+    [8, 1, 5],
+    FixedArray::makei(40, fn(i) { Float::from_int(i % 11 - 5) * (0.15 : Float) }),
+  )
+  let bn_s = @tensor.Tensor::full_f32([8], (1.1 : Float))
+  let bn_b = @tensor.Tensor::full_f32([8], (0.05 : Float))
+  let bn_m = @tensor.Tensor::full_f32([8], (0.0 : Float))
+  let bn_v = @tensor.Tensor::full_f32([8], (1.0 : Float))
+  let w_dw = @tensor.Tensor::from_f32(
+    [8, 1, 3],
+    FixedArray::makei(24, fn(i) { Float::from_int(i % 7 - 3) * (0.1 : Float) }),
+  )
+  let lstm_w = @tensor.Tensor::from_f32(
+    [1, 24, 8],
+    FixedArray::makei(24 * 8, fn(i) {
+      Float::from_int(i % 9 - 4) * (0.1 : Float)
+    }),
+  )
+  let lstm_r = @tensor.Tensor::from_f32(
+    [1, 24, 6],
+    FixedArray::makei(24 * 6, fn(i) {
+      Float::from_int(i % 7 - 3) * (0.08 : Float)
+    }),
+  )
+  let lstm_b = @tensor.Tensor::full_f32([1, 48], (0.01 : Float))
+  let sh_h = @tensor.Tensor::from_i64([2], [1, 6])
+  let w_fc = @tensor.Tensor::from_f32_array([1, 6], [
+    0.5, -0.3, 0.4, 0.2, -0.5, 0.3,
+  ])
+  let b_fc = @tensor.Tensor::from_f32_array([1], [0.05])
+
+  let raw_graph : @nn_ir.IrGraph = {
+    name: "silero_vad_mini",
+    inputs: ["audio", "h_in", "c_in"],
+    outputs: ["speech_prob", "h_out", "c_out"],
+    initializers: Map([
+      ("w_c1", w_c1),
+      ("bn_s", bn_s),
+      ("bn_b", bn_b),
+      ("bn_m", bn_m),
+      ("bn_v", bn_v),
+      ("w_dw", w_dw),
+      ("lstm_w", lstm_w),
+      ("lstm_r", lstm_r),
+      ("lstm_b", lstm_b),
+      ("sh_h", sh_h),
+      ("w_fc", w_fc),
+      ("b_fc", b_fc),
+    ]),
+    nodes: [
+      {
+        name: "enc1",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([5]),
+          strides=[2],
+          pads=[2, 2],
+          dilations=[1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["audio", "w_c1"],
+        outputs: ["c1"],
+      },
+      {
+        name: "bn1",
+        op: @nn_ir.BatchNormalization(epsilon=(1.0e-5 : Float)),
+        inputs: ["c1", "bn_s", "bn_b", "bn_m", "bn_v"],
+        outputs: ["c1_bn"],
+      },
+      { name: "act1", op: @nn_ir.Relu, inputs: ["c1_bn"], outputs: ["c1_act"], },
+      {
+        name: "enc2_dw",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([3]),
+          strides=[2],
+          pads=[1, 1],
+          dilations=[1],
+          group=8,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["c1_act", "w_dw"],
+        outputs: ["c2"],
+      },
+      { name: "act2", op: @nn_ir.Relu, inputs: ["c2"], outputs: ["c2_act"], },
+      // [N=1, C=8, L=8] -> [L=8, N=1, C=8] 供 LSTM 消费
+      {
+        name: "to_seq",
+        op: @nn_ir.Transpose(perm=[2, 0, 1]),
+        inputs: ["c2_act"],
+        outputs: ["seq_in"],
+      },
+      {
+        name: "rnn",
+        op: @nn_ir.Lstm(
+          hidden_size=Some(6),
+          direction="forward",
+          layout=0,
+          clip=None,
+        ),
+        inputs: ["seq_in", "lstm_w", "lstm_r", "lstm_b", "", "h_in", "c_in"],
+        outputs: ["rnn_y", "h_out", "c_out"],
+      },
+      {
+        name: "flat_h",
+        op: @nn_ir.Reshape(allowzero=false),
+        inputs: ["h_out", "sh_h"],
+        outputs: ["h_2d"],
+      },
+      {
+        name: "head",
+        op: @nn_ir.Gemm(
+          alpha=(1.0 : Float),
+          beta=(1.0 : Float),
+          trans_a=false,
+          trans_b=true,
+        ),
+        inputs: ["h_2d", "w_fc", "b_fc"],
+        outputs: ["logit"],
+      },
+      {
+        name: "prob",
+        op: @nn_ir.Sigmoid,
+        inputs: ["logit"],
+        outputs: ["speech_prob"],
+      },
+    ],
+  }
+
+  let (opt_graph, stats) = @opt.optimize_graph(raw_graph)
+  assert_eq(stats.folded_conv_bn, 1)
+  assert_eq(stats.folded_conv_activation, 2)
+  assert_eq(opt_graph.nodes.length(), 7)
+
+  let s_ref = @session.Session::from_graph(raw_graph, backend=@session.Scalar)
+  let s_opt = @session.Session::from_graph(opt_graph, backend=@session.Simd)
+  assert_eq(s_opt.packed_conv_weight_count(), 2)
+
+  // 连续模拟 2 帧流式音频推理（将第 1 帧输出的 h_out/c_out 喂给第 2 帧）
+  let frame1 = @tensor.Tensor::from_f32(
+    [1, 1, 32],
+    FixedArray::makei(32, fn(i) { Float::from_int(i % 9 - 4) * (0.2 : Float) }),
+  )
+  let frame2 = @tensor.Tensor::from_f32(
+    [1, 1, 32],
+    FixedArray::makei(32, fn(i) {
+      Float::from_int((i + 3) % 9 - 4) * (0.25 : Float)
+    }),
+  )
+  let h0 = @tensor.Tensor::zeros_f32([1, 1, 6])
+  let c0 = @tensor.Tensor::zeros_f32([1, 1, 6])
+
+  let r1 = s_ref.run(Map([("audio", frame1), ("h_in", h0), ("c_in", c0)]))
+  let o1 = s_opt.run(Map([("audio", frame1), ("h_in", h0), ("c_in", c0)]))
+  let r2 = s_ref.run(
+    Map([
+      ("audio", frame2),
+      ("h_in", r1.get("h_out").unwrap()),
+      ("c_in", r1.get("c_out").unwrap()),
+    ]),
+  )
+  let o2 = s_opt.run(
+    Map([
+      ("audio", frame2),
+      ("h_in", o1.get("h_out").unwrap()),
+      ("c_in", o1.get("c_out").unwrap()),
+    ]),
+  )
+
+  let prob2 = o2.get("speech_prob").unwrap()
+  let prob2_val = prob2.get_f32([0, 0])
+  assert_true(prob2_val > (0.0 : Float) && prob2_val < (1.0 : Float))
+  assert_true(
+    @session.max_abs_diff_f32(prob2, r2.get("speech_prob").unwrap()) <=
+    (1.0e-5 : Float),
+  )
+  assert_true(
+    @session.max_abs_diff_f32(
+      o2.get("h_out").unwrap(),
+      r2.get("h_out").unwrap(),
+    ) <=
+    (1.0e-5 : Float),
+  )
+}
+
+///|
+/// 端到端验证 YOLO / UNet 常见多尺度特征融合颈部（`Conv2D(s=2) -> Resize(2× bilinear) -> Concat -> Conv2D`）。
+test "End-to-end FPN/UNet Conv2D + Resize(2x bilinear) + Concat skip connection" {
+  let w_down = @tensor.Tensor::from_f32(
+    [4, 2, 3, 3],
+    FixedArray::makei(4 * 2 * 9, fn(i) {
+      Float::from_int(i % 7 - 3) * (0.1 : Float)
+    }),
+  )
+  let w_fuse = @tensor.Tensor::from_f32(
+    [3, 6, 1, 1],
+    FixedArray::makei(18, fn(i) { Float::from_int(i % 9 - 4) * (0.1 : Float) }),
+  )
+  let scales = @tensor.Tensor::from_f32_array([4], [1.0, 1.0, 2.0, 2.0])
+
+  let g : @nn_ir.IrGraph = {
+    name: "fpn_neck",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: Map([
+      ("w_down", w_down),
+      ("w_fuse", w_fuse),
+      ("scales", scales),
+    ]),
+    nodes: [
+      {
+        name: "down",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([3, 3]),
+          strides=[2, 2],
+          pads=[1, 1, 1, 1],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.ReluAct,
+        ),
+        inputs: ["x", "w_down"],
+        outputs: ["d1"],
+      },
+      {
+        name: "up",
+        op: @nn_ir.Resize(
+          mode="linear",
+          coordinate_transformation_mode="half_pixel",
+          nearest_mode="round_prefer_floor",
+        ),
+        inputs: ["d1", "", "scales"],
+        outputs: ["u1"],
+      },
+      {
+        name: "skip_cat",
+        op: @nn_ir.Concat(axis=1),
+        inputs: ["x", "u1"],
+        outputs: ["cat"],
+      },
+      {
+        name: "fuse",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([1, 1]),
+          strides=[1, 1],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["cat", "w_fuse"],
+        outputs: ["y"],
+      },
+    ],
+  }
+
+  let inp = @tensor.Tensor::from_f32(
+    [1, 2, 8, 8],
+    FixedArray::makei(128, fn(i) { Float::from_int(i % 13 - 6) * (0.2 : Float) }),
+  )
+  let s_sc = @session.Session::from_graph(g, backend=@session.Scalar)
+  let s_si = @session.Session::from_graph(g, backend=@session.Simd)
+  let y_sc = s_sc.run_single(inp)
+  let y_si = s_si.run_single(inp)
+  assert_eq(y_si.shape(), [1, 3, 8, 8])
+  assert_true(@session.max_abs_diff_f32(y_si, y_sc) <= (1.0e-5 : Float))
+}

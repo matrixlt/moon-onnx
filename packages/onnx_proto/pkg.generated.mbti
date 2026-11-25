@@ -10,6 +10,8 @@ import {
 // Values
 pub fn decode_tensor_proto(@schema.TensorProto) -> @tensor.Tensor raise ModelError
 
+pub fn f16_bits_to_f32(UInt32) -> Float
+
 pub fn load_model_from_bytes(Bytes) -> OnnxModel raise ModelError
 
 pub fn load_model_from_proto(@schema.ModelProto) -> OnnxModel raise ModelError

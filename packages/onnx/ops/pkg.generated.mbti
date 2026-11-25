@@ -48,6 +48,8 @@ pub fn layer_norm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, axis? : I
 
 pub fn leaky_relu_f32(@tensor.Tensor, alpha? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn lstm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, hidden_size? : Int32?, direction? : String, layout? : Int32, clip? : Float?) -> Array[@tensor.Tensor] raise @tensor.TensorError
+
 pub fn matmul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn matmul_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
@@ -75,6 +77,8 @@ pub fn reduce_sum_f32(@tensor.Tensor, Array[Int32]?, @tensor.Tensor?, keepdims? 
 pub fn relu_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn reshape_op(@tensor.Tensor, @tensor.Tensor, allowzero? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn resize_f32(@tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, mode? : String, coordinate_transformation_mode? : String, nearest_mode? : String, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn shape_op(@tensor.Tensor, start? : Int32?, end? : Int32?) -> @tensor.Tensor raise @tensor.TensorError
 

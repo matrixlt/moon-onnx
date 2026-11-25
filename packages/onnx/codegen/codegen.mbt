@@ -453,27 +453,49 @@ pub fn infer_static_shapes(
       @nn_ir.Conv(strides~, pads~, dilations~, auto_pad~, ..) => {
         let sx = req_shape(ins[0])
         let sw = req_shape(ins[1])
-        let oh = infer_spatial_dim(
-          sx[2],
-          sw[2],
-          strides[0],
-          dilations[0],
-          pads[0],
-          pads[2],
-          auto_pad,
-          false,
-        )
-        let ow = infer_spatial_dim(
-          sx[3],
-          sw[3],
-          strides[1],
-          dilations[1],
-          pads[1],
-          pads[3],
-          auto_pad,
-          false,
-        )
-        [sx[0], sw[0], oh, ow]
+        if sx.length() == 3 && sw.length() == 3 {
+          let s_w = if strides.length() == 1 { strides[0] } else { strides[1] }
+          let d_w = if dilations.length() == 1 {
+            dilations[0]
+          } else {
+            dilations[1]
+          }
+          let p_l = if pads.length() == 2 { pads[0] } else { pads[1] }
+          let p_r = if pads.length() == 2 { pads[1] } else { pads[3] }
+          let ol = infer_spatial_dim(
+            sx[2],
+            sw[2],
+            s_w,
+            d_w,
+            p_l,
+            p_r,
+            auto_pad,
+            false,
+          )
+          [sx[0], sw[0], ol]
+        } else {
+          let oh = infer_spatial_dim(
+            sx[2],
+            sw[2],
+            strides[0],
+            dilations[0],
+            pads[0],
+            pads[2],
+            auto_pad,
+            false,
+          )
+          let ow = infer_spatial_dim(
+            sx[3],
+            sw[3],
+            strides[1],
+            dilations[1],
+            pads[1],
+            pads[3],
+            auto_pad,
+            false,
+          )
+          [sx[0], sw[0], oh, ow]
+        }
       }
       @nn_ir.MaxPool(
         kernel_shape~,

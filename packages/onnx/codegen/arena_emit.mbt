@@ -190,8 +190,10 @@ fn can_emit_arena(
       @nn_ir.Conv(group~, ..) =>
         match (shapes.get(ins[0]), shapes.get(ins[1])) {
           (Some(sx), Some(sw)) =>
-            sx.length() == 4 &&
-            sw.length() == 4 &&
+            (
+              (sx.length() == 4 && sw.length() == 4) ||
+              (sx.length() == 3 && sw.length() == 3)
+            ) &&
             graph.initializers.contains(ins[1]) &&
             (group == 1 || (group > 1 && group == sx[1] && group == sw[0]))
           _ => false
@@ -433,28 +435,47 @@ fn emit_arena_model(
         let (y_buf, y_off) = resolve_f32_loc(out_n)
         let sx = shapes.get(ins[0]).unwrap()
         let sw = shapes.get(ins[1]).unwrap()
+        let is_1d = sx.length() == 3
         let n_batch = sx[0]
         let c_in = sx[1]
-        let ih = sx[2]
-        let iw = sx[3]
+        let ih = if is_1d { 1 } else { sx[2] }
+        let iw = if is_1d { sx[2] } else { sx[3] }
         let c_out = sw[0]
-        let kh = sw[2]
-        let kw = sw[3]
-        let oh = out_sh[2]
-        let ow = out_sh[3]
+        let kh = if is_1d { 1 } else { sw[2] }
+        let kw = if is_1d { sw[2] } else { sw[3] }
+        let oh = if is_1d { 1 } else { out_sh[2] }
+        let ow = if is_1d { out_sh[2] } else { out_sh[3] }
+        let sh = if is_1d { 1 } else { strides[0] }
+        let sw_s = if is_1d {
+          if strides.length() == 1 {
+            strides[0]
+          } else {
+            strides[1]
+          }
+        } else {
+          strides[1]
+        }
+        let dh = if is_1d { 1 } else { dilations[0] }
+        let dw_s = if is_1d {
+          if dilations.length() == 1 {
+            dilations[0]
+          } else {
+            dilations[1]
+          }
+        } else {
+          dilations[1]
+        }
+        let pads2 = if is_1d {
+          if pads.length() == 2 {
+            [0, pads[0], 0, pads[1]]
+          } else {
+            [0, pads[1], 0, pads[3]]
+          }
+        } else {
+          pads
+        }
         let (pt, pl, _pb, _pr) = resolve_2d_pads(
-          ih,
-          iw,
-          kh,
-          kw,
-          strides[0],
-          strides[1],
-          dilations[0],
-          dilations[1],
-          pads,
-          auto_pad,
-          oh,
-          ow,
+          ih, iw, kh, kw, sh, sw_s, dh, dw_s, pads2, auto_pad, oh, ow,
         )
         let bias_expr = if ins.length() >= 3 && ins[2] != "" {
           need_f32_loader = true
@@ -472,7 +493,7 @@ fn emit_arena_model(
             let xb = x_off + b * c_in * ih * iw
             let yb = y_off + b * c_out * oh * ow
             body.write_string(
-              "  @conv.depthwise_conv2d_f32(\{x_buf}, \{xb}, self.\{wf}, \{bias_expr}, \{c_in}, \{ih}, \{iw}, \{kh}, \{kw}, \{strides[0]}, \{strides[1]}, \{pt}, \{pl}, \{dilations[0]}, \{dilations[1]}, \{oh}, \{ow}, \{y_buf}, \{yb}, epilogue=\{ep_expr})\n",
+              "  @conv.depthwise_conv2d_f32(\{x_buf}, \{xb}, self.\{wf}, \{bias_expr}, \{c_in}, \{ih}, \{iw}, \{kh}, \{kw}, \{sh}, \{sw_s}, \{pt}, \{pl}, \{dh}, \{dw_s}, \{oh}, \{ow}, \{y_buf}, \{yb}, epilogue=\{ep_expr})\n",
             )
           }
         } else {
@@ -485,7 +506,7 @@ fn emit_arena_model(
               let xb = x_off + b * c_in * ih * iw
               let yb = y_off + b * c_out * spatial
               body.write_string(
-                "  @conv.im2col_2d_nhwc_f32(\{x_buf}, \{xb}, \{c_in}, \{ih}, \{iw}, \{kh}, \{kw}, \{strides[0]}, \{strides[1]}, \{pt}, \{pl}, \{dilations[0]}, \{dilations[1]}, \{oh}, \{ow}, self.scratch)\n",
+                "  @conv.im2col_2d_nhwc_f32(\{x_buf}, \{xb}, \{c_in}, \{ih}, \{iw}, \{kh}, \{kw}, \{sh}, \{sw_s}, \{pt}, \{pl}, \{dh}, \{dw_s}, \{oh}, \{ow}, self.scratch)\n",
               )
               body.write_string(
                 "  @gemm.matmul_2d_prepacked_nchw_simd_f32(self.scratch, 0, self.\{wf}, \{bias_expr}, 0, \{y_buf}, \{yb}, \{spatial}, epilogue=\{ep_expr})\n",
@@ -498,7 +519,7 @@ fn emit_arena_model(
               let xb = x_off + b * c_in * ih * iw
               let yb = y_off + b * c_out * spatial
               body.write_string(
-                "  @conv.im2col_2d_nhwc_f32(\{x_buf}, \{xb}, \{c_in}, \{ih}, \{iw}, \{kh}, \{kw}, \{strides[0]}, \{strides[1]}, \{pt}, \{pl}, \{dilations[0]}, \{dilations[1]}, \{oh}, \{ow}, self.scratch)\n",
+                "  @conv.im2col_2d_nhwc_f32(\{x_buf}, \{xb}, \{c_in}, \{ih}, \{iw}, \{kh}, \{kw}, \{sh}, \{sw_s}, \{pt}, \{pl}, \{dh}, \{dw_s}, \{oh}, \{ow}, self.scratch)\n",
               )
               body.write_string(
                 "  conv_nchw_scalar_f32(self.scratch, self.\{wf}, \{bias_expr}, \{y_buf}, \{yb}, \{spatial}, \{k_dim}, \{c_out}, \{ep_expr})\n",
@@ -1341,7 +1362,11 @@ fn emit_arena_model(
       }
       PackedConv(..) => {
         let c_out = w.shape[0]
-        let k_dim = w.shape[1] * w.shape[2] * w.shape[3]
+        let k_dim = if w.shape.length() == 4 {
+          w.shape[1] * w.shape[2] * w.shape[3]
+        } else {
+          w.shape[1] * w.shape[2]
+        }
         src.write_string(
           "  let \{w.field_name}_raw = load_f32_slice(weights, \{w.byte_offset}, \{numel})\n",
         )

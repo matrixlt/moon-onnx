@@ -266,15 +266,24 @@ pub fn plan_static_arenas(
               shapes.get(node.inputs[1]),
               shapes.get(node.outputs[0]),
             ) {
-            (Some(sx), Some(sw), Some(sy)) if sx.length() == 4 &&
-              sw.length() == 4 &&
-              sy.length() == 4 => {
+            (Some(sx), Some(sw), Some(sy)) if (
+                sx.length() == 4 && sw.length() == 4 && sy.length() == 4
+              ) ||
+              (sx.length() == 3 && sw.length() == 3 && sy.length() == 3) => {
               let c_in = sx[1]
               let c_out = sw[0]
               let is_dw = group > 1 && group == c_in && group == c_out
               if !is_dw {
-                let k_dim = sw[1] * sw[2] * sw[3]
-                let spatial = sy[2] * sy[3]
+                let k_dim = if sw.length() == 4 {
+                  sw[1] * sw[2] * sw[3]
+                } else {
+                  sw[1] * sw[2]
+                }
+                let spatial = if sy.length() == 4 {
+                  sy[2] * sy[3]
+                } else {
+                  sy[2]
+                }
                 let need = spatial * k_dim
                 if need > max_im2col {
                   max_im2col = need

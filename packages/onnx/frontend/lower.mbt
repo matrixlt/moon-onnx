@@ -82,7 +82,7 @@ fn parse_onnx_dtype(
   node_name : String,
 ) -> @tensor.DType raise @nn_ir.IrError {
   match code {
-    1 => @tensor.Float32
+    1 | 10 => @tensor.Float32
     2 => @tensor.UInt8
     3 => @tensor.Int8
     6 => @tensor.Int32
@@ -460,6 +460,23 @@ fn lower_node(
     "DequantizeLinear" =>
       @nn_ir.DequantizeLinear(axis=get_attr_int(attrs, "axis", 1))
     "QLinearMatMul" => @nn_ir.QLinearMatMul
+    "Resize" =>
+      @nn_ir.Resize(
+        mode=get_attr_string(attrs, "mode", "nearest"),
+        coordinate_transformation_mode=get_attr_string(
+          attrs, "coordinate_transformation_mode", "half_pixel",
+        ),
+        nearest_mode=get_attr_string(
+          attrs, "nearest_mode", "round_prefer_floor",
+        ),
+      )
+    "LSTM" =>
+      @nn_ir.Lstm(
+        hidden_size=get_attr_int_opt(attrs, "hidden_size"),
+        direction=get_attr_string(attrs, "direction", "forward"),
+        layout=get_attr_int(attrs, "layout", 0),
+        clip=get_attr_float_opt(attrs, "clip"),
+      )
     other => raise @nn_ir.UnsupportedOp(other)
   }
 

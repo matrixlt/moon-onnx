@@ -18,12 +18,40 @@ fn read_u64_le(bytes : Bytes, offset : Int32) -> UInt64 {
 }
 
 ///|
+/// 将 IEEE 754 半精度浮点（binary16 / FP16）的 16 位比特模式精确转换为单精度 `Float`（binary32）。
+/// 完整覆盖规格化数、非规格化数（subnormal）、有符号零（±0.0）与无穷大/NaN。
+pub fn f16_bits_to_f32(h : UInt32) -> Float {
+  let sign = (h >> 15) & 1U
+  let exp = (h >> 10) & 0x1FU
+  let frac = h & 0x3FFU
+  let bits : UInt32 = if exp == 0U {
+    if frac == 0U {
+      sign << 31
+    } else {
+      // 非规格化半精度数：左移直至隐含高位 1 落入 bit 10
+      let mut f = frac
+      let mut e = 113U // 127 - 14
+      while (f & 0x400U) == 0U {
+        f = f << 1
+        e = e - 1U
+      }
+      (sign << 31) | (e << 23) | ((f & 0x3FFU) << 13)
+    }
+  } else if exp == 31U {
+    (sign << 31) | 0x7F800000U | (frac << 13)
+  } else {
+    (sign << 31) | ((exp + 112U) << 23) | (frac << 13)
+  }
+  Float::reinterpret_from_uint(bits)
+}
+
+///|
 /// 将 ONNX TensorProto.DataType 数值枚举映射为引擎内部的 DType。
 /// 参考 proto/onnx.proto 中 TensorProto.DataType 定义：
-/// 1=FLOAT, 6=INT32, 7=INT64, 9=BOOL, 11=DOUBLE。
+/// 1=FLOAT, 2=UINT8, 3=INT8, 6=INT32, 7=INT64, 9=BOOL, 10=FLOAT16（加载期自动无损提升为 Float32）, 11=DOUBLE。
 pub fn onnx_dtype_to_dtype(code : Int32) -> @tensor.DType raise ModelError {
   match code {
-    1 => @tensor.Float32
+    1 | 10 => @tensor.Float32
     2 => @tensor.UInt8
     3 => @tensor.Int8
     6 => @tensor.Int32
@@ -37,7 +65,7 @@ pub fn onnx_dtype_to_dtype(code : Int32) -> @tensor.DType raise ModelError {
 ///|
 /// 将 ONNX TensorProto 解码为引擎核心的 Tensor 对象。
 /// 自动兼容 ONNX 允许的多种存储方式：
-/// 1. 优先读取紧凑二进制 `raw_data`（最常见于 PyTorch / TensorFlow 导出的模型）
+/// 1. 优先读取紧凑二进制 `raw_data`（含 2 字节 IEEE 754 `FLOAT16` 自动提升至 `Float32`）
 /// 2. 回退读取类型化 repeated 字段（`float_data` / `int64_data` / `int32_data` / `double_data`）
 pub fn decode_tensor_proto(
   tp : @schema.TensorProto,
@@ -60,7 +88,6 @@ pub fn decode_tensor_proto(
     Some(c) => c
     None => raise InvalidTensor("tensor '\{name}' is missing data_type field")
   }
-  let dtype = onnx_dtype_to_dtype(dtype_code)
 
   // 将 Int64 维度数组转换为 Int 形状数组并校验非负性
   let shape = Array::make(tp.dims.length(), 0)
@@ -73,6 +100,44 @@ pub fn decode_tensor_proto(
     shape[i] = d
     expected = expected * d
   }
+
+  // 特殊处理 ONNX FLOAT16 (code=10)：每元素占 2 字节，加载期精确转为 Float32
+  if dtype_code == 10 {
+    match tp.raw_data {
+      Some(raw) if raw.length() > 0 => {
+        let expected_bytes = expected * 2
+        if raw.length() != expected_bytes {
+          raise InvalidTensor(
+            "tensor '\{name}' float16 raw_data has \{raw.length()} bytes, expected \{expected_bytes}",
+          )
+        }
+        let buf = FixedArray::makei(expected, fn(i) {
+          let lo = raw[i * 2].to_uint()
+          let hi = raw[i * 2 + 1].to_uint()
+          f16_bits_to_f32(lo | (hi << 8))
+        })
+        return @tensor.Tensor::from_f32(shape, buf) catch {
+          e => raise InvalidTensor("tensor '\{name}': \{e}")
+        }
+      }
+      _ => {
+        // ONNX 规范规定非 raw_data 的 FLOAT16 存放在 int32_data 的低 16 位中
+        if tp.int32_data.length() != expected {
+          raise InvalidTensor(
+            "tensor '\{name}' float16 int32_data length \{tp.int32_data.length()} != expected \{expected}",
+          )
+        }
+        let buf = FixedArray::makei(expected, fn(i) {
+          f16_bits_to_f32(tp.int32_data[i].reinterpret_as_uint() & 0xFFFFU)
+        })
+        return @tensor.Tensor::from_f32(shape, buf) catch {
+          e => raise InvalidTensor("tensor '\{name}': \{e}")
+        }
+      }
+    }
+  }
+
+  let dtype = onnx_dtype_to_dtype(dtype_code)
 
   // 优先解析 raw_data（小端序二进制）
   match tp.raw_data {

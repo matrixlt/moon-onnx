@@ -237,3 +237,122 @@ test "compile_graph_to_mbt compiles INT8 quantized QLinearMatMul graph in Arena 
   assert_true(art.pkg_config.contains("matrixlt/ml_kernels/quant"))
   assert_true(!art.pkg_config.contains("matrixlt/tensor"))
 }
+
+///|
+/// 验证 `onnx2mbt` v2 Arena 零分配模式原生支持 3D `Conv1D`（含 `Conv1D+BN+Relu` 融合与 Depthwise 1D）。
+test "compile_graph_to_mbt compiles 3D Conv1D audio classifier in zero-allocation Arena mode" {
+  let w1 = @tensor.Tensor::from_f32(
+    [8, 1, 5],
+    FixedArray::makei(40, fn(i) { Float::from_int(i % 7 - 3) * (0.1 : Float) }),
+  )
+  let bn_s = @tensor.Tensor::full_f32([8], (1.0 : Float))
+  let bn_b = @tensor.Tensor::full_f32([8], (0.0 : Float))
+  let bn_m = @tensor.Tensor::full_f32([8], (0.0 : Float))
+  let bn_v = @tensor.Tensor::full_f32([8], (1.0 : Float))
+  let w_dw = @tensor.Tensor::from_f32(
+    [8, 1, 3],
+    FixedArray::makei(24, fn(i) { Float::from_int(i % 5 - 2) * (0.1 : Float) }),
+  )
+  let w_fc = @tensor.Tensor::from_f32(
+    [2, 8],
+    FixedArray::makei(16, fn(i) { Float::from_int(i - 8) * (0.1 : Float) }),
+  )
+
+  let g : @nn_ir.IrGraph = {
+    name: "audio_kws_conv1d",
+    inputs: ["audio"],
+    outputs: ["probs"],
+    initializers: Map([
+      ("w1", w1),
+      ("bn_s", bn_s),
+      ("bn_b", bn_b),
+      ("bn_m", bn_m),
+      ("bn_v", bn_v),
+      ("w_dw", w_dw),
+      ("w_fc", w_fc),
+    ]),
+    nodes: [
+      {
+        name: "c1",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([5]),
+          strides=[2],
+          pads=[2, 2],
+          dilations=[1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["audio", "w1"],
+        outputs: ["t0"],
+      },
+      {
+        name: "bn1",
+        op: @nn_ir.BatchNormalization(epsilon=(1.0e-5 : Float)),
+        inputs: ["t0", "bn_s", "bn_b", "bn_m", "bn_v"],
+        outputs: ["t1"],
+      },
+      { name: "r1", op: @nn_ir.Relu, inputs: ["t1"], outputs: ["t2"], },
+      {
+        name: "dw1",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([3]),
+          strides=[1],
+          pads=[1, 1],
+          dilations=[1],
+          group=8,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.ReluAct,
+        ),
+        inputs: ["t2", "w_dw"],
+        outputs: ["t3"],
+      },
+      {
+        name: "gap",
+        op: @nn_ir.GlobalAveragePool,
+        inputs: ["t3"],
+        outputs: ["t4"],
+      },
+      {
+        name: "flat",
+        op: @nn_ir.Flatten(axis=1),
+        inputs: ["t4"],
+        outputs: ["t5"],
+      },
+      {
+        name: "fc",
+        op: @nn_ir.Gemm(
+          alpha=(1.0 : Float),
+          beta=(1.0 : Float),
+          trans_a=false,
+          trans_b=true,
+        ),
+        inputs: ["t5", "w_fc"],
+        outputs: ["logits"],
+      },
+      {
+        name: "sig",
+        op: @nn_ir.Sigmoid,
+        inputs: ["logits"],
+        outputs: ["probs"],
+      },
+    ],
+  }
+
+  let art = @codegen.compile_graph_to_mbt(g, Map([("audio", [1, 1, 32])]), config={
+    struct_name: "AudioKws",
+    use_simd: true,
+    optimize: true,
+    target: @codegen.TargetWasm,
+    mode: @codegen.Arena,
+    embed_weights: true,
+  })
+  assert_eq(art.mode_used, @codegen.Arena)
+  assert_eq(art.node_count, 6) // Conv1D+BN+Relu 折叠为 1 个节点
+  assert_eq(art.output_shapes, [("probs", [1, 2])])
+  assert_true(art.mbt_source.contains("@conv.depthwise_conv2d_f32"))
+  assert_true(
+    art.mbt_source.contains("@gemm.matmul_2d_prepacked_nchw_simd_f32"),
+  )
+  assert_true(!art.pkg_config.contains("matrixlt/tensor"))
+}

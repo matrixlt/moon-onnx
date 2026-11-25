@@ -100,21 +100,21 @@ pub fn PackedConvWeight::is_depthwise(self : PackedConvWeight) -> Bool {
 }
 
 ///|
-/// 在模型加载/会话构建期将 4D OIHW Float32 卷积权重一次性预打包为 `PackedConvWeight`。
+/// 在模型加载/会话构建期将 4D OIHW 或 3D OIK（Conv1D，自动视为 H=1）Float32 卷积权重一次性预打包为 `PackedConvWeight`。
 pub fn pack_conv2d_weight_f32(
   w : @tensor.Tensor,
   group : Int32,
 ) -> PackedConvWeight raise @tensor.TensorError {
   let ws = w.shape()
-  if ws.length() != 4 {
+  if ws.length() != 4 && ws.length() != 3 {
     raise @tensor.ShapeMismatch(
-      "pack_conv2d_weight_f32 requires 4D OIHW weight, got rank \{ws.length()}",
+      "pack_conv2d_weight_f32 requires 3D OIK or 4D OIHW weight, got rank \{ws.length()}",
     )
   }
   let c_out = ws[0]
   let c_in_per_group = ws[1]
-  let kh = ws[2]
-  let kw = ws[3]
+  let kh = if ws.length() == 4 { ws[2] } else { 1 }
+  let kw = if ws.length() == 4 { ws[3] } else { ws[2] }
   if group <= 0 || c_out % group != 0 {
     raise @tensor.ShapeMismatch(
       "pack_conv2d_weight_f32 invalid group=\{group} for c_out=\{c_out}",
@@ -148,7 +148,38 @@ pub fn pack_conv2d_weight_f32(
 }
 
 ///|
-/// 使用预打包静态权重 `PackedConvWeight` 执行 2D Conv（V128 SIMD 零运行期打包 + 偏置/激活融合 + Depthwise 直算 + BufferPool 复用）。
+/// 将 1D 卷积参数 `[s]` / `[p_l, p_r]` / `[d]` 规范化为等价的 H=1 2D 卷积参数，复用全部 V128 SIMD 卷积内核。
+fn normalize_conv1d_params(
+  strides : Array[Int32],
+  pads : Array[Int32],
+  dilations : Array[Int32],
+) -> (Array[Int32], Array[Int32], Array[Int32]) {
+  let sw = if strides.length() == 1 {
+    strides[0]
+  } else if strides.length() >= 2 {
+    strides[1]
+  } else {
+    1
+  }
+  let (pl, pr) = if pads.length() == 2 {
+    (pads[0], pads[1])
+  } else if pads.length() >= 4 {
+    (pads[1], pads[3])
+  } else {
+    (0, 0)
+  }
+  let dw = if dilations.length() == 1 {
+    dilations[0]
+  } else if dilations.length() >= 2 {
+    dilations[1]
+  } else {
+    1
+  }
+  ([1, sw], [0, pl, 0, pr], [1, dw])
+}
+
+///|
+/// 使用预打包静态权重 `PackedConvWeight` 执行 2D/1D Conv（V128 SIMD 零运行期打包 + 偏置/激活融合 + Depthwise 直算 + BufferPool 复用）。
 pub fn conv2d_prepacked_f32(
   x : @tensor.Tensor,
   packed_w : PackedConvWeight,
@@ -162,9 +193,27 @@ pub fn conv2d_prepacked_f32(
   scratch_pool~ : @tensor.BufferPool? = None,
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let xs = x.shape()
+  if xs.length() == 3 {
+    let x4 = x.reshape([xs[0], xs[1], 1, xs[2]])
+    let (st2, pd2, dl2) = normalize_conv1d_params(strides, pads, dilations)
+    let y4 = conv2d_prepacked_f32(
+      x4,
+      packed_w,
+      bias,
+      st2,
+      pd2,
+      dl2,
+      auto_pad,
+      activation~,
+      pool~,
+      scratch_pool~,
+    )
+    let ys = y4.shape()
+    return y4.reshape([ys[0], ys[1], ys[3]])
+  }
   if xs.length() != 4 {
     raise @tensor.ShapeMismatch(
-      "conv2d_prepacked_f32 requires 4D NCHW input, got rank \{xs.length()}",
+      "conv2d_prepacked_f32 requires 3D NCL or 4D NCHW input, got rank \{xs.length()}",
     )
   }
   let n_batch = xs[0]
@@ -307,9 +356,30 @@ pub fn conv2d_f32(
 ) -> @tensor.Tensor raise @tensor.TensorError {
   let xs = x.shape()
   let ws = w.shape()
+  if xs.length() == 3 && ws.length() == 3 {
+    let x4 = x.reshape([xs[0], xs[1], 1, xs[2]])
+    let w4 = w.reshape([ws[0], ws[1], 1, ws[2]])
+    let (st2, pd2, dl2) = normalize_conv1d_params(strides, pads, dilations)
+    let y4 = conv2d_f32(
+      x4,
+      w4,
+      bias,
+      st2,
+      pd2,
+      dl2,
+      group,
+      auto_pad,
+      use_simd~,
+      activation~,
+      pool~,
+      scratch_pool~,
+    )
+    let ys = y4.shape()
+    return y4.reshape([ys[0], ys[1], ys[3]])
+  }
   if xs.length() != 4 || ws.length() != 4 {
     raise @tensor.ShapeMismatch(
-      "conv2d_f32 requires 4D NCHW input and 4D OIHW weight, got ranks \{xs.length()} and \{ws.length()}",
+      "conv2d_f32 requires 3D NCL/OIK or 4D NCHW/OIHW inputs, got ranks \{xs.length()} and \{ws.length()}",
     )
   }
   let n_batch = xs[0]

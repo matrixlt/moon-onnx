@@ -546,6 +546,46 @@ fn eval_cpu_node(
           use_simd~,
         )
       }
+      @nn_ir.Resize(mode~, coordinate_transformation_mode~, nearest_mode~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        // Opset 11+ 输入顺序：X, roi, scales, sizes
+        let scales = ctx.optional_tensor(n, ins, 2)
+        let sizes = ctx.optional_tensor(n, ins, 3)
+        @ops.resize_f32(
+          x,
+          scales,
+          sizes,
+          mode~,
+          coordinate_transformation_mode~,
+          nearest_mode~,
+          pool=out_pool,
+        )
+      }
+      @nn_ir.Lstm(hidden_size~, direction~, layout~, clip~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let w = ctx.require_tensor(n, ins, 1)
+        let r = ctx.require_tensor(n, ins, 2)
+        let b = ctx.optional_tensor(n, ins, 3)
+        let seq_lens = ctx.optional_tensor(n, ins, 4)
+        let init_h = ctx.optional_tensor(n, ins, 5)
+        let init_c = ctx.optional_tensor(n, ins, 6)
+        let peepholes = ctx.optional_tensor(n, ins, 7)
+        let outs = @ops.lstm_f32(
+          x,
+          w,
+          r,
+          b,
+          seq_lens,
+          init_h,
+          init_c,
+          peepholes,
+          hidden_size~,
+          direction~,
+          layout~,
+          clip~,
+        )
+        outs[0]
+      }
     }
   } catch {
     MissingTensor(msg) => raise MissingTensor(msg)
@@ -555,7 +595,7 @@ fn eval_cpu_node(
 }
 
 ///|
-/// 内置 CPU 多输出节点分派入口（针对 `Split` 返回全部子张量，其余节点复用 `eval_cpu_node`）。
+/// 内置 CPU 多输出节点分派入口（针对 `Split` 与 `LSTM` 返回全部子张量，其余节点复用 `eval_cpu_node`）。
 fn eval_cpu_node_multi(
   node : @nn_ir.IrNode,
   ctx : EvalContext,
@@ -577,6 +617,38 @@ fn eval_cpu_node_multi(
         MissingTensor(msg) => raise MissingTensor(msg)
         UnsupportedOp(msg) => raise UnsupportedOp(msg)
         e => raise TensorErr("node '\{n}' (Split): \{e}")
+      }
+    }
+    @nn_ir.Lstm(hidden_size~, direction~, layout~, clip~) => {
+      let n = node.name
+      let ins = node.inputs
+      try {
+        let x = ctx.require_tensor(n, ins, 0)
+        let w = ctx.require_tensor(n, ins, 1)
+        let r = ctx.require_tensor(n, ins, 2)
+        let b = ctx.optional_tensor(n, ins, 3)
+        let seq_lens = ctx.optional_tensor(n, ins, 4)
+        let init_h = ctx.optional_tensor(n, ins, 5)
+        let init_c = ctx.optional_tensor(n, ins, 6)
+        let peepholes = ctx.optional_tensor(n, ins, 7)
+        @ops.lstm_f32(
+          x,
+          w,
+          r,
+          b,
+          seq_lens,
+          init_h,
+          init_c,
+          peepholes,
+          hidden_size~,
+          direction~,
+          layout~,
+          clip~,
+        )
+      } catch {
+        MissingTensor(msg) => raise MissingTensor(msg)
+        UnsupportedOp(msg) => raise UnsupportedOp(msg)
+        e => raise TensorErr("node '\{n}' (LSTM): \{e}")
       }
     }
     _ => [eval_cpu_node(node, ctx, use_simd)]

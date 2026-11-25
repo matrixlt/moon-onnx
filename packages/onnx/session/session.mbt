@@ -167,7 +167,8 @@ fn build_packed_weight_caches(
         let key = "\{w_name}#g\{group}"
         if !conv_cache.contains(key) {
           match graph.initializers.get(w_name) {
-            Some(w_t) if w_t.rank() == 4 && w_t.dtype() == @tensor.Float32 =>
+            Some(w_t) if (w_t.rank() == 4 || w_t.rank() == 3) &&
+              w_t.dtype() == @tensor.Float32 =>
               try {
                 conv_cache[key] = @ops.pack_conv2d_weight_f32(w_t, group)
               } catch {

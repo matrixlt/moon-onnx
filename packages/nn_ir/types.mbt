@@ -135,6 +135,17 @@ pub(all) enum Op {
   QuantizeLinear(axis~ : Int32)
   DequantizeLinear(axis~ : Int32)
   QLinearMatMul
+  Resize(
+    mode~ : String,
+    coordinate_transformation_mode~ : String,
+    nearest_mode~ : String,
+  )
+  Lstm(
+    hidden_size~ : Int32?,
+    direction~ : String,
+    layout~ : Int32,
+    clip~ : Float?,
+  )
 }
 
 ///|
@@ -189,6 +200,8 @@ pub fn Op::name(self : Op) -> String {
     QuantizeLinear(..) => "QuantizeLinear"
     DequantizeLinear(..) => "DequantizeLinear"
     QLinearMatMul => "QLinearMatMul"
+    Resize(..) => "Resize"
+    Lstm(..) => "LSTM"
   }
 }
 

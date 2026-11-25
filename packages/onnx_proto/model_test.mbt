@@ -106,3 +106,41 @@ test "load_model_from_bytes round-trips a minimal ONNX graph" {
   assert_eq(loaded.nodes.length(), 1)
   assert_true(loaded.format_summary().contains("Relu (relu_0)"))
 }
+
+///|
+/// 验证 IEEE 754 半精度浮点（FLOAT16, code=10）的 `raw_data` 与 `int32_data` 解码精度，
+/// 涵盖常规值（1.0, -2.5, 0.5）、最小规格化数、非规格化数（subnormal）与 ±0.0。
+test "decode_tensor_proto decodes IEEE 754 FLOAT16 raw_data and int32_data" {
+  // 0x3C00 = 1.0, 0xC100 = -2.5, 0x3800 = 0.5, 0x0000 = 0.0, 0x0001 = 2^-24 (subnormal)
+  let h_bits : Array[Int32] = [0x3C00, 0xC100, 0x3800, 0x0000, 0x0001]
+  let raw = FixedArray::make(h_bits.length() * 2, b'\x00')
+  for i = 0; i < h_bits.length(); i = i + 1 {
+    raw[i * 2] = (h_bits[i] & 0xFF).to_byte()
+    raw[i * 2 + 1] = ((h_bits[i] >> 8) & 0xFF).to_byte()
+  }
+
+  let tp_raw = @schema_test.TensorProto::default()
+  tp_raw.name = Some("w_f16_raw")
+  tp_raw.data_type = Some(10) // FLOAT16
+  tp_raw.dims = [(5 : Int64)]
+  tp_raw.raw_data = Some(Bytes::from_array(raw))
+
+  let t_raw = @onnx_proto.decode_tensor_proto(tp_raw)
+  assert_eq(t_raw.dtype(), @tensor.Float32)
+  assert_eq(t_raw.get_f32([0]), (1.0 : Float))
+  assert_eq(t_raw.get_f32([1]), (-2.5 : Float))
+  assert_eq(t_raw.get_f32([2]), (0.5 : Float))
+  assert_eq(t_raw.get_f32([3]), (0.0 : Float))
+  // 2^-24 ≈ 5.9604645e-8
+  let expected_sub = Float::from_double(1.0 / 16777216.0)
+  assert_eq(t_raw.get_f32([4]), expected_sub)
+
+  let tp_i32 = @schema_test.TensorProto::default()
+  tp_i32.name = Some("w_f16_i32")
+  tp_i32.data_type = Some(10)
+  tp_i32.dims = [(2 : Int64)]
+  tp_i32.int32_data = [0x3C00, 0xC100]
+  let t_i32 = @onnx_proto.decode_tensor_proto(tp_i32)
+  assert_eq(t_i32.get_f32([0]), (1.0 : Float))
+  assert_eq(t_i32.get_f32([1]), (-2.5 : Float))
+}
