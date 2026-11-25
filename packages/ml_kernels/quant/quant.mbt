@@ -456,3 +456,481 @@ pub fn matmul_f32_w8_i8(
     }
   }
 }
+
+///|
+/// ONNX `DynamicQuantizeLinear` 内核：实时扫描 `src[src_off .. +n]` 的值域并量化为 `UInt8`，
+/// 返回 `(y_scale, y_zero_point)`，严格遵循 ONNX 规范（值域包含 0.0、银行家舍入）。
+pub fn dynamic_quantize_linear_u8(
+  src : FixedArray[Float],
+  src_off : Int32,
+  dst : FixedArray[Byte],
+  dst_off : Int32,
+  n : Int32,
+) -> (Float, Byte) {
+  let mut min_v = 0.0
+  let mut max_v = 0.0
+  for i = 0; i < n; i = i + 1 {
+    let v = src[src_off + i].to_double()
+    if v < min_v {
+      min_v = v
+    }
+    if v > max_v {
+      max_v = v
+    }
+  }
+  let range = max_v - min_v
+  if range <= 0.0 {
+    for i = 0; i < n; i = i + 1 {
+      dst[dst_off + i] = b'\x00'
+    }
+    return ((1.0 : Float), b'\x00')
+  }
+  let scale_d = range / 255.0
+  let scale = Float::from_double(scale_d)
+  let zp_i = round_half_to_even(-min_v / scale.to_double())
+  let zp_clamped = if zp_i < 0 { 0 } else if zp_i > 255 { 255 } else { zp_i }
+  let zp_byte = zp_clamped.to_byte()
+  let inv_s = 1.0 / scale.to_double()
+  for i = 0; i < n; i = i + 1 {
+    let q = round_half_to_even(src[src_off + i].to_double() * inv_s) +
+      zp_clamped
+    dst[dst_off + i] = u8_to_byte(q)
+  }
+  (scale, zp_byte)
+}
+
+///|
+/// 预打包的有符号 `Int8` 权重矩阵 `B[K, N]`：
+/// - `bt` 以列优先连续布局 `[N, K]` 存储，保证 `V128` 沿 `K` 维 16 字节全速顺序读取；
+/// - `col_sums[N]` 离线预计算每列有符号总和 `sum_k B[k, j]`，将 `a_zp` 零点补偿移出内层 K 循环。
+pub struct PackedInt8MatrixB {
+  bt : FixedArray[Byte]
+  col_sums : FixedArray[Int32]
+  k : Int32
+  n : Int32
+}
+
+///|
+/// 返回预打包 INT8 权重的逻辑维度 `(K, N)`。
+pub fn PackedInt8MatrixB::dims(self : PackedInt8MatrixB) -> (Int32, Int32) {
+  (self.k, self.n)
+}
+
+///|
+/// 离线打包行主序有符号 `Int8` 权重矩阵 `B[K, N]` 为 `PackedInt8MatrixB`。
+pub fn pack_int8_matrix_b(
+  b : FixedArray[Byte],
+  k : Int32,
+  n : Int32,
+) -> PackedInt8MatrixB {
+  let bt = FixedArray::make(n * k, b'\x00')
+  let col_sums = FixedArray::make(n, 0)
+  for kk = 0; kk < k; kk = kk + 1 {
+    let row = kk * n
+    for j = 0; j < n; j = j + 1 {
+      let bv = b[row + j]
+      bt[j * k + kk] = bv
+      col_sums[j] = col_sums[j] + byte_to_i8(bv)
+    }
+  }
+  { bt, col_sums, k, n, }
+}
+
+///|
+/// 检查可选的 `b_zp` 数组是否包含非零元素（对称每通道量化权重通常全 0，可跳过 `row_sum` 计算）。
+fn has_nonzero_byte(arr : FixedArray[Byte]?) -> Bool {
+  match arr {
+    None => false
+    Some(b) => {
+      for i = 0; i < b.length(); i = i + 1 {
+        if b[i] != b'\x00' {
+          return true
+        }
+      }
+      false
+    }
+  }
+}
+
+///|
+/// 提取第 `j` 列的有符号 `Int8` 零点值（支持标量长度 1 与每列长度 `N` 两种布局）。
+fn get_b_zp_i8(b_zp : FixedArray[Byte]?, j : Int32) -> Int32 {
+  match b_zp {
+    None => 0
+    Some(arr) =>
+      if arr.length() == 0 {
+        0
+      } else if arr.length() == 1 {
+        byte_to_i8(arr[0])
+      } else {
+        byte_to_i8(arr[j])
+      }
+  }
+}
+
+///|
+/// V128 SIMD 4 列展开 `MatMulInteger(A_u8[M, K], B_i8[K, N]) -> Int32[M, N]`：
+/// - 复用同一条 `A` 向量并发点积 4 列预打包 `BT`，减少 4× 的 `A` 加载与扩展开销；
+/// - 借助离线 `col_sums` 将零点减法完全移出热循环，内循环仅执行纯 `i32x4_dot_i16x8_s` 硬件点积。
+pub fn matmul_integer_u8_i8_prepacked_v128(
+  a : FixedArray[Byte],
+  a_off : Int32,
+  a_zp : Byte,
+  packed_b : PackedInt8MatrixB,
+  b_zp : FixedArray[Byte]?,
+  out : FixedArray[Int32],
+  out_off : Int32,
+  m : Int32,
+) -> Unit {
+  let k = packed_b.k
+  let n = packed_b.n
+  let bt = packed_b.bt
+  let col_sums = packed_b.col_sums
+  let az = a_zp.to_int()
+  let need_bzp = has_nonzero_byte(b_zp)
+  let v_zero = @v128.i32x4_splat(0U)
+  let k_vec = k - k % 16
+
+  for i = 0; i < m; i = i + 1 {
+    let a_row = a_off + i * k
+    let y_row = out_off + i * n
+    let mut row_sum = 0
+    if need_bzp {
+      for kk = 0; kk < k; kk = kk + 1 {
+        row_sum = row_sum + a[a_row + kk].to_int()
+      }
+    }
+
+    // 4 列寄存器展开：1 次 A 向量加载 + 扩展服务 4 列 B
+    let mut j = 0
+    while j + 4 <= n {
+      let b0 = j * k
+      let b1 = b0 + k
+      let b2 = b1 + k
+      let b3 = b2 + k
+      let mut acc0 = v_zero
+      let mut acc1 = v_zero
+      let mut acc2 = v_zero
+      let mut acc3 = v_zero
+      let mut kk = 0
+      while kk < k_vec {
+        let va = @v128.v128_load(a, a_row + kk)
+        let va_lo = @v128.i16x8_extend_low_i8x16_u(va)
+        let va_hi = @v128.i16x8_extend_high_i8x16_u(va)
+
+        let vb0 = @v128.v128_load(bt, b0 + kk)
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb0)),
+        )
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb0)),
+        )
+
+        let vb1 = @v128.v128_load(bt, b1 + kk)
+        acc1 = @v128.i32x4_add(
+          acc1,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb1)),
+        )
+        acc1 = @v128.i32x4_add(
+          acc1,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb1)),
+        )
+
+        let vb2 = @v128.v128_load(bt, b2 + kk)
+        acc2 = @v128.i32x4_add(
+          acc2,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb2)),
+        )
+        acc2 = @v128.i32x4_add(
+          acc2,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb2)),
+        )
+
+        let vb3 = @v128.v128_load(bt, b3 + kk)
+        acc3 = @v128.i32x4_add(
+          acc3,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb3)),
+        )
+        acc3 = @v128.i32x4_add(
+          acc3,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb3)),
+        )
+        kk = kk + 16
+      }
+      let mut s0 = hsum_i32x4(acc0)
+      let mut s1 = hsum_i32x4(acc1)
+      let mut s2 = hsum_i32x4(acc2)
+      let mut s3 = hsum_i32x4(acc3)
+      while kk < k {
+        let av = a[a_row + kk].to_int()
+        s0 = s0 + av * byte_to_i8(bt[b0 + kk])
+        s1 = s1 + av * byte_to_i8(bt[b1 + kk])
+        s2 = s2 + av * byte_to_i8(bt[b2 + kk])
+        s3 = s3 + av * byte_to_i8(bt[b3 + kk])
+        kk = kk + 1
+      }
+      s0 = s0 - az * col_sums[j]
+      s1 = s1 - az * col_sums[j + 1]
+      s2 = s2 - az * col_sums[j + 2]
+      s3 = s3 - az * col_sums[j + 3]
+      if need_bzp {
+        let bz0 = get_b_zp_i8(b_zp, j)
+        let bz1 = get_b_zp_i8(b_zp, j + 1)
+        let bz2 = get_b_zp_i8(b_zp, j + 2)
+        let bz3 = get_b_zp_i8(b_zp, j + 3)
+        s0 = s0 - bz0 * (row_sum - k * az)
+        s1 = s1 - bz1 * (row_sum - k * az)
+        s2 = s2 - bz2 * (row_sum - k * az)
+        s3 = s3 - bz3 * (row_sum - k * az)
+      }
+      out[y_row + j] = s0
+      out[y_row + j + 1] = s1
+      out[y_row + j + 2] = s2
+      out[y_row + j + 3] = s3
+      j = j + 4
+    }
+
+    while j < n {
+      let b0 = j * k
+      let mut acc0 = v_zero
+      let mut kk = 0
+      while kk < k_vec {
+        let va = @v128.v128_load(a, a_row + kk)
+        let vb = @v128.v128_load(bt, b0 + kk)
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(
+            @v128.i16x8_extend_low_i8x16_u(va),
+            @v128.i16x8_extend_low_i8x16_s(vb),
+          ),
+        )
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(
+            @v128.i16x8_extend_high_i8x16_u(va),
+            @v128.i16x8_extend_high_i8x16_s(vb),
+          ),
+        )
+        kk = kk + 16
+      }
+      let mut s0 = hsum_i32x4(acc0)
+      while kk < k {
+        s0 = s0 + a[a_row + kk].to_int() * byte_to_i8(bt[b0 + kk])
+        kk = kk + 1
+      }
+      s0 = s0 - az * col_sums[j]
+      if need_bzp {
+        let bz0 = get_b_zp_i8(b_zp, j)
+        s0 = s0 - bz0 * (row_sum - k * az)
+      }
+      out[y_row + j] = s0
+      j = j + 1
+    }
+  }
+}
+
+///|
+/// V128 SIMD 融合输出版 `MatMulInteger(A_u8, B_i8) -> Float32`（直接将 `Int32` 累加器转为 `Float32` 写回 Arena，消除中间 `Int32` 缓冲）。
+pub fn matmul_integer_u8_i8_prepacked_to_f32_v128(
+  a : FixedArray[Byte],
+  a_off : Int32,
+  a_zp : Byte,
+  packed_b : PackedInt8MatrixB,
+  b_zp : FixedArray[Byte]?,
+  out : FixedArray[Float],
+  out_off : Int32,
+  m : Int32,
+) -> Unit {
+  let k = packed_b.k
+  let n = packed_b.n
+  let bt = packed_b.bt
+  let col_sums = packed_b.col_sums
+  let az = a_zp.to_int()
+  let need_bzp = has_nonzero_byte(b_zp)
+  let v_zero = @v128.i32x4_splat(0U)
+  let k_vec = k - k % 16
+
+  for i = 0; i < m; i = i + 1 {
+    let a_row = a_off + i * k
+    let y_row = out_off + i * n
+    let mut row_sum = 0
+    if need_bzp {
+      for kk = 0; kk < k; kk = kk + 1 {
+        row_sum = row_sum + a[a_row + kk].to_int()
+      }
+    }
+
+    let mut j = 0
+    while j + 4 <= n {
+      let b0 = j * k
+      let b1 = b0 + k
+      let b2 = b1 + k
+      let b3 = b2 + k
+      let mut acc0 = v_zero
+      let mut acc1 = v_zero
+      let mut acc2 = v_zero
+      let mut acc3 = v_zero
+      let mut kk = 0
+      while kk < k_vec {
+        let va = @v128.v128_load(a, a_row + kk)
+        let va_lo = @v128.i16x8_extend_low_i8x16_u(va)
+        let va_hi = @v128.i16x8_extend_high_i8x16_u(va)
+
+        let vb0 = @v128.v128_load(bt, b0 + kk)
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb0)),
+        )
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb0)),
+        )
+
+        let vb1 = @v128.v128_load(bt, b1 + kk)
+        acc1 = @v128.i32x4_add(
+          acc1,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb1)),
+        )
+        acc1 = @v128.i32x4_add(
+          acc1,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb1)),
+        )
+
+        let vb2 = @v128.v128_load(bt, b2 + kk)
+        acc2 = @v128.i32x4_add(
+          acc2,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb2)),
+        )
+        acc2 = @v128.i32x4_add(
+          acc2,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb2)),
+        )
+
+        let vb3 = @v128.v128_load(bt, b3 + kk)
+        acc3 = @v128.i32x4_add(
+          acc3,
+          @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb3)),
+        )
+        acc3 = @v128.i32x4_add(
+          acc3,
+          @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb3)),
+        )
+        kk = kk + 16
+      }
+      let mut s0 = hsum_i32x4(acc0)
+      let mut s1 = hsum_i32x4(acc1)
+      let mut s2 = hsum_i32x4(acc2)
+      let mut s3 = hsum_i32x4(acc3)
+      while kk < k {
+        let av = a[a_row + kk].to_int()
+        s0 = s0 + av * byte_to_i8(bt[b0 + kk])
+        s1 = s1 + av * byte_to_i8(bt[b1 + kk])
+        s2 = s2 + av * byte_to_i8(bt[b2 + kk])
+        s3 = s3 + av * byte_to_i8(bt[b3 + kk])
+        kk = kk + 1
+      }
+      s0 = s0 - az * col_sums[j]
+      s1 = s1 - az * col_sums[j + 1]
+      s2 = s2 - az * col_sums[j + 2]
+      s3 = s3 - az * col_sums[j + 3]
+      if need_bzp {
+        let bz0 = get_b_zp_i8(b_zp, j)
+        let bz1 = get_b_zp_i8(b_zp, j + 1)
+        let bz2 = get_b_zp_i8(b_zp, j + 2)
+        let bz3 = get_b_zp_i8(b_zp, j + 3)
+        s0 = s0 - bz0 * (row_sum - k * az)
+        s1 = s1 - bz1 * (row_sum - k * az)
+        s2 = s2 - bz2 * (row_sum - k * az)
+        s3 = s3 - bz3 * (row_sum - k * az)
+      }
+      out[y_row + j] = Float::from_int(s0)
+      out[y_row + j + 1] = Float::from_int(s1)
+      out[y_row + j + 2] = Float::from_int(s2)
+      out[y_row + j + 3] = Float::from_int(s3)
+      j = j + 4
+    }
+
+    while j < n {
+      let b0 = j * k
+      let mut acc0 = v_zero
+      let mut kk = 0
+      while kk < k_vec {
+        let va = @v128.v128_load(a, a_row + kk)
+        let vb = @v128.v128_load(bt, b0 + kk)
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(
+            @v128.i16x8_extend_low_i8x16_u(va),
+            @v128.i16x8_extend_low_i8x16_s(vb),
+          ),
+        )
+        acc0 = @v128.i32x4_add(
+          acc0,
+          @v128.i32x4_dot_i16x8_s(
+            @v128.i16x8_extend_high_i8x16_u(va),
+            @v128.i16x8_extend_high_i8x16_s(vb),
+          ),
+        )
+        kk = kk + 16
+      }
+      let mut s0 = hsum_i32x4(acc0)
+      while kk < k {
+        s0 = s0 + a[a_row + kk].to_int() * byte_to_i8(bt[b0 + kk])
+        kk = kk + 1
+      }
+      s0 = s0 - az * col_sums[j]
+      if need_bzp {
+        let bz0 = get_b_zp_i8(b_zp, j)
+        s0 = s0 - bz0 * (row_sum - k * az)
+      }
+      out[y_row + j] = Float::from_int(s0)
+      j = j + 1
+    }
+  }
+}
+
+///|
+/// 标量快速路径 `MatMulInteger(A_u8, B_i8) -> Float32`（专为 Wasm-GC 优化：避免 GC 字节数组 `v128_load` 退化，同时复用 `col_sums`）。
+pub fn matmul_integer_u8_i8_prepacked_to_f32_scalar(
+  a : FixedArray[Byte],
+  a_off : Int32,
+  a_zp : Byte,
+  packed_b : PackedInt8MatrixB,
+  b_zp : FixedArray[Byte]?,
+  out : FixedArray[Float],
+  out_off : Int32,
+  m : Int32,
+) -> Unit {
+  let k = packed_b.k
+  let n = packed_b.n
+  let bt = packed_b.bt
+  let col_sums = packed_b.col_sums
+  let az = a_zp.to_int()
+  let need_bzp = has_nonzero_byte(b_zp)
+
+  for i = 0; i < m; i = i + 1 {
+    let a_row = a_off + i * k
+    let y_row = out_off + i * n
+    let mut row_sum = 0
+    if need_bzp {
+      for kk = 0; kk < k; kk = kk + 1 {
+        row_sum = row_sum + a[a_row + kk].to_int()
+      }
+    }
+    for j = 0; j < n; j = j + 1 {
+      let b0 = j * k
+      let mut acc = 0
+      for kk = 0; kk < k; kk = kk + 1 {
+        acc = acc + a[a_row + kk].to_int() * byte_to_i8(bt[b0 + kk])
+      }
+      acc = acc - az * col_sums[j]
+      if need_bzp {
+        let bz0 = get_b_zp_i8(b_zp, j)
+        acc = acc - bz0 * (row_sum - k * az)
+      }
+      out[y_row + j] = Float::from_int(acc)
+    }
+  }
+}

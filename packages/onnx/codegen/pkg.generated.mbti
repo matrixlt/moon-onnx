@@ -106,6 +106,7 @@ pub(all) enum WeightKind {
   PackedMatB(trans_b~ : Bool)
   PackedConv(group~ : Int32)
   RawBytes(trans_b~ : Bool)
+  PackedInt8MatB
 }
 
 // Type aliases

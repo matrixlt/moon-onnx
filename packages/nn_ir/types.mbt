@@ -174,6 +174,10 @@ pub(all) enum Op {
   ConstantOfShape(value~ : @tensor.Tensor)
   /// ONNX 条件控制流算子：根据标量布尔条件选择执行 `then_branch` 或 `else_branch` 子图
   If(then_branch~ : IrGraph, else_branch~ : IrGraph)
+  /// 动态线性量化 `DynamicQuantizeLinear(x) -> (y: UInt8, y_scale: Float32, y_zero_point: UInt8)`
+  DynamicQuantizeLinear
+  /// 整数矩阵乘法 `MatMulInteger(A, B, a_zero_point?, b_zero_point?) -> Int32`（支持 N-D × 2D 与 INT8/UINT8 混合）
+  MatMulInteger
 }
 
 ///|
@@ -244,6 +248,8 @@ pub fn Op::name(self : Op) -> String {
     Tile => "Tile"
     ConstantOfShape(..) => "ConstantOfShape"
     If(..) => "If"
+    DynamicQuantizeLinear => "DynamicQuantizeLinear"
+    MatMulInteger => "MatMulInteger"
   }
 }
 

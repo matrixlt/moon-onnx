@@ -114,6 +114,8 @@ pub(all) enum Op {
   Tile
   ConstantOfShape(value~ : @tensor.Tensor)
   If(then_branch~ : IrGraph, else_branch~ : IrGraph)
+  DynamicQuantizeLinear
+  MatMulInteger
 }
 pub fn Op::name(Self) -> String
 

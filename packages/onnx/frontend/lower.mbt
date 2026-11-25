@@ -461,6 +461,8 @@ fn lower_node(
     "DequantizeLinear" =>
       @nn_ir.DequantizeLinear(axis=get_attr_int(attrs, "axis", 1))
     "QLinearMatMul" => @nn_ir.QLinearMatMul
+    "DynamicQuantizeLinear" => @nn_ir.DynamicQuantizeLinear
+    "MatMulInteger" => @nn_ir.MatMulInteger
     "Resize" =>
       @nn_ir.Resize(
         mode=get_attr_string(attrs, "mode", "nearest"),

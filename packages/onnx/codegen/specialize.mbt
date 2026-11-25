@@ -89,6 +89,7 @@ fn infer_node_output_shapes(
       }
       return out_shapes
     }
+    @nn_ir.DynamicQuantizeLinear => return [req_shape(ins[0]).copy(), [], []]
     _ => ()
   }
 
@@ -326,7 +327,7 @@ fn infer_node_output_shapes(
       }
       res
     }
-    @nn_ir.MatMul => {
+    @nn_ir.MatMul | @nn_ir.MatMulInteger => {
       let sa = req_shape(ins[0])
       let sb = req_shape(ins[1])
       if sa.length() == 2 && sb.length() == 2 {
@@ -792,6 +793,18 @@ fn try_eval_const_node(
           }
           None => None
         }
+      @nn_ir.DequantizeLinear(axis~) =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(x), Some(sc)) => {
+            let zp = if ins.length() >= 3 && ins[2] != "" {
+              consts.get(ins[2])
+            } else {
+              None
+            }
+            Some(@ops.dequantize_linear_op(x, sc, zp, axis~))
+          }
+          _ => None
+        }
       _ => None
     }
   } catch {
@@ -1025,26 +1038,42 @@ pub fn specialize_graph(
         shapes[eff_node.outputs[k]] = out_shapes[k]
       }
     }
-    let out_dt : @tensor.DType = match eff_node.op {
-      @nn_ir.Cast(to~) => to
-      @nn_ir.Shape(..) => @tensor.Int64
-      @nn_ir.Equal => @tensor.Bool
-      @nn_ir.Constant(value~) => value.dtype()
-      @nn_ir.ConstantOfShape(value~) => value.dtype()
-      @nn_ir.DequantizeLinear(..) => @tensor.Float32
-      _ =>
-        if eff_node.inputs.length() > 0 {
-          match dtypes.get(eff_node.inputs[0]) {
-            Some(dt) => dt
-            None => @tensor.Float32
-          }
-        } else {
-          @tensor.Float32
+    match eff_node.op {
+      @nn_ir.DynamicQuantizeLinear => {
+        if eff_node.outputs.length() >= 1 && eff_node.outputs[0] != "" {
+          dtypes[eff_node.outputs[0]] = @tensor.UInt8
         }
-    }
-    for k = 0; k < eff_node.outputs.length(); k = k + 1 {
-      if eff_node.outputs[k] != "" {
-        dtypes[eff_node.outputs[k]] = out_dt
+        if eff_node.outputs.length() >= 2 && eff_node.outputs[1] != "" {
+          dtypes[eff_node.outputs[1]] = @tensor.Float32
+        }
+        if eff_node.outputs.length() >= 3 && eff_node.outputs[2] != "" {
+          dtypes[eff_node.outputs[2]] = @tensor.UInt8
+        }
+      }
+      _ => {
+        let out_dt : @tensor.DType = match eff_node.op {
+          @nn_ir.Cast(to~) => to
+          @nn_ir.Shape(..) => @tensor.Int64
+          @nn_ir.MatMulInteger => @tensor.Int32
+          @nn_ir.Equal => @tensor.Bool
+          @nn_ir.Constant(value~) => value.dtype()
+          @nn_ir.ConstantOfShape(value~) => value.dtype()
+          @nn_ir.DequantizeLinear(..) => @tensor.Float32
+          _ =>
+            if eff_node.inputs.length() > 0 {
+              match dtypes.get(eff_node.inputs[0]) {
+                Some(dt) => dt
+                None => @tensor.Float32
+              }
+            } else {
+              @tensor.Float32
+            }
+        }
+        for k = 0; k < eff_node.outputs.length(); k = k + 1 {
+          if eff_node.outputs[k] != "" {
+            dtypes[eff_node.outputs[k]] = out_dt
+          }
+        }
       }
     }
     folded_nodes.push(eff_node)

@@ -821,3 +821,64 @@ test "Transformer/NLP ops match ONNX semantics" {
     )
   }
 }
+
+///|
+/// 验证 `DynamicQuantizeLinear`、3D `MatMulInteger`（V128 预打包 vs 标量参考）以及 `UInt8`/`Int8` `Gather`。
+test "DynamicQuantizeLinear, MatMulInteger, and byte Gather match ONNX semantics" {
+  // 1. UInt8 词表 Gather + DequantizeLinear
+  let table = @tensor.Tensor::from_u8([3, 2], [
+    (10).to_byte(),
+    (20).to_byte(),
+    (30).to_byte(),
+    (40).to_byte(),
+    (50).to_byte(),
+    (60).to_byte(),
+  ])
+  let ids = @tensor.Tensor::from_i64([1, 2], [2, 0])
+  let gathered = @ops.gather_op(table, ids, 0)
+  assert_eq(gathered.dtype(), @tensor.UInt8)
+  assert_eq(gathered.shape(), [1, 2, 2])
+  let gb = gathered.to_u8_buffer()
+  assert_eq(gb[0].to_int(), 50)
+  assert_eq(gb[1].to_int(), 60)
+  assert_eq(gb[2].to_int(), 10)
+  assert_eq(gb[3].to_int(), 20)
+
+  // 2. DynamicQuantizeLinear + 3D MatMulInteger ([1, 3, 19] @ [19, 7])
+  let x = @tensor.Tensor::from_f32_array(
+    [1, 3, 19],
+    Array::makei(57, fn(i) { Float::from_int(i - 28) * (0.1 : Float) }),
+  )
+  let (xq, x_sc, x_zp) = @ops.dynamic_quantize_linear_op(x)
+  assert_eq(xq.dtype(), @tensor.UInt8)
+  assert_eq(xq.shape(), [1, 3, 19])
+  assert_eq(x_sc.shape(), [])
+  assert_eq(x_zp.shape(), [])
+
+  let w = @tensor.Tensor::from_i8(
+    [19, 7],
+    FixedArray::makei(133, fn(i) { @quant.i8_to_byte(i * 11 % 160 - 80) }),
+  )
+  let b_zp = @tensor.Tensor::from_i8([7], FixedArray::make(7, b'\x00'))
+  let y_simd = @ops.matmul_integer_op(
+    xq,
+    w,
+    Some(x_zp),
+    Some(b_zp),
+    use_simd=true,
+  )
+  let y_scalar = @ops.matmul_integer_op(
+    xq,
+    w,
+    Some(x_zp),
+    Some(b_zp),
+    use_simd=false,
+  )
+  assert_eq(y_simd.dtype(), @tensor.Int32)
+  assert_eq(y_simd.shape(), [1, 3, 7])
+  let c1 = @ops.cast_op(y_simd, @tensor.Float32)
+  let c2 = @ops.cast_op(y_scalar, @tensor.Float32)
+  for i = 0; i < 21; i = i + 1 {
+    assert_eq(c1.get_f32_flat(i), c2.get_f32_flat(i))
+  }
+}

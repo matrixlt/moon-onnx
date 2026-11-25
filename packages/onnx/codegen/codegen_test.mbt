@@ -741,3 +741,95 @@ test "Transformer encoder block compiles to zero-allocation Arena mode with Int6
   assert_true(art.mbt_source.contains("fn softmax_f32("))
   assert_true(!art.pkg_config.contains("matrixlt/tensor"))
 }
+
+///|
+/// 验证 INT8 动态量化 Transformer 子图（`UInt8 Gather` 词表 + `DequantizeLinear` +
+/// `DynamicQuantizeLinear` + 融合 `MatMulInteger -> Cast(Float32)` + 缩放 `Mul`）
+/// 可完整编译为零堆分配 `Arena` 模式（含 `PackedInt8MatrixB` 预打包与 `arena_u8` 静态复用）。
+test "Quantized INT8 Transformer block compiles to zero-allocation Arena mode" {
+  let emb_u8 = @tensor.Tensor::from_u8(
+    [16, 8],
+    FixedArray::makei(128, fn(i) { (i % 200).to_byte() }),
+  )
+  let emb_sc = @tensor.Tensor::from_f32_array([], [0.02])
+  let emb_zp = @tensor.Tensor::from_u8([], [(100).to_byte()])
+  let w_i8 = @tensor.Tensor::from_i8(
+    [8, 8],
+    FixedArray::makei(64, fn(i) { ((i % 100 - 50) & 0xFF).to_byte() }),
+  )
+  let w_zp = @tensor.Tensor::from_i8([8], FixedArray::make(8, b'\x00'))
+  let w_sc = @tensor.Tensor::full_f32([8], (0.01 : Float))
+
+  let g : @nn_ir.IrGraph = {
+    name: "mini_bert_q8",
+    inputs: ["input_ids"],
+    outputs: ["out"],
+    initializers: Map([
+      ("emb_u8", emb_u8),
+      ("emb_sc", emb_sc),
+      ("emb_zp", emb_zp),
+      ("w_i8", w_i8),
+      ("w_zp", w_zp),
+      ("w_sc", w_sc),
+    ]),
+    nodes: [
+      {
+        name: "g0",
+        op: @nn_ir.Gather(axis=0),
+        inputs: ["emb_u8", "input_ids"],
+        outputs: ["emb_q"],
+      },
+      {
+        name: "dq0",
+        op: @nn_ir.DequantizeLinear(axis=1),
+        inputs: ["emb_q", "emb_sc", "emb_zp"],
+        outputs: ["x"],
+      },
+      {
+        name: "dynq",
+        op: @nn_ir.DynamicQuantizeLinear,
+        inputs: ["x"],
+        outputs: ["xq", "x_sc", "x_zp"],
+      },
+      {
+        name: "sc_mul",
+        op: @nn_ir.Mul,
+        inputs: ["x_sc", "w_sc"],
+        outputs: ["comb_sc"],
+      },
+      {
+        name: "mmi",
+        op: @nn_ir.MatMulInteger,
+        inputs: ["xq", "w_i8", "x_zp", "w_zp"],
+        outputs: ["acc_i32"],
+      },
+      {
+        name: "cast0",
+        op: @nn_ir.Cast(to=@tensor.Float32),
+        inputs: ["acc_i32"],
+        outputs: ["acc_f32"],
+      },
+      {
+        name: "out_mul",
+        op: @nn_ir.Mul,
+        inputs: ["acc_f32", "comb_sc"],
+        outputs: ["out"],
+      },
+    ],
+  }
+
+  let art = @codegen.compile_graph_to_mbt(g, Map([("input_ids", [1, 4])]), config={
+    ..@codegen.CodegenConfig::default(),
+    struct_name: "MiniBertQ8",
+    target: @codegen.TargetWasm,
+    input_dtypes: Map([("input_ids", @tensor.Int64)]),
+  })
+  assert_eq(art.mode_used, @codegen.Arena)
+  assert_true(art.arena_byte_elems > 0)
+  assert_true(art.mbt_source.contains("@quant.PackedInt8MatrixB"))
+  assert_true(art.mbt_source.contains("@quant.dynamic_quantize_linear_u8"))
+  assert_true(
+    art.mbt_source.contains("@quant.matmul_integer_u8_i8_prepacked_to_f32_v128"),
+  )
+  assert_true(!art.pkg_config.contains("matrixlt/tensor"))
+}

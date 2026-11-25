@@ -110,6 +110,8 @@ pub(all) enum WeightKind {
   PackedConv(group~ : Int32)
   /// 原始 1 字节量化权重（`Int8` / `UInt8`，`trans_b=true` 时在加载期预转置为 `[N, K]`）
   RawBytes(trans_b~ : Bool)
+  /// 预打包 2D `Int8` 权重（`MatMulInteger` 离线预转置 `[N, K]` + 预计算列和 `col_sums[N]`）
+  PackedInt8MatB
 }
 
 ///|
@@ -344,7 +346,7 @@ pub fn compile_graph_to_mbt(
           "\{name}#mat"
         }
       PackedConv(group~) => "\{name}#conv_g\{group}"
-      RawBytes(..) => "\{name}#bytes"
+      RawBytes(..) | PackedInt8MatB => "\{name}#bytes"
     }
     match weight_key_to_field.get(key) {
       Some(f) => return f
@@ -910,7 +912,7 @@ pub fn compile_graph_to_mbt(
   for i = 0; i < weight_entries.length(); i = i + 1 {
     let w = weight_entries[i]
     let ty = match w.kind {
-      RawF32 | RawBytes(..) => "@tensor.Tensor"
+      RawF32 | RawBytes(..) | PackedInt8MatB => "@tensor.Tensor"
       PackedMatB(..) => "@gemm.PackedMatrixB"
       PackedConv(..) => "@ops.PackedConvWeight"
     }
@@ -934,7 +936,7 @@ pub fn compile_graph_to_mbt(
     let w = weight_entries[i]
     let sh_str = fmt_int_array(w.shape)
     match w.kind {
-      RawF32 | RawBytes(..) =>
+      RawF32 | RawBytes(..) | PackedInt8MatB =>
         src.write_string(
           "  let \{w.field_name} = load_weight_f32(weights, \{w.byte_offset}, \{sh_str})\n",
         )

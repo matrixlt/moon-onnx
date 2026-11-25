@@ -98,3 +98,78 @@ test "V128 QLinearMatMul (i8 & u8) matches scalar bit-exact and W8A32 preserves 
     }
   }
 }
+
+///|
+/// 验证 `dynamic_quantize_linear_u8` 与 4 列展开 `V128` `MatMulInteger`（含零/非零每列 `b_zp`）与标量参考逐位一致。
+test "DynamicQuantizeLinear and V128 MatMulInteger match scalar reference bit-for-bit" {
+  // 1. DynamicQuantizeLinear：值域 [-2.0, 6.0]，scale = 8/255，zp = round(2 / (8/255)) = 64
+  let src : FixedArray[Float] = [-2.0, 0.0, 2.0, 6.0]
+  let dst = FixedArray::make(4, b'\x00')
+  let (sc, zp) = @quant.dynamic_quantize_linear_u8(src, 0, dst, 0, 4)
+  assert_true((sc - Float::from_double(8.0 / 255.0)).abs() < (1.0e-6 : Float))
+  assert_eq(zp.to_int(), 64)
+  assert_eq(dst[0].to_int(), 0)
+  assert_eq(dst[1].to_int(), 64)
+  assert_eq(dst[3].to_int(), 255)
+
+  // 2. MatMulInteger：非 16/4 整倍数尺寸 [5, 37] @ [37, 11]，验证尾部处理与每列非零 b_zp
+  let m = 5
+  let k = 37
+  let n = 11
+  let a = FixedArray::makei(m * k, fn(i) { (i * 13 % 256).to_byte() })
+  let b = FixedArray::makei(k * n, fn(i) {
+    @quant.i8_to_byte(i * 17 % 200 - 100)
+  })
+  let a_zp = (123).to_byte()
+  let b_zp = FixedArray::makei(n, fn(j) { @quant.i8_to_byte(j - 5) })
+  let packed = @quant.pack_int8_matrix_b(b, k, n)
+
+  let out_i32 = FixedArray::make(m * n, 0)
+  let out_f32_v128 = FixedArray::make(m * n, (0.0 : Float))
+  let out_f32_sc = FixedArray::make(m * n, (0.0 : Float))
+  @quant.matmul_integer_u8_i8_prepacked_v128(
+    a,
+    0,
+    a_zp,
+    packed,
+    Some(b_zp),
+    out_i32,
+    0,
+    m,
+  )
+  @quant.matmul_integer_u8_i8_prepacked_to_f32_v128(
+    a,
+    0,
+    a_zp,
+    packed,
+    Some(b_zp),
+    out_f32_v128,
+    0,
+    m,
+  )
+  @quant.matmul_integer_u8_i8_prepacked_to_f32_scalar(
+    a,
+    0,
+    a_zp,
+    packed,
+    Some(b_zp),
+    out_f32_sc,
+    0,
+    m,
+  )
+
+  for i = 0; i < m; i = i + 1 {
+    for j = 0; j < n; j = j + 1 {
+      let mut ref_acc = 0
+      let bz = @quant.byte_to_i8(b_zp[j])
+      for kk = 0; kk < k; kk = kk + 1 {
+        ref_acc = ref_acc +
+          (a[i * k + kk].to_int() - 123) *
+          (@quant.byte_to_i8(b[kk * n + j]) - bz)
+      }
+      assert_eq(out_i32[i * n + j], ref_acc)
+      assert_eq(out_f32_v128[i * n + j], Float::from_int(ref_acc))
+      assert_eq(out_f32_sc[i * n + j], Float::from_int(ref_acc))
+    }
+  }
+}

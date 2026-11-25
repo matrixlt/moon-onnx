@@ -622,6 +622,38 @@ pub fn gather_op(
       }
       @tensor.Tensor::from_i64(out_shape, out)
     }
+    @tensor.UInt8 => {
+      let src = data.to_u8_buffer()
+      let out = FixedArray::make(total, b'\x00')
+      for o = 0; o < outer; o = o + 1 {
+        let src_outer = o * axis_dim * inner
+        let dst_outer = o * i_numel * inner
+        for k = 0; k < i_numel; k = k + 1 {
+          let s_off = src_outer + norm_idx[k] * inner
+          let d_off = dst_outer + k * inner
+          for j = 0; j < inner; j = j + 1 {
+            out[d_off + j] = src[s_off + j]
+          }
+        }
+      }
+      @tensor.Tensor::from_u8(out_shape, out)
+    }
+    @tensor.Int8 => {
+      let src = data.to_i8_buffer()
+      let out = FixedArray::make(total, b'\x00')
+      for o = 0; o < outer; o = o + 1 {
+        let src_outer = o * axis_dim * inner
+        let dst_outer = o * i_numel * inner
+        for k = 0; k < i_numel; k = k + 1 {
+          let s_off = src_outer + norm_idx[k] * inner
+          let d_off = dst_outer + k * inner
+          for j = 0; j < inner; j = j + 1 {
+            out[d_off + j] = src[s_off + j]
+          }
+        }
+      }
+      @tensor.Tensor::from_i8(out_shape, out)
+    }
     other =>
       raise @tensor.Unsupported(
         "gather_op: unsupported data dtype \{other} (supports Float32/Int64)",

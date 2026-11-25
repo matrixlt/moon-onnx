@@ -3,6 +3,7 @@ package "matrixlt/onnx/session"
 
 import {
   "matrixlt/ml_kernels/gemm",
+  "matrixlt/ml_kernels/quant",
   "matrixlt/nn_ir",
   "matrixlt/onnx/ops",
   "matrixlt/onnx_proto",
@@ -50,6 +51,7 @@ pub struct EvalContext {
   env : Map[String, @tensor.Tensor]
   packed_weights : Map[String, @gemm.PackedMatrixB]
   packed_conv_weights : Map[String, @ops.PackedConvWeight]
+  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   scratch_pool : @tensor.BufferPool
   out_pool : @tensor.BufferPool?
 }
@@ -76,6 +78,7 @@ pub struct Session {
   provider : &ExecutionProvider
   packed_weights : Map[String, @gemm.PackedMatrixB]
   packed_conv_weights : Map[String, @ops.PackedConvWeight]
+  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   release_plan : Array[Array[String]]
   pinned_outputs : Array[Bool]
   pool : @tensor.BufferPool

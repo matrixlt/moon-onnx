@@ -252,3 +252,219 @@ pub fn qlinear_matmul_op(
       )
   }
 }
+
+///|
+/// ONNX `DynamicQuantizeLinear` 算子：动态量化 `Float32` 激活为 `(y: UInt8, y_scale: Float32[], y_zero_point: UInt8[])`。
+pub fn dynamic_quantize_linear_op(
+  x : @tensor.Tensor,
+) -> (@tensor.Tensor, @tensor.Tensor, @tensor.Tensor) raise @tensor.TensorError {
+  let shape = x.shape()
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let dst = FixedArray::make(n, b'\x00')
+  let (scale, zp) = @quant.dynamic_quantize_linear_u8(src, 0, dst, 0, n)
+  let y = @tensor.Tensor::from_u8(shape, dst)
+  let y_scale = @tensor.Tensor::from_f32([], FixedArray::make(1, scale))
+  let y_zp = @tensor.Tensor::from_u8([], FixedArray::make(1, zp))
+  (y, y_scale, y_zp)
+}
+
+///|
+/// 预打包加速版 ONNX `MatMulInteger`：`A_u8[..., M, K] @ PackedInt8MatrixB[K, N] -> Int32[..., M, N]`。
+/// 支持 `A` 任意 `rank >= 2` 与标量/每列 `[N]` `b_zero_point`，直接复用 V128 `i32x4.dot_i16x8_s` 硬件点积。
+pub fn matmul_integer_prepacked_op(
+  a : @tensor.Tensor,
+  packed_b : @quant.PackedInt8MatrixB,
+  a_zp : @tensor.Tensor?,
+  b_zp : @tensor.Tensor?,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let sa = a.shape()
+  let rank = sa.length()
+  if rank < 2 {
+    raise @tensor.InvalidShape(
+      "matmul_integer_prepacked_op requires rank >= 2, got \{@tensor.format_shape(sa)}",
+    )
+  }
+  let (kb, n) = packed_b.dims()
+  let k = sa[rank - 1]
+  if k != kb {
+    raise @tensor.ShapeMismatch(
+      "matmul_integer_prepacked_op: inner dim mismatch (\{k} vs \{kb})",
+    )
+  }
+  let mut m_tot = 1
+  let out_shape : Array[Int32] = []
+  for d = 0; d < rank - 1; d = d + 1 {
+    m_tot = m_tot * sa[d]
+    out_shape.push(sa[d])
+  }
+  out_shape.push(n)
+
+  let ab = a.to_u8_buffer()
+  let az : Byte = match a_zp {
+    Some(t) => t.to_u8_buffer()[0]
+    None => b'\x00'
+  }
+  let bz_opt : FixedArray[Byte]? = match b_zp {
+    Some(t) => Some(t.to_i8_buffer())
+    None => None
+  }
+  let out = FixedArray::make(m_tot * n, 0)
+  @quant.matmul_integer_u8_i8_prepacked_v128(
+    ab, 0, az, packed_b, bz_opt, out, 0, m_tot,
+  )
+  @tensor.Tensor::from_i32(out_shape, out)
+}
+
+///|
+/// 通用 ONNX `MatMulInteger` 算子：`A[..., M, K] @ B[K, N] -> Int32[..., M, N]`。
+/// 支持 `UInt8 × Int8`（走预打包 V128 快速路径）、`UInt8 × UInt8` 与 `Int8 × Int8`，并支持标量或每列 `[N]` 零点。
+pub fn matmul_integer_op(
+  a : @tensor.Tensor,
+  b : @tensor.Tensor,
+  a_zp : @tensor.Tensor?,
+  b_zp : @tensor.Tensor?,
+  use_simd~ : Bool = true,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let sa = a.shape()
+  let sb = b.shape()
+  if sa.length() < 2 || sb.length() != 2 {
+    raise @tensor.InvalidShape(
+      "matmul_integer_op requires A rank>=2 and B 2D, got \{@tensor.format_shape(sa)} and \{@tensor.format_shape(sb)}",
+    )
+  }
+  let rank = sa.length()
+  let k = sa[rank - 1]
+  let kb = sb[0]
+  let n = sb[1]
+  if k != kb {
+    raise @tensor.ShapeMismatch(
+      "matmul_integer_op: inner dim mismatch (\{k} vs \{kb})",
+    )
+  }
+  let mut m_tot = 1
+  let out_shape : Array[Int32] = []
+  for d = 0; d < rank - 1; d = d + 1 {
+    m_tot = m_tot * sa[d]
+    out_shape.push(sa[d])
+  }
+  out_shape.push(n)
+
+  match (a.dtype(), b.dtype()) {
+    (@tensor.UInt8, @tensor.Int8) if use_simd => {
+      let packed = @quant.pack_int8_matrix_b(b.to_i8_buffer(), k, n)
+      matmul_integer_prepacked_op(a, packed, a_zp, b_zp)
+    }
+    (@tensor.UInt8, @tensor.Int8) => {
+      let ab = a.to_u8_buffer()
+      let bb = b.to_i8_buffer()
+      let az = match a_zp {
+        Some(t) => t.to_u8_buffer()[0].to_int()
+        None => 0
+      }
+      let bzs : FixedArray[Byte]? = match b_zp {
+        Some(t) => Some(t.to_i8_buffer())
+        None => None
+      }
+      let out = FixedArray::make(m_tot * n, 0)
+      for i = 0; i < m_tot; i = i + 1 {
+        let ar = i * k
+        let yr = i * n
+        for j = 0; j < n; j = j + 1 {
+          let bz = match bzs {
+            None => 0
+            Some(arr) =>
+              if arr.length() == 1 {
+                @quant.byte_to_i8(arr[0])
+              } else {
+                @quant.byte_to_i8(arr[j])
+              }
+          }
+          let mut acc = 0
+          for kk = 0; kk < k; kk = kk + 1 {
+            acc = acc +
+              (ab[ar + kk].to_int() - az) *
+              (@quant.byte_to_i8(bb[kk * n + j]) - bz)
+          }
+          out[yr + j] = acc
+        }
+      }
+      @tensor.Tensor::from_i32(out_shape, out)
+    }
+    (@tensor.UInt8, @tensor.UInt8) => {
+      let ab = a.to_u8_buffer()
+      let bb = b.to_u8_buffer()
+      let az = match a_zp {
+        Some(t) => t.to_u8_buffer()[0].to_int()
+        None => 0
+      }
+      let bzs : FixedArray[Byte]? = match b_zp {
+        Some(t) => Some(t.to_u8_buffer())
+        None => None
+      }
+      let out = FixedArray::make(m_tot * n, 0)
+      for i = 0; i < m_tot; i = i + 1 {
+        let ar = i * k
+        let yr = i * n
+        for j = 0; j < n; j = j + 1 {
+          let bz = match bzs {
+            None => 0
+            Some(arr) =>
+              if arr.length() == 1 {
+                arr[0].to_int()
+              } else {
+                arr[j].to_int()
+              }
+          }
+          let mut acc = 0
+          for kk = 0; kk < k; kk = kk + 1 {
+            acc = acc +
+              (ab[ar + kk].to_int() - az) * (bb[kk * n + j].to_int() - bz)
+          }
+          out[yr + j] = acc
+        }
+      }
+      @tensor.Tensor::from_i32(out_shape, out)
+    }
+    (@tensor.Int8, @tensor.Int8) => {
+      let ab = a.to_i8_buffer()
+      let bb = b.to_i8_buffer()
+      let az = match a_zp {
+        Some(t) => @quant.byte_to_i8(t.to_i8_buffer()[0])
+        None => 0
+      }
+      let bzs : FixedArray[Byte]? = match b_zp {
+        Some(t) => Some(t.to_i8_buffer())
+        None => None
+      }
+      let out = FixedArray::make(m_tot * n, 0)
+      for i = 0; i < m_tot; i = i + 1 {
+        let ar = i * k
+        let yr = i * n
+        for j = 0; j < n; j = j + 1 {
+          let bz = match bzs {
+            None => 0
+            Some(arr) =>
+              if arr.length() == 1 {
+                @quant.byte_to_i8(arr[0])
+              } else {
+                @quant.byte_to_i8(arr[j])
+              }
+          }
+          let mut acc = 0
+          for kk = 0; kk < k; kk = kk + 1 {
+            acc = acc +
+              (@quant.byte_to_i8(ab[ar + kk]) - az) *
+              (@quant.byte_to_i8(bb[kk * n + j]) - bz)
+          }
+          out[yr + j] = acc
+        }
+      }
+      @tensor.Tensor::from_i32(out_shape, out)
+    }
+    (da, db) =>
+      raise @tensor.DTypeMismatch(
+        "matmul_integer_op: unsupported dtypes (\{da}, \{db})",
+      )
+  }
+}

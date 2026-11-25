@@ -95,6 +95,8 @@ pub struct Session {
   packed_weights : Map[String, @gemm.PackedMatrixB]
   /// 静态 4D Float32 卷积权重的预打包缓存（键为 `name#g{group}`，每分组预打包为 `W_g^T[K, C_out_g]`）
   packed_conv_weights : Map[String, @ops.PackedConvWeight]
+  /// 静态 2D Int8 量化权重的预打包缓存（`MatMulInteger` 预转置 + 列和，运行期走零减法 V128 `i32x4.dot`）
+  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   /// 静态生命周期回收计划：`release_plan[i]` 为第 i 个节点执行完后可安全归还至 `BufferPool` 的源张量名
   release_plan : Array[Array[String]]
   /// 标记每个节点的输出是否被图输入/输出/常量锁定（锁定输出不从池分配，避免跨推理结果被覆盖）
@@ -107,16 +109,21 @@ pub struct Session {
 }
 
 ///|
-/// 在会话初始化期扫描计算图，将所有静态 2D 权重（`MatMul` / `Gemm` 含 `trans_b=true`）
-/// 与静态 4D 卷积权重（`Conv`）一次性预打包为 16 字节对齐结构，彻底消除推理热路径上的重复打包开销。
+/// 在会话初始化期扫描计算图，将所有静态 2D 权重（`MatMul` / `Gemm` / `MatMulInteger`）
+/// 与静态 4D 卷积权重（`Conv`）一次性预打包为 SIMD 友好结构，彻底消除推理热路径上的重复打包开销。
 fn build_packed_weight_caches(
   graph : @nn_ir.IrGraph,
   enable_packing : Bool,
-) -> (Map[String, @gemm.PackedMatrixB], Map[String, @ops.PackedConvWeight]) {
+) -> (
+  Map[String, @gemm.PackedMatrixB],
+  Map[String, @ops.PackedConvWeight],
+  Map[String, @quant.PackedInt8MatrixB],
+) {
   let mat_cache : Map[String, @gemm.PackedMatrixB] = Map([])
   let conv_cache : Map[String, @ops.PackedConvWeight] = Map([])
+  let i8_cache : Map[String, @quant.PackedInt8MatrixB] = Map([])
   if !enable_packing {
-    return (mat_cache, conv_cache)
+    return (mat_cache, conv_cache, i8_cache)
   }
   for i = 0; i < graph.nodes.length(); i = i + 1 {
     let node = graph.nodes[i]
@@ -181,10 +188,28 @@ fn build_packed_weight_caches(
           }
         }
       }
+      @nn_ir.MatMulInteger =>
+        if !i8_cache.contains(w_name) {
+          match graph.initializers.get(w_name) {
+            Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Int8 => {
+              let ws = w_t.shape()
+              try {
+                i8_cache[w_name] = @quant.pack_int8_matrix_b(
+                  w_t.to_i8_buffer(),
+                  ws[0],
+                  ws[1],
+                )
+              } catch {
+                _ => ()
+              }
+            }
+            _ => ()
+          }
+        }
       _ => ()
     }
   }
-  (mat_cache, conv_cache)
+  (mat_cache, conv_cache, i8_cache)
 }
 
 ///|
@@ -349,7 +374,7 @@ pub fn Session::with_provider(
 ) -> Session {
   let enable_packing = provider.uses_prepacked_weights()
   let backend = if enable_packing { Simd } else { Scalar }
-  let (packed_weights, packed_conv_weights) = build_packed_weight_caches(
+  let (packed_weights, packed_conv_weights, packed_i8_weights) = build_packed_weight_caches(
     graph, enable_packing,
   )
   let (release_plan, pinned_outputs) = build_release_plan(graph)
@@ -371,6 +396,7 @@ pub fn Session::with_provider(
     provider,
     packed_weights,
     packed_conv_weights,
+    packed_i8_weights,
     release_plan,
     pinned_outputs,
     pool: @tensor.BufferPool::new(),
@@ -456,6 +482,7 @@ pub fn Session::packed_weight_count(self : Session) -> Int32 {
   let mut count = 0
   self.packed_weights.each(fn(_, _) { count = count + 1 })
   self.packed_conv_weights.each(fn(_, _) { count = count + 1 })
+  self.packed_i8_weights.each(fn(_, _) { count = count + 1 })
   self.sub_sessions.each(fn(_, pair) {
     let (ts, es) = pair
     count = count + ts.packed_weight_count() + es.packed_weight_count()
@@ -552,6 +579,7 @@ fn Session::run_subgraph(
       env,
       packed_weights: self.packed_weights,
       packed_conv_weights: self.packed_conv_weights,
+      packed_i8_weights: self.packed_i8_weights,
       scratch_pool: self.pool,
       out_pool,
     }
@@ -604,6 +632,7 @@ pub fn Session::run(
       env,
       packed_weights: self.packed_weights,
       packed_conv_weights: self.packed_conv_weights,
+      packed_i8_weights: self.packed_i8_weights,
       scratch_pool: self.pool,
       out_pool,
     }
@@ -657,6 +686,7 @@ pub fn Session::run_profiled(
       env,
       packed_weights: self.packed_weights,
       packed_conv_weights: self.packed_conv_weights,
+      packed_i8_weights: self.packed_i8_weights,
       scratch_pool: self.pool,
       out_pool,
     }

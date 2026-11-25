@@ -129,7 +129,64 @@ fn fmt_gemm_epilogue(act : @nn_ir.FusedActivation) -> String {
 }
 
 ///|
-/// 检查当前图是否满足 Zero-Allocation Arena 模式编译条件（支持 Float32/Int64 输入、Float32 输出与 Transformer 全算子）。
+/// 识别图中可零拷贝融合的 `MatMulInteger -> Cast(to=Float32)` 节点对：
+/// 当 `MatMulInteger` 的 `Int32` 输出仅被单个 `Cast(to=Float32)` 消费（且不是图输出）时，
+/// 返回 `(mmi_out -> cast_out, cast_out -> true)`，避免分配任何中间 `Int32` Arena 缓冲。
+fn find_fused_mmi_casts(
+  graph : @nn_ir.IrGraph,
+) -> (Map[String, String], Map[String, Bool]) {
+  let use_cnt : Map[String, Int32] = Map([])
+  for i = 0; i < graph.nodes.length(); i = i + 1 {
+    let ins = graph.nodes[i].inputs
+    for k = 0; k < ins.length(); k = k + 1 {
+      if ins[k] != "" {
+        let prev = match use_cnt.get(ins[k]) {
+          Some(c) => c
+          None => 0
+        }
+        use_cnt[ins[k]] = prev + 1
+      }
+    }
+  }
+  for i = 0; i < graph.outputs.length(); i = i + 1 {
+    let n = graph.outputs[i]
+    let prev = match use_cnt.get(n) {
+      Some(c) => c
+      None => 0
+    }
+    use_cnt[n] = prev + 1
+  }
+  let mmi_outs : Map[String, Bool] = Map([])
+  for i = 0; i < graph.nodes.length(); i = i + 1 {
+    let nd = graph.nodes[i]
+    match nd.op {
+      @nn_ir.MatMulInteger if nd.outputs.length() == 1 && nd.outputs[0] != "" =>
+        mmi_outs[nd.outputs[0]] = true
+      _ => ()
+    }
+  }
+  let mmi_to_cast : Map[String, String] = Map([])
+  let skipped_cast : Map[String, Bool] = Map([])
+  for i = 0; i < graph.nodes.length(); i = i + 1 {
+    let nd = graph.nodes[i]
+    match nd.op {
+      @nn_ir.Cast(to=@tensor.Float32) if nd.inputs.length() >= 1 &&
+        nd.outputs.length() == 1 &&
+        nd.outputs[0] != "" => {
+        let src = nd.inputs[0]
+        if mmi_outs.contains(src) && use_cnt.get(src) == Some(1) {
+          mmi_to_cast[src] = nd.outputs[0]
+          skipped_cast[nd.outputs[0]] = true
+        }
+      }
+      _ => ()
+    }
+  }
+  (mmi_to_cast, skipped_cast)
+}
+
+///|
+/// 检查当前图是否满足 Zero-Allocation Arena 模式编译条件（支持 Float32/Int64 输入、Float32 输出与 Transformer/INT8 量化全算子）。
 fn can_emit_arena(
   graph : @nn_ir.IrGraph,
   shapes : Map[String, Array[Int32]],
@@ -138,6 +195,7 @@ fn can_emit_arena(
   if graph.inputs.length() == 0 || graph.outputs.length() == 0 {
     return false
   }
+  let (mmi_to_cast, skipped_cast) = find_fused_mmi_casts(graph)
   let input_or_alias_i64 : Map[String, Bool] = Map([])
   for i = 0; i < graph.inputs.length(); i = i + 1 {
     match dtypes.get(graph.inputs[i]) {
@@ -158,11 +216,11 @@ fn can_emit_arena(
     if node.outputs.length() == 0 {
       return false
     }
-    let is_split = match node.op {
-      @nn_ir.Split(..) => true
+    let is_multi_out = match node.op {
+      @nn_ir.Split(..) | @nn_ir.DynamicQuantizeLinear => true
       _ => false
     }
-    if !is_split && (node.outputs.length() != 1 || node.outputs[0] == "") {
+    if !is_multi_out && (node.outputs.length() != 1 || node.outputs[0] == "") {
       return false
     }
     if is_arena_alias_op(node.op) &&
@@ -189,6 +247,36 @@ fn can_emit_arena(
       | @nn_ir.GlobalAveragePool
       | @nn_ir.Softmax(..)
       | @nn_ir.LayerNormalization(..) => true
+      @nn_ir.DynamicQuantizeLinear =>
+        ins.length() >= 1 &&
+        node.outputs.length() >= 3 &&
+        (
+          dtypes.get(ins[0]) == Some(@tensor.Float32) ||
+          dtypes.get(ins[0]) is None
+        )
+      @nn_ir.MatMulInteger =>
+        if ins.length() >= 2 && mmi_to_cast.contains(node.outputs[0]) {
+          match
+            (
+              shapes.get(ins[0]),
+              shapes.get(ins[1]),
+              dtypes.get(ins[0]),
+              dtypes.get(ins[1]),
+            ) {
+            (Some(sa), Some(sb), Some(@tensor.UInt8), Some(@tensor.Int8)) => {
+              let b_zp_ok = ins.length() < 4 ||
+                ins[3] == "" ||
+                graph.initializers.contains(ins[3])
+              sa.length() >= 2 &&
+              sb.length() == 2 &&
+              graph.initializers.contains(ins[1]) &&
+              b_zp_ok
+            }
+            _ => false
+          }
+        } else {
+          false
+        }
       @nn_ir.Transpose(..) =>
         match (shapes.get(ins[0]), dtypes.get(ins[0])) {
           (Some(sx), Some(@tensor.Float32) | None) =>
@@ -198,7 +286,10 @@ fn can_emit_arena(
       @nn_ir.Cast(to~) =>
         to == @tensor.Float32 &&
         ins.length() >= 1 &&
-        input_or_alias_i64.contains(ins[0])
+        (
+          input_or_alias_i64.contains(ins[0]) ||
+          skipped_cast.contains(node.outputs[0])
+        )
       @nn_ir.Clip(..) => {
         let lo_ok = ins.length() < 2 ||
           ins[1] == "" ||
@@ -303,7 +394,10 @@ fn can_emit_arena(
         }
       @nn_ir.Gather(..) => {
         let data_ok = match dtypes.get(ins[0]) {
-          Some(@tensor.Float32) | None => true
+          Some(@tensor.Float32)
+          | Some(@tensor.UInt8)
+          | Some(@tensor.Int8)
+          | None => true
           _ => false
         }
         let idx_ok = graph.initializers.contains(ins[1]) ||
@@ -439,7 +533,8 @@ fn emit_arena_model(
   // - TargetWasm / TargetNative：使用预打包字节 PackedMatrixB（V128 提速 19x）
   // - TargetWasmGc：避免 GC 字节数组 v128_load 退化，改用原生 FixedArray[Float] 路径
   let use_packed_f32_simd = config.use_simd && config.target != TargetWasmGc
-  let use_quant_simd = config.use_simd
+  let use_quant_simd = config.use_simd && config.target != TargetWasmGc
+  let (mmi_to_cast, skipped_cast) = find_fused_mmi_casts(graph)
 
   let weight_entries : Array[WeightEntry] = []
   let weight_key_to_field : Map[String, String] = Map([])
@@ -462,6 +557,7 @@ fn emit_arena_model(
         } else {
           "\{name}#bytes"
         }
+      PackedInt8MatB => "\{name}#pi8mat"
     }
     match weight_key_to_field.get(key) {
       Some(f) => return f
@@ -472,7 +568,7 @@ fn emit_arena_model(
       None => raise UnsupportedGraph("missing initializer '\{name}'")
     }
     let bytes_chunk : FixedArray[Byte] = match kind {
-      RawBytes(..) =>
+      RawBytes(..) | PackedInt8MatB =>
         match t.dtype() {
           @tensor.Int8 =>
             t.to_i8_buffer() catch {
@@ -1251,6 +1347,64 @@ fn emit_arena_model(
           )
         }
       }
+      @nn_ir.DynamicQuantizeLinear => {
+        need_quant = true
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_byte_loc(node.outputs[0])
+        let (sc_buf, sc_off) = resolve_f32_loc(node.outputs[1])
+        let (zp_buf, zp_off) = resolve_byte_loc(node.outputs[2])
+        body.write_string(
+          "  let (dq_s_\{i}, dq_z_\{i}) = @quant.dynamic_quantize_linear_u8(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{out_numel})\n",
+        )
+        body.write_string("  \{sc_buf}[\{sc_off}] = dq_s_\{i}\n")
+        body.write_string("  \{zp_buf}[\{zp_off}] = dq_z_\{i}\n")
+      }
+      @nn_ir.MatMulInteger => {
+        need_quant = true
+        need_byte_loader = true
+        let (a_buf, a_off) = resolve_byte_loc(ins[0])
+        let cast_out = mmi_to_cast.get(out_n).unwrap()
+        let (y_buf, y_off) = resolve_f32_loc(cast_out)
+        let sa = shapes.get(ins[0]).unwrap()
+        let mut m_tot = 1
+        for d = 0; d < sa.length() - 1; d = d + 1 {
+          m_tot = m_tot * sa[d]
+        }
+        let wf = reg_weight(ins[1], PackedInt8MatB)
+        let a_zp_expr = if ins.length() >= 3 && ins[2] != "" {
+          let (az_buf, az_off) = resolve_byte_loc(ins[2])
+          "\{az_buf}[\{az_off}]"
+        } else {
+          "b'\\x00'"
+        }
+        let b_zp_expr = if ins.length() >= 4 && ins[3] != "" {
+          let bzt = graph.initializers.get(ins[3]).unwrap()
+          let bzb = bzt.to_i8_buffer() catch { e => raise TensorErr("\{e}") }
+          let mut any_nz = false
+          for bi = 0; bi < bzb.length(); bi = bi + 1 {
+            if bzb[bi] != b'\x00' {
+              any_nz = true
+              break
+            }
+          }
+          if any_nz {
+            let bzf = reg_weight(ins[3], RawBytes(trans_b=false))
+            "Some(self.\{bzf})"
+          } else {
+            "None"
+          }
+        } else {
+          "None"
+        }
+        let mmi_fn = if use_quant_simd {
+          "@quant.matmul_integer_u8_i8_prepacked_to_f32_v128"
+        } else {
+          "@quant.matmul_integer_u8_i8_prepacked_to_f32_scalar"
+        }
+        body.write_string(
+          "  \{mmi_fn}(\{a_buf}, \{a_off}, \{a_zp_expr}, self.\{wf}, \{b_zp_expr}, \{y_buf}, \{y_off}, \{m_tot})\n",
+        )
+      }
       @nn_ir.Pow => {
         let (a_buf, a_off) = resolve_f32_loc(ins[0])
         let (y_buf, y_off) = resolve_f32_loc(out_n)
@@ -1501,15 +1655,31 @@ fn emit_arena_model(
       }
       @nn_ir.Cast(to~) => {
         let _ = to
-        let in_param = input_param_of.get(ins[0]).unwrap()
-        let (y_buf, y_off) = resolve_f32_loc(out_n)
-        body.write_string(
-          "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = Float::from_int(\{in_param}[k_i].to_int()) }\n",
-        )
+        if skipped_cast.contains(out_n) {
+          body.write_string("  // fused directly into MatMulInteger output\n")
+        } else {
+          let in_param = input_param_of.get(ins[0]).unwrap()
+          let (y_buf, y_off) = resolve_f32_loc(out_n)
+          body.write_string(
+            "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = Float::from_int(\{in_param}[k_i].to_int()) }\n",
+          )
+        }
       }
       @nn_ir.Gather(axis~) => {
-        let (x_buf, x_off) = resolve_f32_loc(ins[0])
-        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let is_byte_gather = match dtypes.get(ins[0]) {
+          Some(@tensor.UInt8) | Some(@tensor.Int8) => true
+          _ => false
+        }
+        let (x_buf, x_off) = if is_byte_gather {
+          resolve_byte_loc(ins[0])
+        } else {
+          resolve_f32_loc(ins[0])
+        }
+        let (y_buf, y_off) = if is_byte_gather {
+          resolve_byte_loc(out_n)
+        } else {
+          resolve_f32_loc(out_n)
+        }
         let sd = shapes.get(ins[0]).unwrap()
         let rank = sd.length()
         let ax = if axis < 0 { axis + rank } else { axis }
@@ -1728,7 +1898,7 @@ fn emit_arena_model(
   // 检查是否需要读取 f32 权重辅助函数（包含 RawF32 / PackedMatB / PackedConv）
   for i = 0; i < weight_entries.length(); i = i + 1 {
     match weight_entries[i].kind {
-      RawBytes(..) => need_byte_loader = true
+      RawBytes(..) | PackedInt8MatB => need_byte_loader = true
       _ => need_f32_loader = true
     }
   }
@@ -2054,6 +2224,7 @@ fn emit_arena_model(
         }
       PackedConv(..) => "@gemm.PackedMatrixB"
       RawBytes(..) => "FixedArray[Byte]"
+      PackedInt8MatB => "@quant.PackedInt8MatrixB"
     }
     src.write_string("  \{w.field_name} : \{ty}\n")
   }
@@ -2170,6 +2341,14 @@ fn emit_arena_model(
         } else {
           src.write_string("  let \{w.field_name} = \{w.field_name}_raw\n")
         }
+      }
+      PackedInt8MatB => {
+        src.write_string(
+          "  let \{w.field_name}_raw = load_byte_slice(weights, \{w.byte_offset}, \{numel})\n",
+        )
+        src.write_string(
+          "  let \{w.field_name} = @quant.pack_int8_matrix_b(\{w.field_name}_raw, \{w.shape[0]}, \{w.shape[1]})\n",
+        )
       }
     }
   }

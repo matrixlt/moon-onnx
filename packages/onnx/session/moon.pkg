@@ -3,6 +3,7 @@ import {
   "moonbitlang/x/fs",
   "matrixlt/tensor",
   "matrixlt/ml_kernels/gemm",
+  "matrixlt/ml_kernels/quant",
   "matrixlt/onnx_proto",
   "matrixlt/onnx_proto/fs" @onnx_fs,
   "matrixlt/nn_ir",

@@ -84,9 +84,25 @@ pub fn infer_static_dtypes(
     if node.outputs.length() == 0 || node.outputs[0] == "" {
       continue
     }
+    match node.op {
+      @nn_ir.DynamicQuantizeLinear => {
+        if node.outputs.length() >= 1 && node.outputs[0] != "" {
+          dtypes[node.outputs[0]] = @tensor.UInt8
+        }
+        if node.outputs.length() >= 2 && node.outputs[1] != "" {
+          dtypes[node.outputs[1]] = @tensor.Float32
+        }
+        if node.outputs.length() >= 3 && node.outputs[2] != "" {
+          dtypes[node.outputs[2]] = @tensor.UInt8
+        }
+        continue
+      }
+      _ => ()
+    }
     let out_dt : @tensor.DType = match node.op {
       @nn_ir.Cast(to~) => to
       @nn_ir.Shape(..) => @tensor.Int64
+      @nn_ir.MatMulInteger => @tensor.Int32
       @nn_ir.Equal
       | @nn_ir.Less
       | @nn_ir.Greater
@@ -327,7 +343,15 @@ pub fn plan_static_arenas(
         root_of[out_name] = root
       } else {
         root_of[out_name] = out_name
-        birth_of[out_name] = i
+        let eff_birth = match node.op {
+          @nn_ir.Cast(to=@tensor.Float32) if k == 0 && node.inputs.length() >= 1 =>
+            match (dtypes.get(node.inputs[0]), birth_of.get(node.inputs[0])) {
+              (Some(@tensor.Int32), Some(pb)) => pb
+              _ => i
+            }
+          _ => i
+        }
+        birth_of[out_name] = eff_birth
         death_of[out_name] = i
       }
     }

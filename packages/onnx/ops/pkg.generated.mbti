@@ -3,6 +3,7 @@ package "matrixlt/onnx/ops"
 
 import {
   "matrixlt/ml_kernels/gemm",
+  "matrixlt/ml_kernels/quant",
   "matrixlt/nn_ir",
   "matrixlt/tensor",
 }
@@ -31,6 +32,8 @@ pub fn conv2d_prepacked_f32(@tensor.Tensor, PackedConvWeight, @tensor.Tensor?, A
 pub fn dequantize_linear_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, axis? : Int32, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn div_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn dynamic_quantize_linear_op(@tensor.Tensor) -> (@tensor.Tensor, @tensor.Tensor, @tensor.Tensor) raise @tensor.TensorError
 
 pub fn equal_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
@@ -69,6 +72,10 @@ pub fn less_or_equal_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise 
 pub fn lstm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, hidden_size? : Int32?, direction? : String, layout? : Int32, clip? : Float?) -> Array[@tensor.Tensor] raise @tensor.TensorError
 
 pub fn matmul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn matmul_integer_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, use_simd? : Bool) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn matmul_integer_prepacked_op(@tensor.Tensor, @quant.PackedInt8MatrixB, @tensor.Tensor?, @tensor.Tensor?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn matmul_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 

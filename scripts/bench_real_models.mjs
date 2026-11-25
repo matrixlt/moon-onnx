@@ -136,6 +136,35 @@ const allTargets = [
     ],
     buildTarget: "wasm-gc",
     kind: "minilm",
+    goldenFile: "minilm_s16_golden.f32",
+  },
+  {
+    id: "minilm_q8_wasm",
+    label: "all-MiniLM-L6-v2 INT8 (wasm V128)",
+    model: path.join(modelDir, "all-MiniLM-L6-v2-q8.onnx"),
+    struct: "MiniLmL6Q8",
+    cliArgs: [
+      "--input-shape=input_ids:1,16;attention_mask:1,16;token_type_ids:1,16",
+      "--target=wasm",
+      "--mode=arena",
+    ],
+    buildTarget: "wasm",
+    kind: "minilm",
+    goldenFile: "minilm_q8_s16_golden.f32",
+  },
+  {
+    id: "minilm_q8_wasmgc",
+    label: "all-MiniLM-L6-v2 INT8 (wasm-gc)",
+    model: path.join(modelDir, "all-MiniLM-L6-v2-q8.onnx"),
+    struct: "MiniLmL6Q8",
+    cliArgs: [
+      "--input-shape=input_ids:1,16;attention_mask:1,16;token_type_ids:1,16",
+      "--target=wasm-gc",
+      "--mode=arena",
+    ],
+    buildTarget: "wasm-gc",
+    kind: "minilm",
+    goldenFile: "minilm_q8_s16_golden.f32",
   },
 ];
 
@@ -404,6 +433,7 @@ for (const t of targets) {
       `  ${t.label.padEnd(36)} | wasm=${(wasmBytes.length / 1024).toFixed(1).padStart(5)} KB (gz ${(gzBytes.length / 1024).toFixed(1).padStart(4)} KB) | arena=${arenaKB.padStart(6)} KB | inst=${instMs.toFixed(2)}ms | diff=${worst.toExponential(2)} | ${avgMs.toFixed(2)} ms/frame (${(1 / rtf).toFixed(1)}x RT)`
     );
   } else if (t.kind === "minilm") {
+    const gold = readF32(path.join(modelDir, t.goldenFile ?? "minilm_s16_golden.f32"));
     for (let i = 0; i < 16; i++) {
       exp.set_ids_i32(i, minilmIds16[i]);
       exp.set_mask_i32(i, minilmMask16[i]);
@@ -412,7 +442,7 @@ for (const t of targets) {
     exp.run_infer();
     const out = new Float32Array(6144);
     for (let i = 0; i < 6144; i++) out[i] = exp.get_output_f32(i);
-    const diff = maxAbsDiff(out, minilmGold16);
+    const diff = maxAbsDiff(out, gold);
     if (diff > 1e-4) {
       throw new Error(`${t.id} accuracy mismatch: diff=${diff}`);
     }

@@ -4,6 +4,7 @@ pub struct EvalContext {
   env : Map[String, @tensor.Tensor]
   packed_weights : Map[String, @gemm.PackedMatrixB]
   packed_conv_weights : Map[String, @ops.PackedConvWeight]
+  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   scratch_pool : @tensor.BufferPool
   out_pool : @tensor.BufferPool?
 }
@@ -664,6 +665,29 @@ fn eval_cpu_node(
         }
         outs[0]
       }
+      @nn_ir.DynamicQuantizeLinear => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let (y, _, _) = @ops.dynamic_quantize_linear_op(x)
+        y
+      }
+      @nn_ir.MatMulInteger => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let a_zp = ctx.optional_tensor(n, ins, 2)
+        let b_zp = ctx.optional_tensor(n, ins, 3)
+        if use_simd && ins.length() >= 2 {
+          match ctx.packed_i8_weights.get(ins[1]) {
+            Some(packed_b) if a.dtype() == @tensor.UInt8 =>
+              @ops.matmul_integer_prepacked_op(a, packed_b, a_zp, b_zp)
+            _ => {
+              let b = ctx.require_tensor(n, ins, 1)
+              @ops.matmul_integer_op(a, b, a_zp, b_zp, use_simd~)
+            }
+          }
+        } else {
+          let b = ctx.require_tensor(n, ins, 1)
+          @ops.matmul_integer_op(a, b, a_zp, b_zp, use_simd~)
+        }
+      }
     }
   } catch {
     MissingTensor(msg) => raise MissingTensor(msg)
@@ -696,7 +720,7 @@ fn read_scalar_bool(
 }
 
 ///|
-/// 内置 CPU 多输出节点分派入口（针对 `Split`、`LSTM` 与 `If` 返回全部输出张量，其余节点复用 `eval_cpu_node`）。
+/// 内置 CPU 多输出节点分派入口（针对 `Split`、`LSTM`、`If` 与 `DynamicQuantizeLinear` 返回全部输出张量，其余节点复用 `eval_cpu_node`）。
 fn eval_cpu_node_multi(
   node : @nn_ir.IrNode,
   ctx : EvalContext,
@@ -750,6 +774,19 @@ fn eval_cpu_node_multi(
         MissingTensor(msg) => raise MissingTensor(msg)
         UnsupportedOp(msg) => raise UnsupportedOp(msg)
         e => raise TensorErr("node '\{n}' (LSTM): \{e}")
+      }
+    }
+    @nn_ir.DynamicQuantizeLinear => {
+      let n = node.name
+      let ins = node.inputs
+      try {
+        let x = ctx.require_tensor(n, ins, 0)
+        let (y, y_scale, y_zp) = @ops.dynamic_quantize_linear_op(x)
+        [y, y_scale, y_zp]
+      } catch {
+        MissingTensor(msg) => raise MissingTensor(msg)
+        UnsupportedOp(msg) => raise UnsupportedOp(msg)
+        e => raise TensorErr("node '\{n}' (DynamicQuantizeLinear): \{e}")
       }
     }
     @nn_ir.If(then_branch~, else_branch~) => {
