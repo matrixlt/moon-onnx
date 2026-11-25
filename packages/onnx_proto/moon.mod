@@ -2,7 +2,7 @@
 
 name = "matrixlt/onnx_proto"
 
-version = "0.1.0"
+version = "0.2.0"
 
 readme = "README.md"
 
@@ -21,5 +21,5 @@ description = "Official ONNX Protobuf bindings, pure-memory model loader, Tensor
 import {
   "moonbitlang/protobuf@0.2.0",
   "moonbitlang/x@0.5.9",
-  "matrixlt/tensor@0.1.0",
+  "matrixlt/tensor@0.2.0",
 }

@@ -2,7 +2,7 @@
 
 name = "matrixlt/moon_onnx_cli"
 
-version = "0.1.0"
+version = "0.2.0"
 
 license = "Apache-2.0"
 
@@ -12,5 +12,5 @@ description = "Native CLI tool for inspecting and running ONNX models with matri
 
 import {
   "moonbitlang/x@0.5.9",
-  "matrixlt/onnx@0.1.0",
+  "matrixlt/onnx@0.2.0",
 }

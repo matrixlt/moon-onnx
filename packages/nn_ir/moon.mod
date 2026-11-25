@@ -2,7 +2,7 @@
 
 name = "matrixlt/nn_ir"
 
-version = "0.1.0"
+version = "0.2.0"
 
 readme = "README.md"
 
@@ -28,5 +28,5 @@ supported_targets = "+all"
 description = "Format-agnostic typed neural network computation graph IR, topological validator, and graph optimizer for MoonBit"
 
 import {
-  "matrixlt/tensor@0.1.0",
+  "matrixlt/tensor@0.2.0",
 }

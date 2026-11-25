@@ -2,7 +2,7 @@
 
 name = "matrixlt/onnx"
 
-version = "0.1.0"
+version = "0.2.0"
 
 readme = "README.md"
 
@@ -20,8 +20,8 @@ description = "Pure-MoonBit cross-platform ONNX inference engine with typed IR, 
 
 import {
   "moonbitlang/x@0.5.9",
-  "matrixlt/tensor@0.1.0",
-  "matrixlt/ml_kernels@0.1.0",
-  "matrixlt/onnx_proto@0.1.0",
-  "matrixlt/nn_ir@0.1.0",
+  "matrixlt/tensor@0.2.0",
+  "matrixlt/ml_kernels@0.2.0",
+  "matrixlt/onnx_proto@0.2.0",
+  "matrixlt/nn_ir@0.2.0",
 }

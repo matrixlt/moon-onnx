@@ -13,7 +13,7 @@ moon add matrixlt/onnx_proto
 - `matrixlt/onnx_proto`（根包，**纯内存、零文件系统依赖，四端通用**）：
   - `load_model_from_bytes(Bytes) -> OnnxModel`
   - `load_model_from_proto(@schema.ModelProto) -> OnnxModel`
-  - `decode_tensor_proto(TensorProto) -> @tensor.Tensor`（支持小端序 `raw_data` 及类型化 repeated 字段）
+  - `decode_tensor_proto(TensorProto) -> @tensor.Tensor`（支持小端序 `raw_data` 及类型化 repeated 字段，涵盖 `FLOAT` / `FLOAT16`（内置 IEEE 754 `f16_bits_to_f32` 解码，兼容 subnormal/Inf/NaN）/ `DOUBLE` / `INT64` / `INT32` / `UINT8` / `INT8` / `BOOL`）
   - `OnnxModel::format_summary()`（人类可读模型结构摘要）
 - `matrixlt/onnx_proto/schema`：通过 `protoc` + `moonbitlang/protoc-gen-mbt` 从官方 `onnx.proto` 自动生成的完整消息与二进制编解码器。
 - `matrixlt/onnx_proto/fs`：封装本地 `.onnx` 文件读取（`load_model_from_file(path)`），与纯内存根包解耦。

@@ -101,12 +101,12 @@ ${modes.map((m) => `  "./${m.id}",`).join("\n")}
 for (const m of modes) {
   const dir = path.join(workDir, m.id);
   const importsMod = m.isTensorMode
-    ? `  "matrixlt/tensor@0.1.0",\n  "matrixlt/ml_kernels@0.1.0",\n  "matrixlt/nn_ir@0.1.0",\n  "matrixlt/onnx@0.1.0",`
-    : `  "matrixlt/ml_kernels@0.1.0",`;
+    ? `  "matrixlt/tensor@0.2.0",\n  "matrixlt/ml_kernels@0.2.0",\n  "matrixlt/nn_ir@0.2.0",\n  "matrixlt/onnx@0.2.0",`
+    : `  "matrixlt/ml_kernels@0.2.0",`;
   fs.writeFileSync(
     path.join(dir, "moon.mod"),
     `name = "demo/${m.id}"
-version = "0.1.0"
+version = "0.2.0"
 license = "Apache-2.0"
 supported_targets = "+all"
 import {

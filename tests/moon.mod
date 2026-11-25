@@ -2,7 +2,7 @@
 
 name = "matrixlt/moon_onnx_tests"
 
-version = "0.1.0"
+version = "0.2.0"
 
 license = "Apache-2.0"
 
@@ -13,7 +13,7 @@ supported_targets = "native"
 description = "End-to-end integration tests verifying MNIST MLP/CNN ONNX fixtures against ONNX Runtime golden outputs"
 
 import {
-  "matrixlt/tensor@0.1.0",
-  "matrixlt/onnx_proto@0.1.0",
-  "matrixlt/onnx@0.1.0",
+  "matrixlt/tensor@0.2.0",
+  "matrixlt/onnx_proto@0.2.0",
+  "matrixlt/onnx@0.2.0",
 }

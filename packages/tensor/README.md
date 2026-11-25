@@ -10,7 +10,7 @@ moon add matrixlt/tensor
 
 ## 核心能力
 
-- **紧凑非装箱存储**：基于 `FixedArray` 封装 `Float32` / `Float64` / `Int64` / `Int32` / `Bool` 多类型存储，无泛型装箱开销；内置小端序原始字节流互转（`from_f32_bytes_le` / `to_f32_bytes_le`）。
+- **紧凑非装箱存储**：基于 `FixedArray` 封装 `Float32` / `Float64` / `Int64` / `Int32` / `UInt8` / `Int8` / `Bool` 多类型存储，无泛型装箱开销；内置小端序原始字节流互转（`from_f32_bytes_le` / `to_f32_bytes_le`）与量化张量构造/提取（`from_u8` / `from_i8` / `to_u8_buffer` / `to_i8_buffer`）。
 - **零拷贝视图模型**：基于 `(data, offset, shape, strides)` 支持 `transpose`、`squeeze`、`unsqueeze` 与连续 `reshape` 的零拷贝视图变换。
 - **符号维度与形状推断底座**：提供 `SymDim` / `SymShape` 符号维度建模，支持动态 Batch/序列维度绑定与解析。
 - **推理缓冲复用池（`BufferPool`）**：按精确长度分桶缓存 `FixedArray[Float]` 与 `FixedArray[Byte]`，并提供 `PoolStats` 命中率统计，消除高频推理的中间激活 GC 抖动。

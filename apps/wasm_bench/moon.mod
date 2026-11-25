@@ -2,7 +2,7 @@
 
 name = "matrixlt/moon_onnx_wasm_bench"
 
-version = "0.1.0"
+version = "0.2.0"
 
 license = "Apache-2.0"
 
@@ -13,8 +13,8 @@ supported_targets = "+all"
 description = "Pure-memory WebAssembly (wasm & wasm-gc) V128 SIMD benchmark harness for moon-onnx"
 
 import {
-  "matrixlt/tensor@0.1.0",
-  "matrixlt/ml_kernels@0.1.0",
-  "matrixlt/nn_ir@0.1.0",
-  "matrixlt/onnx@0.1.0",
+  "matrixlt/tensor@0.2.0",
+  "matrixlt/ml_kernels@0.2.0",
+  "matrixlt/nn_ir@0.2.0",
+  "matrixlt/onnx@0.2.0",
 }

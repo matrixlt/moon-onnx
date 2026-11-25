@@ -1,6 +1,6 @@
 # matrixlt/onnx
 
-纯 MoonBit 编写的跨端 ONNX 推理引擎与统一门面库，组合了 `matrixlt/tensor`、`matrixlt/ml_kernels`、`matrixlt/onnx_proto` 与 `matrixlt/nn_ir`，无外部 C/C++ 运行时依赖。
+纯 MoonBit 编写的跨端 ONNX 推理引擎、算子库与 **AOT 静态模型编译器（`onnx2mbt`）**，组合了 `matrixlt/tensor`、`matrixlt/ml_kernels`、`matrixlt/onnx_proto` 与 `matrixlt/nn_ir`，无外部 C/C++ 运行时依赖，支持 `native` / `wasm` / `wasm-gc` / `js` 四端。
 
 ## 安装
 
@@ -8,23 +8,36 @@
 moon add matrixlt/onnx
 ```
 
-## 子包结构
+## 子包结构（v0.2.0）
 
-- `matrixlt/onnx`（根包门面 `@onnx`）：重导出 `Session`、`BackendKind`、`RuntimeError`、`OpTiming`、`RunProfile`、`PoolStats`、模型加载与校验入口。
-- `matrixlt/onnx/frontend`：ONNX `OnnxModel` → `nn_ir::IrGraph` Lowering（属性解析、Opset 语义适配与拓扑排序）。
-- `matrixlt/onnx/ops`：面向 `Tensor` 的 ONNX 算子实现（逐元素/广播、激活、形状变换、`MatMul`/`Gemm`、`Conv2D`/`PackedConvWeight`/`MaxPool`/`AveragePool`/`BatchNorm`），底层复用 `matrixlt/ml_kernels` 与 `BufferPool`。
+- `matrixlt/onnx`（根包门面 `@onnx`）：重导出 `Session`、`BackendKind`、`RuntimeError`、`OpTiming`、`RunProfile`、`PoolStats`、`CodegenConfig`、`AotArtifact`、模型加载与 `compile_model_to_mbt` AOT 编译入口。
+- `matrixlt/onnx/frontend`：ONNX `OnnxModel` → `nn_ir::IrGraph` Lowering（覆盖 45 个高频算子，兼容 Opset 6~18 语义与 `FLOAT16` / `INT8` / `UINT8`）。
+- `matrixlt/onnx/ops`：面向 `Tensor` 的 ONNX 算子库：
+  - 数学与激活：`Add`/`Sub`/`Mul`/`Div`/`Pow`/`Sqrt`/`Exp`/`Neg`/`Relu`/`Clip`/`Sigmoid`/`Tanh`/`Gelu`/`HardSwish`/`LeakyRelu`/`Softmax`
+  - 视觉与序列：`Conv1D`/`Conv2D`/Depthwise（支持融合 `Relu`/`Clip`）、`MaxPool`/`AveragePool`/`GlobalAveragePool`、`Resize`（nearest/bilinear）、`BatchNormalization`、`LayerNormalization`、`LSTM`（单向/双向多输出）
+  - 张量变换与量化：`MatMul`/`Gemm`、`Reshape`/`Flatten`/`Transpose`/`Squeeze`/`Unsqueeze`/`Shape`/`Cast`/`Concat`/`Split`/`Slice`/`Pad`/`Gather`/`ReduceMean`/`ReduceSum`、`QuantizeLinear`/`DequantizeLinear`/`QLinearMatMul`
 - `matrixlt/onnx/session`：`Session` 执行调度引擎：
-  - 支持 `Scalar` 与 `Simd`（原生 V128）双后端切换；
-  - 初始化期自动预打包 `MatMul`、`Gemm`（含 `trans_b=true`）与 `Conv` 静态权重；
-  - 内置别名感知的静态生命周期分析与 `BufferPool` 内存复用（预热后中间激活与 `im2col` 工作区 100% 命中）；
-  - 提供逐算子延迟剖析接口 `run_profiled` / `run_single_profiled` 与 `RunProfile::format_table()`。
+  - 可插拔 `ExecutionProvider` trait（内置 `CpuScalarProvider` 与 `CpuSimdProvider`，支持多输出 `eval_node_multi`）；
+  - 初始化期自动预打包 `MatMul`、`Gemm` 与 `Conv1D`/`Conv2D` 静态权重；
+  - 别名感知的静态生命周期分析与 `BufferPool` 内存复用，内置 `run_profiled` 逐算子剖析。
+- `matrixlt/onnx/codegen`（**`onnx2mbt` v2**）：
+  - 编译期静态形状推导与 **Static Memory Arena 区间规划**（推理热路径 0 堆分配、0 `Map`、0 `Tensor` 依赖）；
+  - 支持 `--target=wasm|wasm-gc|native` 自适应代码生成、`--embed-weights` 单文件内嵌权重 Wasm 与 INT8 / Conv1D / Conv2D 模型 AOT 编译。
 
 ## 快速示例
 
 ```moonbit
+// 1. 动态推理会话
 let session = @onnx.session_from_bytes(model_bytes, backend=@session.Simd)
 let (output, profile) = session.run_single_profiled(input_tensor)
 println(profile.format_table())
+
+// 2. AOT 静态编译为独立零分配 MoonBit 源码 + 权重包
+let model = @onnx.load_model_from_bytes(model_bytes)
+let artifact = @onnx.compile_model_to_mbt(
+  model,
+  Map([("x", [1, 1, 28, 28])]),
+)
 ```
 
 ## 许可证
