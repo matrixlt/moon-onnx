@@ -906,3 +906,130 @@ test "End-to-end FPN/UNet Conv2D + Resize(2x bilinear) + Concat skip connection"
   assert_eq(y_si.shape(), [1, 3, 8, 8])
   assert_true(@session.max_abs_diff_f32(y_si, y_sc) <= (1.0e-5 : Float))
 }
+
+///|
+/// 验证 `Equal + If` 控制流子图执行（模拟 Silero VAD 16kHz / 8kHz 双分支架构）：
+/// 确认子图词法捕获外层 `input`/`state`、两分支各自完成 V128 权重预打包，且多输出状态递推精度一致。
+test "If control-flow subgraphs capture outer scope and prepack weights on Scalar & SIMD" {
+  let w_16k = @tensor.Tensor::from_f32_array([2, 2], [2.0, 0.0, 0.0, 2.0])
+  let w_8k = @tensor.Tensor::from_f32_array([2, 2], [0.5, 0.0, 0.0, 0.5])
+  let sr_16k = @tensor.Tensor::from_i64(
+    [],
+    FixedArray::make(1, (16000 : Int64)),
+  )
+
+  let then_branch : @nn_ir.IrGraph = {
+    name: "branch_16k",
+    inputs: [],
+    outputs: ["y_16k", "s_16k"],
+    initializers: Map([("w_16k", w_16k)]),
+    nodes: [
+      {
+        name: "mm_16k",
+        op: @nn_ir.MatMul,
+        inputs: ["x", "w_16k"],
+        outputs: ["y_16k"],
+      },
+      {
+        name: "add_16k",
+        op: @nn_ir.Add,
+        inputs: ["state", "y_16k"],
+        outputs: ["s_16k"],
+      },
+    ],
+  }
+  let else_branch : @nn_ir.IrGraph = {
+    name: "branch_8k",
+    inputs: [],
+    outputs: ["y_8k", "s_8k"],
+    initializers: Map([("w_8k", w_8k)]),
+    nodes: [
+      {
+        name: "mm_8k",
+        op: @nn_ir.MatMul,
+        inputs: ["x", "w_8k"],
+        outputs: ["y_8k"],
+      },
+      {
+        name: "add_8k",
+        op: @nn_ir.Add,
+        inputs: ["state", "y_8k"],
+        outputs: ["s_8k"],
+      },
+    ],
+  }
+  let top_graph : @nn_ir.IrGraph = {
+    name: "dual_rate_if_model",
+    inputs: ["x", "state", "sr"],
+    outputs: ["y", "stateN"],
+    initializers: Map([("sr_16k", sr_16k)]),
+    nodes: [
+      {
+        name: "cmp_sr",
+        op: @nn_ir.Equal,
+        inputs: ["sr", "sr_16k"],
+        outputs: ["is_16k"],
+      },
+      {
+        name: "dispatch_rate",
+        op: @nn_ir.If(then_branch~, else_branch~),
+        inputs: ["is_16k"],
+        outputs: ["y", "stateN"],
+      },
+    ],
+  }
+
+  let (opt_g, _) = @opt.optimize_graph(top_graph)
+  let sess_simd = @session.Session::from_graph(opt_g, backend=@session.Simd)
+  let sess_scalar = @session.Session::from_graph(opt_g, backend=@session.Scalar)
+  // 两个子分支的静态权重均已在初始化期预打包
+  assert_eq(sess_simd.packed_weight_count(), 2)
+
+  let x = @tensor.Tensor::from_f32_array([1, 2], [3.0, -4.0])
+  let st0 = @tensor.Tensor::from_f32_array([1, 2], [1.0, 2.0])
+
+  // 走 then_branch (16kHz): y = [6, -8], stateN = [7, -6]
+  let f16 : Map[String, @tensor.Tensor] = Map([
+    ("x", x),
+    ("state", st0),
+    ("sr", @tensor.Tensor::from_i64([], FixedArray::make(1, (16000 : Int64)))),
+  ])
+  let r16_si = sess_simd.run(f16)
+  let r16_sc = sess_scalar.run(f16)
+  assert_true(
+    @session.max_abs_diff_f32(
+      r16_si.get("y").unwrap(),
+      @tensor.Tensor::from_f32_array([1, 2], [6.0, -8.0]),
+    ) <=
+    (1.0e-5 : Float),
+  )
+  assert_true(
+    @session.max_abs_diff_f32(
+      r16_si.get("stateN").unwrap(),
+      r16_sc.get("stateN").unwrap(),
+    ) <=
+    (1.0e-5 : Float),
+  )
+
+  // 走 else_branch (8kHz): y = [1.5, -2.0], stateN = [2.5, 0.0]
+  let f8 : Map[String, @tensor.Tensor] = Map([
+    ("x", x),
+    ("state", st0),
+    ("sr", @tensor.Tensor::from_i64([], FixedArray::make(1, (8000 : Int64)))),
+  ])
+  let r8_si = sess_simd.run(f8)
+  assert_true(
+    @session.max_abs_diff_f32(
+      r8_si.get("y").unwrap(),
+      @tensor.Tensor::from_f32_array([1, 2], [1.5, -2.0]),
+    ) <=
+    (1.0e-5 : Float),
+  )
+  assert_true(
+    @session.max_abs_diff_f32(
+      r8_si.get("stateN").unwrap(),
+      @tensor.Tensor::from_f32_array([1, 2], [2.5, 0.0]),
+    ) <=
+    (1.0e-5 : Float),
+  )
+}

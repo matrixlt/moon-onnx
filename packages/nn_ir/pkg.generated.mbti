@@ -9,6 +9,8 @@ import {
 // Values
 pub fn topo_sort_nodes(Array[IrNode], Array[String], Map[String, @tensor.Tensor]) -> Array[IrNode] raise IrError
 
+pub fn topo_sort_nodes_with_outer(Array[IrNode], Array[String], Map[String, @tensor.Tensor], Map[String, Bool]) -> Array[IrNode] raise IrError
+
 // Errors
 #derive(Eq, @debug.Debug)
 pub(all) suberror IrError {
@@ -43,6 +45,7 @@ pub(all) struct IrGraph {
   initializers : Map[String, @tensor.Tensor]
   nodes : Array[IrNode]
 }
+pub fn IrGraph::external_refs(Self) -> Array[String]
 
 pub(all) struct IrNode {
   name : String
@@ -97,6 +100,9 @@ pub(all) enum Op {
   QLinearMatMul
   Resize(mode~ : String, coordinate_transformation_mode~ : String, nearest_mode~ : String)
   Lstm(hidden_size~ : Int32?, direction~ : String, layout~ : Int32, clip~ : Float?)
+  Equal
+  ConstantOfShape(value~ : @tensor.Tensor)
+  If(then_branch~ : IrGraph, else_branch~ : IrGraph)
 }
 pub fn Op::name(Self) -> String
 

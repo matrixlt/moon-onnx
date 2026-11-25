@@ -586,6 +586,29 @@ fn eval_cpu_node(
         )
         outs[0]
       }
+      @nn_ir.Equal => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        @ops.equal_op(a, b)
+      }
+      @nn_ir.ConstantOfShape(value~) => {
+        let shape_t = ctx.require_tensor(n, ins, 0)
+        @ops.constant_of_shape_op(shape_t, value)
+      }
+      @nn_ir.If(then_branch~, else_branch~) => {
+        let cond_t = ctx.require_tensor(n, ins, 0)
+        let cond = read_scalar_bool(n, cond_t)
+        let branch = if cond { then_branch } else { else_branch }
+        let sub_sess = Session::from_graph(
+          branch,
+          backend=if use_simd { Simd } else { Scalar },
+        )
+        let outs = sub_sess.run_subgraph(ctx.env)
+        if outs.length() == 0 {
+          raise TensorErr("node '\{n}' (If) produced 0 outputs")
+        }
+        outs[0]
+      }
     }
   } catch {
     MissingTensor(msg) => raise MissingTensor(msg)
@@ -595,7 +618,30 @@ fn eval_cpu_node(
 }
 
 ///|
-/// 内置 CPU 多输出节点分派入口（针对 `Split` 与 `LSTM` 返回全部子张量，其余节点复用 `eval_cpu_node`）。
+/// 从单元素 `Bool` 张量中读取标量布尔值（供 `If` 条件分支判断使用）。
+fn read_scalar_bool(
+  node_name : String,
+  cond_t : @tensor.Tensor,
+) -> Bool raise RuntimeError {
+  let c = cond_t.contiguous() catch {
+    e => raise TensorErr("node '\{node_name}' (If): \{e}")
+  }
+  if c.numel() != 1 {
+    raise TensorErr(
+      "node '\{node_name}' (If): condition must have 1 element, got \{c.numel()}",
+    )
+  }
+  match c.data {
+    @tensor.Bool(buf) => buf[c.offset]
+    _ =>
+      raise TensorErr(
+        "node '\{node_name}' (If): condition must be Bool tensor, got \{c.dtype()}",
+      )
+  }
+}
+
+///|
+/// 内置 CPU 多输出节点分派入口（针对 `Split`、`LSTM` 与 `If` 返回全部输出张量，其余节点复用 `eval_cpu_node`）。
 fn eval_cpu_node_multi(
   node : @nn_ir.IrNode,
   ctx : EvalContext,
@@ -650,6 +696,16 @@ fn eval_cpu_node_multi(
         UnsupportedOp(msg) => raise UnsupportedOp(msg)
         e => raise TensorErr("node '\{n}' (LSTM): \{e}")
       }
+    }
+    @nn_ir.If(then_branch~, else_branch~) => {
+      let cond_t = ctx.require_tensor(node.name, node.inputs, 0)
+      let cond = read_scalar_bool(node.name, cond_t)
+      let branch = if cond { then_branch } else { else_branch }
+      let sub_sess = Session::from_graph(
+        branch,
+        backend=if use_simd { Simd } else { Scalar },
+      )
+      sub_sess.run_subgraph(ctx.env)
     }
     _ => [eval_cpu_node(node, ctx, use_simd)]
   }

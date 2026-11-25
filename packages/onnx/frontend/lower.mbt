@@ -166,6 +166,7 @@ fn lower_node(
   node : @schema.NodeProto,
   idx : Int32,
   opset_version : Int64,
+  outer_scope : Map[String, Bool],
 ) -> @nn_ir.IrNode raise @nn_ir.IrError {
   let op_type = match node.op_type {
     Some(s) => s
@@ -477,6 +478,71 @@ fn lower_node(
         layout=get_attr_int(attrs, "layout", 0),
         clip=get_attr_float_opt(attrs, "clip"),
       )
+    "Equal" => @nn_ir.Equal
+    "ConstantOfShape" => {
+      // ONNX 规范：未提供 `value` 属性时默认填充单元素 `Float32(0.0)`
+      let fill_val = match find_attr(attrs, "value") {
+        Some(a) =>
+          match a.t {
+            Some(tp) =>
+              @onnx_proto.decode_tensor_proto(tp) catch {
+                e =>
+                  raise @nn_ir.InvalidAttribute(
+                    "ConstantOfShape '\{node_name}' failed to decode value: \{e}",
+                  )
+              }
+            None =>
+              raise @nn_ir.InvalidAttribute(
+                "ConstantOfShape '\{node_name}' attribute 'value' has no tensor",
+              )
+          }
+        None =>
+          @tensor.Tensor::from_f32([1], FixedArray::make(1, (0.0 : Float))) catch {
+            e =>
+              raise @nn_ir.InvalidAttribute(
+                "ConstantOfShape '\{node_name}': \{e}",
+              )
+          }
+      }
+      @nn_ir.ConstantOfShape(value=fill_val)
+    }
+    "If" => {
+      let then_proto = match find_attr(attrs, "then_branch") {
+        Some(a) =>
+          match a.g {
+            Some(g) => g
+            None =>
+              raise @nn_ir.InvalidAttribute(
+                "If '\{node_name}' attribute 'then_branch' has no GraphProto",
+              )
+          }
+        None =>
+          raise @nn_ir.InvalidAttribute(
+            "If '\{node_name}' missing required 'then_branch' attribute",
+          )
+      }
+      let else_proto = match find_attr(attrs, "else_branch") {
+        Some(a) =>
+          match a.g {
+            Some(g) => g
+            None =>
+              raise @nn_ir.InvalidAttribute(
+                "If '\{node_name}' attribute 'else_branch' has no GraphProto",
+              )
+          }
+        None =>
+          raise @nn_ir.InvalidAttribute(
+            "If '\{node_name}' missing required 'else_branch' attribute",
+          )
+      }
+      let then_branch = lower_graph_proto(
+        then_proto, opset_version, outer_scope,
+      )
+      let else_branch = lower_graph_proto(
+        else_proto, opset_version, outer_scope,
+      )
+      @nn_ir.If(then_branch~, else_branch~)
+    }
     other => raise @nn_ir.UnsupportedOp(other)
   }
 
@@ -489,6 +555,84 @@ fn lower_node(
 }
 
 ///|
+/// 将子图 `@schema.GraphProto`（如 `If` 的分支子图）递归 Lowering 为带词法作用域感知的 `@nn_ir.IrGraph`。
+fn lower_graph_proto(
+  graph : @schema.GraphProto,
+  opset_version : Int64,
+  outer_scope : Map[String, Bool],
+) -> @nn_ir.IrGraph raise @nn_ir.IrError {
+  let initializers : Map[String, @tensor.Tensor] = Map([])
+  for i = 0; i < graph.initializer.length(); i = i + 1 {
+    let init_proto = graph.initializer[i]
+    let init_name = match init_proto.name {
+      Some(n) => n
+      None =>
+        raise @nn_ir.InvalidGraph(
+          "subgraph initializer at index \{i} has no name",
+        )
+    }
+    let t = @onnx_proto.decode_tensor_proto(init_proto) catch {
+      e =>
+        raise @nn_ir.InvalidGraph(
+          "subgraph initializer '\{init_name}' decode failed: \{e}",
+        )
+    }
+    initializers[init_name] = t
+  }
+
+  let input_names : Array[String] = []
+  for i = 0; i < graph.input.length(); i = i + 1 {
+    match graph.input[i].name {
+      Some(n) if !initializers.contains(n) => input_names.push(n)
+      _ => ()
+    }
+  }
+  let output_names : Array[String] = []
+  for i = 0; i < graph.output.length(); i = i + 1 {
+    match graph.output[i].name {
+      Some(n) => output_names.push(n)
+      None => ()
+    }
+  }
+
+  // 构建嵌套子图可见的完整外层作用域（继承上层 + 当前子图输入/权重/节点输出）
+  let child_scope : Map[String, Bool] = Map([])
+  outer_scope.each(fn(k, v) { if v { child_scope[k] = true } })
+  for i = 0; i < input_names.length(); i = i + 1 {
+    child_scope[input_names[i]] = true
+  }
+  initializers.each(fn(k, _) { child_scope[k] = true })
+  for i = 0; i < graph.node.length(); i = i + 1 {
+    let outs = graph.node[i].output
+    for k = 0; k < outs.length(); k = k + 1 {
+      if outs[k] != "" {
+        child_scope[outs[k]] = true
+      }
+    }
+  }
+
+  let raw_nodes : Array[@nn_ir.IrNode] = []
+  for i = 0; i < graph.node.length(); i = i + 1 {
+    raw_nodes.push(lower_node(graph.node[i], i, opset_version, child_scope))
+  }
+
+  let sorted_nodes = @nn_ir.topo_sort_nodes_with_outer(
+    raw_nodes, input_names, initializers, outer_scope,
+  )
+  let g_name = match graph.name {
+    Some(n) => n
+    None => "<subgraph>"
+  }
+  {
+    name: g_name,
+    inputs: input_names,
+    outputs: output_names,
+    initializers,
+    nodes: sorted_nodes,
+  }
+}
+
+///|
 /// 将解析完成的 ONNX 模型 Lowering 为经过依赖校验与 Kahn 拓扑排序的强类型 `@nn_ir.IrGraph`。
 pub fn lower_onnx_model(
   m : @onnx_proto.OnnxModel,
@@ -496,11 +640,6 @@ pub fn lower_onnx_model(
   let opset_version = match m.default_opset_version() {
     Some(v) => v
     None => (17 : Int64)
-  }
-
-  let raw_nodes : Array[@nn_ir.IrNode] = []
-  for i = 0; i < m.nodes.length(); i = i + 1 {
-    raw_nodes.push(lower_node(m.nodes[i], i, opset_version))
   }
 
   let input_names = Array::makei(m.inputs.length(), fn(i) { m.inputs[i].name })
@@ -515,6 +654,26 @@ pub fn lower_onnx_model(
       Some(t) => initializers[key] = t
       None => ()
     }
+  }
+
+  // 构建顶层词法作用域，供 `If` 子图合法引用外层输入、权重与上游节点输出
+  let top_scope : Map[String, Bool] = Map([])
+  for i = 0; i < input_names.length(); i = i + 1 {
+    top_scope[input_names[i]] = true
+  }
+  initializers.each(fn(k, _) { top_scope[k] = true })
+  for i = 0; i < m.nodes.length(); i = i + 1 {
+    let outs = m.nodes[i].output
+    for k = 0; k < outs.length(); k = k + 1 {
+      if outs[k] != "" {
+        top_scope[outs[k]] = true
+      }
+    }
+  }
+
+  let raw_nodes : Array[@nn_ir.IrNode] = []
+  for i = 0; i < m.nodes.length(); i = i + 1 {
+    raw_nodes.push(lower_node(m.nodes[i], i, opset_version, top_scope))
   }
 
   let sorted_nodes = @nn_ir.topo_sort_nodes(

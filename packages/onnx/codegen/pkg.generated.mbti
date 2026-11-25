@@ -18,6 +18,8 @@ pub fn is_arena_alias_op(@nn_ir.Op) -> Bool
 
 pub fn plan_static_arenas(@nn_ir.IrGraph, Map[String, Array[Int32]], Map[String, @tensor.DType]) -> (ArenaPlan, ArenaPlan) raise CodegenError
 
+pub fn specialize_graph(@nn_ir.IrGraph, Map[String, Array[Int32]], Map[String, @tensor.Tensor]) -> @nn_ir.IrGraph raise CodegenError
+
 // Errors
 #derive(Eq, @debug.Debug)
 pub(all) suberror CodegenError {
@@ -59,6 +61,7 @@ pub(all) struct CodegenConfig {
   target : CodegenTarget
   mode : CodegenMode
   embed_weights : Bool
+  frozen_inputs : Map[String, @tensor.Tensor]
 }
 pub fn CodegenConfig::default() -> Self
 

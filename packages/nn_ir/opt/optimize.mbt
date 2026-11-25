@@ -22,32 +22,43 @@ fn clone_initializers(
 }
 
 ///|
-/// 统计图中每个张量名称被节点输入与图输出引用的总次数（用于安全判断是否可融合或消除）。
+/// 统计图中每个张量名称被节点输入、控制流子图捕获及图输出引用的总次数（用于安全判断是否可融合或消除）。
 fn count_tensor_uses(
   nodes : Array[@nn_ir.IrNode],
   graph_outputs : Array[String],
 ) -> Map[String, Int32] {
   let counts : Map[String, Int32] = Map([])
-  for i = 0; i < nodes.length(); i = i + 1 {
-    let ins = nodes[i].inputs
-    for j = 0; j < ins.length(); j = j + 1 {
-      let name = ins[j]
-      if name != "" {
-        let prev = match counts.get(name) {
-          Some(c) => c
-          None => 0
-        }
-        counts[name] = prev + 1
+  fn bump(name : String) -> Unit {
+    if name != "" {
+      let prev = match counts.get(name) {
+        Some(c) => c
+        None => 0
       }
+      counts[name] = prev + 1
+    }
+  }
+
+  for i = 0; i < nodes.length(); i = i + 1 {
+    let node = nodes[i]
+    for j = 0; j < node.inputs.length(); j = j + 1 {
+      bump(node.inputs[j])
+    }
+    match node.op {
+      @nn_ir.If(then_branch~, else_branch~) => {
+        let t_refs = then_branch.external_refs()
+        for k = 0; k < t_refs.length(); k = k + 1 {
+          bump(t_refs[k])
+        }
+        let e_refs = else_branch.external_refs()
+        for k = 0; k < e_refs.length(); k = k + 1 {
+          bump(e_refs[k])
+        }
+      }
+      _ => ()
     }
   }
   for i = 0; i < graph_outputs.length(); i = i + 1 {
-    let name = graph_outputs[i]
-    let prev = match counts.get(name) {
-      Some(c) => c
-      None => 0
-    }
-    counts[name] = prev + 1
+    bump(graph_outputs[i])
   }
   counts
 }
@@ -382,6 +393,19 @@ fn pass_dce(
           needed[node.inputs[j]] = true
         }
       }
+      match node.op {
+        @nn_ir.If(then_branch~, else_branch~) => {
+          let t_refs = then_branch.external_refs()
+          for k = 0; k < t_refs.length(); k = k + 1 {
+            needed[t_refs[k]] = true
+          }
+          let e_refs = else_branch.external_refs()
+          for k = 0; k < e_refs.length(); k = k + 1 {
+            needed[e_refs[k]] = true
+          }
+        }
+        _ => ()
+      }
     }
   }
   let kept : Array[@nn_ir.IrNode] = []
@@ -606,11 +630,67 @@ fn pass_fold_conv_activation(
 }
 
 ///|
+/// 递归优化 `If` 控制流节点内部的 `then_branch` 与 `else_branch` 子图，累加统计信息。
+fn pass_optimize_subgraphs(
+  nodes : Array[@nn_ir.IrNode],
+) -> (Array[@nn_ir.IrNode], OptStats) {
+  let out : Array[@nn_ir.IrNode] = []
+  let mut lifted = 0
+  let mut id_elim = 0
+  let mut conv_bn = 0
+  let mut conv_bias = 0
+  let mut conv_act = 0
+  let mut gemm_pt = 0
+  let mut dead = 0
+
+  for i = 0; i < nodes.length(); i = i + 1 {
+    let node = nodes[i]
+    match node.op {
+      @nn_ir.If(then_branch~, else_branch~) => {
+        let (opt_then, s1) = optimize_graph(then_branch)
+        let (opt_else, s2) = optimize_graph(else_branch)
+        lifted = lifted + s1.lifted_constants + s2.lifted_constants
+        id_elim = id_elim + s1.eliminated_identities + s2.eliminated_identities
+        conv_bn = conv_bn + s1.folded_conv_bn + s2.folded_conv_bn
+        conv_bias = conv_bias + s1.folded_conv_bias + s2.folded_conv_bias
+        conv_act = conv_act +
+          s1.folded_conv_activation +
+          s2.folded_conv_activation
+        gemm_pt = gemm_pt +
+          s1.pretransposed_gemm_weights +
+          s2.pretransposed_gemm_weights
+        dead = dead + s1.eliminated_dead_nodes + s2.eliminated_dead_nodes
+        out.push({
+          name: node.name,
+          op: @nn_ir.If(then_branch=opt_then, else_branch=opt_else),
+          inputs: node.inputs.copy(),
+          outputs: node.outputs.copy(),
+        })
+      }
+      _ => out.push(node)
+    }
+  }
+  (
+    out,
+    {
+      lifted_constants: lifted,
+      eliminated_identities: id_elim,
+      folded_conv_bn: conv_bn,
+      folded_conv_bias: conv_bias,
+      folded_conv_activation: conv_act,
+      pretransposed_gemm_weights: gemm_pt,
+      eliminated_dead_nodes: dead,
+    },
+  )
+}
+
+///|
 /// 对 IrGraph 执行完整图优化管线，返回优化后的新 IrGraph 与各 Pass 统计信息。
 pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
   let initializers = clone_initializers(graph.initializers)
+  let (n0, sub_stats) = pass_optimize_subgraphs(graph.nodes)
   let (n1, lifted_constants) = pass_lift_constants(
-    graph.nodes,
+    n0,
     initializers,
     graph.outputs,
   )
@@ -639,13 +719,17 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     nodes: n7,
   }
   let stats : OptStats = {
-    lifted_constants,
-    eliminated_identities,
-    folded_conv_bn,
-    folded_conv_bias,
-    folded_conv_activation,
-    pretransposed_gemm_weights,
-    eliminated_dead_nodes,
+    lifted_constants: lifted_constants + sub_stats.lifted_constants,
+    eliminated_identities: eliminated_identities +
+    sub_stats.eliminated_identities,
+    folded_conv_bn: folded_conv_bn + sub_stats.folded_conv_bn,
+    folded_conv_bias: folded_conv_bias + sub_stats.folded_conv_bias,
+    folded_conv_activation: folded_conv_activation +
+    sub_stats.folded_conv_activation,
+    pretransposed_gemm_weights: pretransposed_gemm_weights +
+    sub_stats.pretransposed_gemm_weights,
+    eliminated_dead_nodes: eliminated_dead_nodes +
+    sub_stats.eliminated_dead_nodes,
   }
   (optimized, stats)
 }

@@ -146,6 +146,12 @@ pub(all) enum Op {
     layout~ : Int32,
     clip~ : Float?,
   )
+  /// 逐元素相等比较（支持 NumPy 广播，输出 `Bool` 张量）
+  Equal
+  /// 按输入 1D 形状张量填充标量常量的张量生成算子（默认 `Float32(0.0)`）
+  ConstantOfShape(value~ : @tensor.Tensor)
+  /// ONNX 条件控制流算子：根据标量布尔条件选择执行 `then_branch` 或 `else_branch` 子图
+  If(then_branch~ : IrGraph, else_branch~ : IrGraph)
 }
 
 ///|
@@ -202,6 +208,9 @@ pub fn Op::name(self : Op) -> String {
     QLinearMatMul => "QLinearMatMul"
     Resize(..) => "Resize"
     Lstm(..) => "LSTM"
+    Equal => "Equal"
+    ConstantOfShape(..) => "ConstantOfShape"
+    If(..) => "If"
   }
 }
 
@@ -222,4 +231,56 @@ pub(all) struct IrGraph {
   outputs : Array[String]
   initializers : Map[String, @tensor.Tensor]
   nodes : Array[IrNode]
+}
+
+///|
+/// 收集子图（如 `If` 的 `then_branch`/`else_branch`）中引用自外层作用域的全部自由变量名称。
+/// 用于拓扑排序、死代码消除（DCE）与静态生命周期 `BufferPool` 分析正确追踪词法捕获依赖。
+pub fn IrGraph::external_refs(self : IrGraph) -> Array[String] {
+  let local_defs : Map[String, Bool] = Map([])
+  for i = 0; i < self.inputs.length(); i = i + 1 {
+    local_defs[self.inputs[i]] = true
+  }
+  self.initializers.each(fn(k, _) { local_defs[k] = true })
+  for i = 0; i < self.nodes.length(); i = i + 1 {
+    let outs = self.nodes[i].outputs
+    for k = 0; k < outs.length(); k = k + 1 {
+      if outs[k] != "" {
+        local_defs[outs[k]] = true
+      }
+    }
+  }
+
+  let seen : Map[String, Bool] = Map([])
+  let refs : Array[String] = []
+  fn record(name : String) -> Unit {
+    if name != "" && !local_defs.contains(name) && !seen.contains(name) {
+      seen[name] = true
+      refs.push(name)
+    }
+  }
+
+  for i = 0; i < self.nodes.length(); i = i + 1 {
+    let node = self.nodes[i]
+    for j = 0; j < node.inputs.length(); j = j + 1 {
+      record(node.inputs[j])
+    }
+    match node.op {
+      If(then_branch~, else_branch~) => {
+        let t_refs = then_branch.external_refs()
+        for k = 0; k < t_refs.length(); k = k + 1 {
+          record(t_refs[k])
+        }
+        let e_refs = else_branch.external_refs()
+        for k = 0; k < e_refs.length(); k = k + 1 {
+          record(e_refs[k])
+        }
+      }
+      _ => ()
+    }
+  }
+  for i = 0; i < self.outputs.length(); i = i + 1 {
+    record(self.outputs[i])
+  }
+  refs
 }

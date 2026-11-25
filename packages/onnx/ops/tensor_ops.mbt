@@ -628,3 +628,125 @@ pub fn gather_op(
       )
   }
 }
+
+///|
+/// ONNX `Equal` 算子：按 NumPy/ONNX 多向广播规则逐元素比较两个同类型张量是否相等，输出 `Bool` 张量。
+/// 支持 `Float32` / `Float64` / `Int64` / `Int32` / `Bool` / `UInt8` / `Int8`。
+pub fn equal_op(
+  a : @tensor.Tensor,
+  b : @tensor.Tensor,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  if a.dtype() != b.dtype() {
+    raise @tensor.DTypeMismatch(
+      "equal_op: dtype mismatch (\{a.dtype()} vs \{b.dtype()})",
+    )
+  }
+  let a_shape = a.shape()
+  let b_shape = b.shape()
+  let out_shape = @tensor.broadcast_shape(a_shape, b_shape)
+  let total = @tensor.num_elements(out_shape)
+  let a_bstrides = @tensor.broadcast_strides(
+    a_shape,
+    @tensor.compute_strides(a_shape),
+    out_shape,
+  )
+  let b_bstrides = @tensor.broadcast_strides(
+    b_shape,
+    @tensor.compute_strides(b_shape),
+    out_shape,
+  )
+  let rank = out_shape.length()
+  let ac = a.contiguous()
+  let bc = b.contiguous()
+  let out = FixedArray::make(total, false)
+
+  for linear = 0; linear < total; linear = linear + 1 {
+    let mut rem = linear
+    let mut ia = ac.offset
+    let mut ib = bc.offset
+    for axis = rank - 1; axis >= 0; axis = axis - 1 {
+      let dim = out_shape[axis]
+      let coord = rem % dim
+      rem = rem / dim
+      ia = ia + coord * a_bstrides[axis]
+      ib = ib + coord * b_bstrides[axis]
+    }
+    out[linear] = match (ac.data, bc.data) {
+      (@tensor.F32(sa), @tensor.F32(sb)) => sa[ia] == sb[ib]
+      (@tensor.F64(sa), @tensor.F64(sb)) => sa[ia] == sb[ib]
+      (@tensor.I64(sa), @tensor.I64(sb)) => sa[ia] == sb[ib]
+      (@tensor.I32(sa), @tensor.I32(sb)) => sa[ia] == sb[ib]
+      (@tensor.Bool(sa), @tensor.Bool(sb)) => sa[ia] == sb[ib]
+      (@tensor.U8(sa), @tensor.U8(sb)) => sa[ia] == sb[ib]
+      (@tensor.I8(sa), @tensor.I8(sb)) => sa[ia] == sb[ib]
+      _ => false
+    }
+  }
+  @tensor.Tensor::from_bool(out_shape, out)
+}
+
+///|
+/// ONNX `ConstantOfShape` 算子：根据输入 1D 形状张量分配目标形状张量，并填充 `fill_value` 的标量值。
+pub fn constant_of_shape_op(
+  shape_tensor : @tensor.Tensor,
+  fill_value : @tensor.Tensor,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  if shape_tensor.rank() != 1 {
+    raise @tensor.InvalidShape(
+      "constant_of_shape_op: shape input must be 1D, got rank \{shape_tensor.rank()}",
+    )
+  }
+  let raw_dims = shape_tensor.to_i64_buffer()
+  let out_shape = Array::makei(raw_dims.length(), fn(i) { raw_dims[i].to_int() })
+  for i = 0; i < out_shape.length(); i = i + 1 {
+    if out_shape[i] < 0 {
+      raise @tensor.InvalidShape(
+        "constant_of_shape_op: negative dimension \{out_shape[i]} at axis \{i}",
+      )
+    }
+  }
+  let total = @tensor.num_elements(out_shape)
+  let vc = fill_value.contiguous()
+  if vc.numel() != 1 {
+    raise @tensor.InvalidShape(
+      "constant_of_shape_op: value attribute must be a 1-element tensor, got numel=\{vc.numel()}",
+    )
+  }
+  match vc.data {
+    @tensor.F32(buf) =>
+      @tensor.Tensor::from_f32(
+        out_shape,
+        FixedArray::make(total, buf[vc.offset]),
+      )
+    @tensor.F64(buf) =>
+      @tensor.Tensor::from_f64(
+        out_shape,
+        FixedArray::make(total, buf[vc.offset]),
+      )
+    @tensor.I64(buf) =>
+      @tensor.Tensor::from_i64(
+        out_shape,
+        FixedArray::make(total, buf[vc.offset]),
+      )
+    @tensor.I32(buf) =>
+      @tensor.Tensor::from_i32(
+        out_shape,
+        FixedArray::make(total, buf[vc.offset]),
+      )
+    @tensor.Bool(buf) =>
+      @tensor.Tensor::from_bool(
+        out_shape,
+        FixedArray::make(total, buf[vc.offset]),
+      )
+    @tensor.U8(buf) =>
+      @tensor.Tensor::from_u8(
+        out_shape,
+        FixedArray::make(total, buf[vc.offset]),
+      )
+    @tensor.I8(buf) =>
+      @tensor.Tensor::from_i8(
+        out_shape,
+        FixedArray::make(total, buf[vc.offset]),
+      )
+  }
+}

@@ -2,4 +2,5 @@ import {
   "matrixlt/tensor",
   "matrixlt/nn_ir",
   "matrixlt/nn_ir/opt",
+  "matrixlt/onnx/ops",
 }

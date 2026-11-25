@@ -79,6 +79,7 @@ pub struct Session {
   release_plan : Array[Array[String]]
   pinned_outputs : Array[Bool]
   pool : @tensor.BufferPool
+  sub_sessions : Map[String, (Session, Session)]
 }
 pub fn Session::backend(Self) -> BackendKind
 pub fn Session::clear_pool(Self) -> Unit

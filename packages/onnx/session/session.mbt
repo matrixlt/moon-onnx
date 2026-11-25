@@ -101,6 +101,9 @@ pub struct Session {
   pinned_outputs : Array[Bool]
   /// 会话级缓冲区复用池（跨推理复用 `im2col` 工作区与中间激活张量缓冲）
   pool : @tensor.BufferPool
+  /// 预构建的 `If` 控制流分支子会话缓存（键为节点名，值为 `(then_session, else_session)`），
+  /// 使子图在初始化期同样完成 V128 权重预打包与生命周期分析，推理热路径零重复构建开销
+  sub_sessions : Map[String, (Session, Session)]
 }
 
 ///|
@@ -214,6 +217,11 @@ fn build_release_plan(
   for i = 0; i < graph.outputs.length(); i = i + 1 {
     pinned[graph.outputs[i]] = true
   }
+  // 子图捕获的外层作用域张量必须锁定，禁止在子图执行期间被归还至子图局部复用池
+  let ext_refs = graph.external_refs()
+  for i = 0; i < ext_refs.length(); i = i + 1 {
+    pinned[ext_refs[i]] = true
+  }
 
   let root_of : Map[String, String] = Map([])
   for i = 0; i < num_nodes; i = i + 1 {
@@ -265,20 +273,37 @@ fn build_release_plan(
     }
   }
 
+  fn mark_use(name : String, step : Int32) -> Unit {
+    if name == "" {
+      return
+    }
+    let root = match root_of.get(name) {
+      Some(prev) => prev
+      None => name
+    }
+    if last_use.contains(root) {
+      last_use[root] = step
+    }
+  }
+
   for i = 0; i < num_nodes; i = i + 1 {
     let node = graph.nodes[i]
     for j = 0; j < node.inputs.length(); j = j + 1 {
-      let in_name = node.inputs[j]
-      if in_name == "" {
-        continue
+      mark_use(node.inputs[j], i)
+    }
+    // 延长被 `If` 分支子图词法捕获的外层中间张量生命周期至该 `If` 节点
+    match node.op {
+      @nn_ir.If(then_branch~, else_branch~) => {
+        let t_refs = then_branch.external_refs()
+        for k = 0; k < t_refs.length(); k = k + 1 {
+          mark_use(t_refs[k], i)
+        }
+        let e_refs = else_branch.external_refs()
+        for k = 0; k < e_refs.length(); k = k + 1 {
+          mark_use(e_refs[k], i)
+        }
       }
-      let root = match root_of.get(in_name) {
-        Some(prev) => prev
-        None => in_name
-      }
-      if last_use.contains(root) {
-        last_use[root] = i
-      }
+      _ => ()
     }
   }
 
@@ -328,6 +353,18 @@ pub fn Session::with_provider(
     graph, enable_packing,
   )
   let (release_plan, pinned_outputs) = build_release_plan(graph)
+  let sub_sessions : Map[String, (Session, Session)] = Map([])
+  for i = 0; i < graph.nodes.length(); i = i + 1 {
+    let node = graph.nodes[i]
+    match node.op {
+      @nn_ir.If(then_branch~, else_branch~) => {
+        let then_sess = Session::with_provider(then_branch, provider)
+        let else_sess = Session::with_provider(else_branch, provider)
+        sub_sessions[node.name] = (then_sess, else_sess)
+      }
+      _ => ()
+    }
+  }
   {
     graph,
     backend,
@@ -337,6 +374,7 @@ pub fn Session::with_provider(
     release_plan,
     pinned_outputs,
     pool: @tensor.BufferPool::new(),
+    sub_sessions,
   }
 }
 
@@ -413,19 +451,29 @@ pub fn Session::provider_name(self : Session) -> String {
 }
 
 ///|
-/// 返回当前会话中已完成预打包的静态权重总数量（含 MatMul / Gemm 与 Conv 静态权重）。
+/// 返回当前会话中已完成预打包的静态权重总数量（含 MatMul / Gemm / Conv 及 `If` 分支子会话权重）。
 pub fn Session::packed_weight_count(self : Session) -> Int32 {
   let mut count = 0
   self.packed_weights.each(fn(_, _) { count = count + 1 })
   self.packed_conv_weights.each(fn(_, _) { count = count + 1 })
+  self.sub_sessions.each(fn(_, pair) {
+    let (ts, es) = pair
+    count = count + ts.packed_weight_count() + es.packed_weight_count()
+  })
   count
 }
 
 ///|
-/// 返回当前会话中已完成预打包的静态 2D 卷积权重数量。
+/// 返回当前会话中已完成预打包的静态卷积权重数量（含 `If` 分支子会话）。
 pub fn Session::packed_conv_weight_count(self : Session) -> Int32 {
   let mut count = 0
   self.packed_conv_weights.each(fn(_, _) { count = count + 1 })
+  self.sub_sessions.each(fn(_, pair) {
+    let (ts, es) = pair
+    count = count +
+      ts.packed_conv_weight_count() +
+      es.packed_conv_weight_count()
+  })
   count
 }
 
@@ -462,6 +510,73 @@ fn release_dead_buffers(
 }
 
 ///|
+/// 执行单个节点：若节点为 `If` 且已预构建分支子会话，则优先复用预打包权重的子会话零开销执行。
+fn Session::eval_step(
+  self : Session,
+  node : @nn_ir.IrNode,
+  ctx : EvalContext,
+) -> Array[@tensor.Tensor] raise RuntimeError {
+  match node.op {
+    @nn_ir.If(..) =>
+      match self.sub_sessions.get(node.name) {
+        Some((then_sess, else_sess)) => {
+          let cond_t = ctx.require_tensor(node.name, node.inputs, 0)
+          let cond = read_scalar_bool(node.name, cond_t)
+          let branch_sess = if cond { then_sess } else { else_sess }
+          branch_sess.run_subgraph(ctx.env)
+        }
+        None => self.provider.eval_node_multi(node, ctx)
+      }
+    _ => self.provider.eval_node_multi(node, ctx)
+  }
+}
+
+///|
+/// 在外层词法环境 `outer_env` 上执行当前子会话（供 `If` 分支调用），返回按子图 `outputs` 顺序排列的结果张量。
+fn Session::run_subgraph(
+  self : Session,
+  outer_env : Map[String, @tensor.Tensor],
+) -> Array[@tensor.Tensor] raise RuntimeError {
+  let env : Map[String, @tensor.Tensor] = Map([])
+  outer_env.each(fn(k, v) { env[k] = v })
+  self.graph.initializers.each(fn(k, v) { env[k] = v })
+
+  for i = 0; i < self.graph.nodes.length(); i = i + 1 {
+    let node = self.graph.nodes[i]
+    let out_pool : @tensor.BufferPool? = if self.pinned_outputs[i] {
+      None
+    } else {
+      Some(self.pool)
+    }
+    let ctx : EvalContext = {
+      env,
+      packed_weights: self.packed_weights,
+      packed_conv_weights: self.packed_conv_weights,
+      scratch_pool: self.pool,
+      out_pool,
+    }
+    let out_tensors = self.eval_step(node, ctx)
+    for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
+      if node.outputs[k] != "" {
+        env[node.outputs[k]] = out_tensors[k]
+      }
+    }
+    release_dead_buffers(self.release_plan[i], env, self.pool)
+  }
+
+  let results : Array[@tensor.Tensor] = []
+  for i = 0; i < self.graph.outputs.length(); i = i + 1 {
+    let out_name = self.graph.outputs[i]
+    match env.get(out_name) {
+      Some(t) => results.push(t)
+      None =>
+        raise MissingTensor("subgraph output '\{out_name}' was not produced")
+    }
+  }
+  results
+}
+
+///|
 /// 执行一次完整的前向推理（零计时开销热路径，自动通过 `ExecutionProvider` 分派并复用 `BufferPool`）。
 pub fn Session::run(
   self : Session,
@@ -492,7 +607,7 @@ pub fn Session::run(
       scratch_pool: self.pool,
       out_pool,
     }
-    let out_tensors = self.provider.eval_node_multi(node, ctx)
+    let out_tensors = self.eval_step(node, ctx)
     for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
       if node.outputs[k] != "" {
         env[node.outputs[k]] = out_tensors[k]
@@ -546,7 +661,7 @@ pub fn Session::run_profiled(
       out_pool,
     }
     let t0 = @bench.monotonic_clock_start()
-    let out_tensors = self.provider.eval_node_multi(node, ctx)
+    let out_tensors = self.eval_step(node, ctx)
     let elapsed_us = @bench.monotonic_clock_end(t0)
     let out_shape = if out_tensors.length() > 0 {
       out_tensors[0].shape()

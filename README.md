@@ -18,15 +18,22 @@
 - `apps/cli`：Native 命令行工具（`inspect`、`run`、`profile`、`compile`）
 - `apps/wasm_bench` & `scripts/bench_wasm.mjs`：纯内存 Wasm / Wasm-GC `V128` SIMD 算子基准
 - `scripts/bench_aot_wasm.mjs`：真实 MNIST CNN 的 `onnx2mbt` AOT 5 模式端到端 Wasm 体积与性能基准
+- `scripts/bench_real_models.mjs`：真实开源生产模型（Silero VAD v5 + MobileNetV2-12）的 `onnx2mbt` 零分配 Wasm AOT 精度对齐（vs ORT）与性能基准
 - `benchmarks`：Native Release 微基准与 MNIST 端到端基准
 
-## 核心亮点与实测数据（v0.2.0）
+## 核心亮点与实测数据
 
-- **45 个高频 ONNX 算子**：覆盖视觉（`Conv1D`/`Conv2D`/Depthwise、`MaxPool`/`AveragePool`/`GlobalAveragePool`、`Resize`、`BatchNormalization`）、语音/时序（多输出 `LSTM`）、Transformer（`LayerNormalization`、`Gelu`、`HardSwish`、`MatMul`/`Gemm`、`Softmax`）、张量操作（`Split`/`Concat`/`Slice`/`Pad`/`Gather`/`Cast`/`Shape`/`ReduceMean`/`ReduceSum`）与量化（`QuantizeLinear`/`DequantizeLinear`/`QLinearMatMul`）。
-- **`onnx2mbt` v2 零分配 AOT 静态编译器**：编译期完成图融合 + 静态内存 Arena 区间规划 + 目标平台自适应 + 可选 `--embed-weights` 单文件内嵌权重。真实 `mnist_cnn.onnx`（与 ORT Golden 误差 `5.36e-7`）在 Node.js V8 Wasm 中实测：
-  - `wasm-gc` 外置权重：**3.2 KB raw / 1.8 KB gzip**，**641 FPS**，单次推理 **0 堆分配**；
-  - `wasm-gc` 单文件内嵌全量 24 KB 权重：**26.8 KB raw / 24.1 KB gzip**，冷启动 **0.77 ms**，**614 FPS**；
-  - `wasm` V128 SIMD 外置权重：**16.6 KB raw / 8.7 KB gzip**，**534 FPS**。
+- **48 个高频 ONNX 算子（含 `If` 控制流子图）**：覆盖视觉（`Conv1D`/`Conv2D`/Depthwise、`MaxPool`/`AveragePool`/`GlobalAveragePool`、`Resize`、`BatchNormalization`）、语音/时序（多输出 `LSTM`、`If` 条件分支子图）、Transformer（`LayerNormalization`、`Gelu`、`HardSwish`、`MatMul`/`Gemm`、`Softmax`）、张量与控制（`Equal`、`ConstantOfShape`、`Split`/`Concat`/`Slice`/`Pad`/`Gather`/`Cast`/`Shape`/`ReduceMean`/`ReduceSum`）与量化（`QuantizeLinear`/`DequantizeLinear`/`QLinearMatMul`）。
+- **真实开源生产模型端到端打通 + `onnx2mbt` 零分配 Wasm AOT 实测（Node.js V8，对比官方 ONNX Runtime 1.32.0）**：
+
+| 真实开源模型 | Wasm 目标 | `.wasm` 体积（raw / gzip） | 静态 Arena RAM | 冷启动 | 误差（vs ORT） | 实测速度 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **Silero VAD v5** (16kHz 流式) | `wasm-gc` Arena | **7.9 KB / 3.8 KB** | **13.8 KB** | 2.84 ms | `1.17e-7` | **0.94 ms/帧（34.1× 实时）** |
+| **Silero VAD v5** (16kHz 流式) | `wasm` V128 Arena | 26.5 KB / 14.0 KB | **13.8 KB** | 3.12 ms | `1.17e-7` | **1.05 ms/帧（30.5× 实时）** |
+| **MobileNetV2-12** (3.49M, 224²) | `wasm-gc` Arena | **12.1 KB / 4.6 KB** | 7.64 MB（省 78%） | 17.9 ms | `1.17e-5`（Top-1 精确一致） | 545 ms（Native 114 ms） |
+| **MobileNetV2-12** (3.49M, 224²) | `wasm` V128 Arena | 32.3 KB / 16.4 KB | 7.64 MB（省 78%） | 14.9 ms | `1.06e-5`（Top-1 精确一致） | 681 ms（Native 114 ms） |
+| **MNIST CNN** (外置 / 单文件内嵌) | `wasm-gc` Arena | **3.2 KB / 1.8 KB**（内嵌 26.8 KB） | 12.9 KB | **0.77 ms** | `8.34e-7` | **627–641 FPS** |
+
 - **Node.js V8 Wasm `V128` SIMD 算子实测加速**：`GEMM 128³` **19.4×**，`INT8 QLinearMatMul 128³ (i32x4.dot)` **25.4×**，`Conv2D + Relu` **10.9×**，`Relu 65K` **37.8×**。
 
 ## 常用命令
@@ -38,17 +45,19 @@
 # 2. 查看 ONNX 模型结构摘要
 moon run apps/cli --target native -- inspect tests/fixtures/mnist_cnn.onnx
 
-# 3. 运行 MNIST CNN 推理并与 ONNX Runtime 黄金输出对齐
+# 3. 运行推理并与 ONNX Runtime 黄金输出对齐（支持自定义 --input-shape）
 moon run apps/cli --target native -- run \
   tests/fixtures/mnist_cnn.onnx \
   tests/fixtures/mnist_cnn_input.f32 \
   tests/fixtures/mnist_cnn_golden.f32 \
-  --backend=simd
+  --input-shape=1,1,28,28 --backend=simd
 
-# 4. 使用 onnx2mbt AOT 编译为单文件零分配 MoonBit/Wasm 推理模块
+# 4. 使用 onnx2mbt AOT 编译真实模型（支持多输入形状与 --freeze-i64 分支特化）
 moon run apps/cli --target native -- compile \
-  tests/fixtures/mnist_cnn.onnx ./out_mnist_aot \
-  --input-shape=1,1,28,28 --struct=MnistCnn --target=wasm --embed-weights
+  silero_vad.onnx ./out_vad_16k \
+  --input-shape="input:1,512;state:2,1,128" \
+  --freeze-i64="sr:16000" \
+  --struct=SileroVad16k --target=wasm-gc --mode=arena
 
 # 5. 运行 Wasm V128 算子基准与 AOT 端到端基准
 node scripts/bench_wasm.mjs

@@ -129,19 +129,38 @@ fn fmt_gemm_epilogue(act : @nn_ir.FusedActivation) -> String {
 }
 
 ///|
-/// 检查当前图是否满足 Zero-Allocation Arena 模式编译条件（单输入单输出且全部算子均有直接缓冲内核）。
+/// 检查当前图是否满足 Zero-Allocation Arena 模式编译条件（全部输入输出为 Float32 且全部算子均有零分配缓冲内核）。
 fn can_emit_arena(
   graph : @nn_ir.IrGraph,
   shapes : Map[String, Array[Int32]],
   dtypes : Map[String, @tensor.DType],
 ) -> Bool {
-  if graph.inputs.length() != 1 || graph.outputs.length() != 1 {
+  if graph.inputs.length() == 0 || graph.outputs.length() == 0 {
     return false
+  }
+  for i = 0; i < graph.inputs.length(); i = i + 1 {
+    match dtypes.get(graph.inputs[i]) {
+      Some(@tensor.Float32) | None => ()
+      _ => return false
+    }
+  }
+  for i = 0; i < graph.outputs.length(); i = i + 1 {
+    match dtypes.get(graph.outputs[i]) {
+      Some(@tensor.Float32) | None => ()
+      _ => return false
+    }
   }
   for i = 0; i < graph.nodes.length(); i = i + 1 {
     let node = graph.nodes[i]
     let ins = node.inputs
-    if node.outputs.length() != 1 || node.outputs[0] == "" {
+    if node.outputs.length() == 0 {
+      return false
+    }
+    let is_split = match node.op {
+      @nn_ir.Split(..) => true
+      _ => false
+    }
+    if !is_split && (node.outputs.length() != 1 || node.outputs[0] == "") {
       return false
     }
     let ok = match node.op {
@@ -171,7 +190,7 @@ fn can_emit_arena(
           graph.initializers.contains(ins[2])
         lo_ok && hi_ok
       }
-      @nn_ir.Add | @nn_ir.Sub | @nn_ir.Mul | @nn_ir.Div =>
+      @nn_ir.Add | @nn_ir.Sub | @nn_ir.Mul | @nn_ir.Div | @nn_ir.Pow =>
         match (shapes.get(ins[0]), shapes.get(ins[1])) {
           (Some(sa), Some(sb)) => {
             let same = sa == sb
@@ -216,6 +235,83 @@ fn can_emit_arena(
           (Some(sa), Some(sb)) =>
             sa.length() == 2 &&
             sb.length() == 2 &&
+            graph.initializers.contains(ins[1])
+          _ => false
+        }
+      @nn_ir.Pad(pads~, ..) =>
+        match shapes.get(ins[0]) {
+          Some(sx) if sx.length() >= 1 && sx.length() <= 4 => {
+            let pads_ok = (
+                ins.length() >= 2 &&
+                ins[1] != "" &&
+                graph.initializers.contains(ins[1])
+              ) ||
+              pads is Some(_)
+            let cval_ok = ins.length() < 3 ||
+              ins[2] == "" ||
+              graph.initializers.contains(ins[2])
+            let axes_ok = ins.length() < 4 ||
+              ins[3] == "" ||
+              graph.initializers.contains(ins[3])
+            pads_ok && cval_ok && axes_ok
+          }
+          _ => false
+        }
+      @nn_ir.Slice(starts~, ends~, ..) =>
+        match shapes.get(ins[0]) {
+          Some(sx) if sx.length() >= 1 && sx.length() <= 4 => {
+            let s_ok = (
+                ins.length() >= 2 &&
+                ins[1] != "" &&
+                graph.initializers.contains(ins[1])
+              ) ||
+              starts is Some(_)
+            let e_ok = (
+                ins.length() >= 3 &&
+                ins[2] != "" &&
+                graph.initializers.contains(ins[2])
+              ) ||
+              ends is Some(_)
+            let a_ok = ins.length() < 4 ||
+              ins[3] == "" ||
+              graph.initializers.contains(ins[3])
+            let st_ok = ins.length() < 5 ||
+              ins[4] == "" ||
+              graph.initializers.contains(ins[4])
+            s_ok && e_ok && a_ok && st_ok
+          }
+          _ => false
+        }
+      @nn_ir.Gather(..) =>
+        match (dtypes.get(ins[0]), graph.initializers.get(ins[1])) {
+          (Some(@tensor.Float32) | None, Some(_)) => true
+          _ => false
+        }
+      @nn_ir.Split(..) => {
+        let dt_ok = match dtypes.get(ins[0]) {
+          Some(@tensor.Float32) | None => true
+          _ => false
+        }
+        let sp_ok = ins.length() < 2 ||
+          ins[1] == "" ||
+          graph.initializers.contains(ins[1])
+        dt_ok && sp_ok
+      }
+      @nn_ir.Concat(..) => {
+        let mut all_f32 = ins.length() >= 1
+        for k = 0; k < ins.length(); k = k + 1 {
+          match dtypes.get(ins[k]) {
+            Some(@tensor.Float32) | None => ()
+            _ => all_f32 = false
+          }
+        }
+        all_f32
+      }
+      @nn_ir.ReduceMean(..) =>
+        match shapes.get(ins[0]) {
+          Some(sx) if sx.length() >= 1 && sx.length() <= 4 =>
+            ins.length() < 2 ||
+            ins[1] == "" ||
             graph.initializers.contains(ins[1])
           _ => false
         }
@@ -271,15 +367,49 @@ fn emit_arena_model(
   byte_plan : ArenaPlan,
   config : CodegenConfig,
 ) -> AotArtifact raise CodegenError {
-  let in_name = graph.inputs[0]
-  let out_name = graph.outputs[0]
-  let in_shape = shapes.get(in_name).unwrap()
-  let out_shape = shapes.get(out_name).unwrap()
-  let in_len = @tensor.num_elements(in_shape) catch {
-    e => raise ShapeError("\{e}")
+  let single_io = graph.inputs.length() == 1 && graph.outputs.length() == 1
+  let in_names = graph.inputs
+  let out_names = graph.outputs
+  let in_shapes_arr : Array[(String, Array[Int32])] = []
+  let in_lens : Array[Int32] = []
+  for idx = 0; idx < in_names.length(); idx = idx + 1 {
+    let sh = shapes.get(in_names[idx]).unwrap()
+    in_shapes_arr.push((in_names[idx], sh))
+    in_lens.push(
+      @tensor.num_elements(sh) catch {
+        e => raise ShapeError("\{e}")
+      },
+    )
   }
-  let out_len = @tensor.num_elements(out_shape) catch {
-    e => raise ShapeError("\{e}")
+  let out_shapes_arr : Array[(String, Array[Int32])] = []
+  let out_lens : Array[Int32] = []
+  for idx = 0; idx < out_names.length(); idx = idx + 1 {
+    let sh = shapes.get(out_names[idx]).unwrap()
+    out_shapes_arr.push((out_names[idx], sh))
+    out_lens.push(
+      @tensor.num_elements(sh) catch {
+        e => raise ShapeError("\{e}")
+      },
+    )
+  }
+
+  // 建立图输入及其零拷贝别名视图到函数参数名的映射（单输入用 `input`，多输入用 `in_0`, `in_1`, ...）
+  let input_param_of : Map[String, String] = Map([])
+  for idx = 0; idx < in_names.length(); idx = idx + 1 {
+    let pname = if single_io { "input" } else { "in_\{idx}" }
+    input_param_of[in_names[idx]] = pname
+  }
+  for idx = 0; idx < graph.nodes.length(); idx = idx + 1 {
+    let nd = graph.nodes[idx]
+    if is_arena_alias_op(nd.op) &&
+      nd.inputs.length() > 0 &&
+      nd.outputs.length() > 0 &&
+      nd.outputs[0] != "" {
+      match input_param_of.get(nd.inputs[0]) {
+        Some(p) => input_param_of[nd.outputs[0]] = p
+        None => ()
+      }
+    }
   }
 
   // 根据目标平台自适应选择 SIMD 策略：
@@ -354,8 +484,9 @@ fn emit_arena_model(
 
   // 解析张量在 Arena 模式下的 (缓冲表达式, 起始偏移)
   fn resolve_f32_loc(name : String) -> (String, Int32) raise CodegenError {
-    if name == in_name {
-      return ("input", 0)
+    match input_param_of.get(name) {
+      Some(pname) => return (pname, 0)
+      None => ()
     }
     match f32_plan.allocs.get(name) {
       Some(a) => return ("self.arena_f32", a.offset)
@@ -392,6 +523,7 @@ fn emit_arena_model(
   let mut need_softmax = false
   let mut need_layernorm = false
   let mut need_gelu = false
+  let mut need_reflect = false
   let mut need_f32_loader = false
   let mut need_byte_loader = false
   let mut need_trans_f32 = false
@@ -986,6 +1118,413 @@ fn emit_arena_model(
           )
         }
       }
+      @nn_ir.Pow => {
+        let (a_buf, a_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let sa = shapes.get(ins[0]).unwrap()
+        let sb = shapes.get(ins[1]).unwrap()
+        let mut emitted_sq = false
+        if sb.length() == 0 || (sb.length() == 1 && sb[0] == 1) {
+          match graph.initializers.get(ins[1]) {
+            Some(bt) => {
+              let exp_v = bt.get_f32_flat(0) catch {
+                e => raise TensorErr("\{e}")
+              }
+              if exp_v == (2.0 : Float) {
+                // 快速路径：x^2 直接展开为乘法（如 STFT 幅值计算），避免调用 `@math.pow`
+                body.write_string(
+                  "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { let v = \{a_buf}[\{a_off} + k_i]; \{y_buf}[\{y_off} + k_i] = v * v }\n",
+                )
+                emitted_sq = true
+              } else {
+                need_math = true
+                let exp_d = exp_v.to_double()
+                body.write_string(
+                  "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = Float::from_double(@math.pow(\{a_buf}[\{a_off} + k_i].to_double(), \{exp_d})) }\n",
+                )
+                emitted_sq = true
+              }
+            }
+            None => ()
+          }
+        }
+        if !emitted_sq {
+          need_math = true
+          let (b_buf, b_off) = resolve_f32_loc(ins[1])
+          if sa == sb {
+            body.write_string(
+              "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = Float::from_double(@math.pow(\{a_buf}[\{a_off} + k_i].to_double(), \{b_buf}[\{b_off} + k_i].to_double())) }\n",
+            )
+          } else {
+            body.write_string("  let exp_s = \{b_buf}[\{b_off}].to_double()\n")
+            body.write_string(
+              "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = Float::from_double(@math.pow(\{a_buf}[\{a_off} + k_i].to_double(), exp_s)) }\n",
+            )
+          }
+        }
+      }
+      @nn_ir.Pad(mode~, pads~, constant_value~) => {
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let sx = shapes.get(ins[0]).unwrap()
+        let rank = sx.length()
+        let raw_pads : Array[Int32] = if ins.length() >= 2 && ins[1] != "" {
+          let b = graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
+              e => raise TensorErr("\{e}")
+            }
+          Array::makei(b.length(), fn(k) { b[k].to_int() })
+        } else {
+          pads.unwrap()
+        }
+        let pb = Array::make(rank, 0)
+        if ins.length() >= 4 && ins[3] != "" {
+          let ab = graph.initializers.get(ins[3]).unwrap().to_i64_buffer() catch {
+              e => raise TensorErr("\{e}")
+            }
+          let k_ax = ab.length()
+          for k = 0; k < k_ax; k = k + 1 {
+            let ax = ab[k].to_int()
+            let norm = if ax < 0 { ax + rank } else { ax }
+            pb[norm] = raw_pads[k]
+          }
+        } else {
+          for d = 0; d < rank; d = d + 1 {
+            pb[d] = raw_pads[d]
+          }
+        }
+        let cval : Float = if ins.length() >= 3 && ins[2] != "" {
+          graph.initializers.get(ins[2]).unwrap().get_f32_flat(0) catch {
+            e => raise TensorErr("\{e}")
+          }
+        } else {
+          match constant_value {
+            Some(v) => v
+            None => (0.0 : Float)
+          }
+        }
+        let mode_id = match mode {
+          "" | "constant" => 0
+          "reflect" => {
+            need_reflect = true
+            1
+          }
+          "edge" => 2
+          other => raise UnsupportedOp("arena Pad unsupported mode '\{other}'")
+        }
+        let in_strides = @tensor.compute_strides(sx)
+        let out_strides = @tensor.compute_strides(out_sh)
+        // 展开 1D~4D 静态循环实现严格 0 堆分配的 Pad
+        for d = 0; d < rank; d = d + 1 {
+          body.write_string(
+            "  for p_\{d} = 0; p_\{d} < \{out_sh[d]}; p_\{d} = p_\{d} + 1 {\n",
+          )
+        }
+        if mode_id == 0 {
+          body.write_string("    let mut oob = false\n")
+        }
+        body.write_string("    let mut s_idx = \{x_off}\n")
+        for d = 0; d < rank; d = d + 1 {
+          body.write_string("    let ic_\{d} = p_\{d} - \{pb[d]}\n")
+          if mode_id == 0 {
+            body.write_string(
+              "    if ic_\{d} < 0 || ic_\{d} >= \{sx[d]} { oob = true } else { s_idx = s_idx + ic_\{d} * \{in_strides[d]} }\n",
+            )
+          } else if mode_id == 1 {
+            body.write_string(
+              "    let rc_\{d} = if ic_\{d} < 0 || ic_\{d} >= \{sx[d]} { reflect_idx(ic_\{d}, \{sx[d]}) } else { ic_\{d} }\n",
+            )
+            body.write_string(
+              "    s_idx = s_idx + rc_\{d} * \{in_strides[d]}\n",
+            )
+          } else {
+            body.write_string(
+              "    let ec_\{d} = if ic_\{d} < 0 { 0 } else if ic_\{d} >= \{sx[d]} { \{sx[d] - 1} } else { ic_\{d} }\n",
+            )
+            body.write_string(
+              "    s_idx = s_idx + ec_\{d} * \{in_strides[d]}\n",
+            )
+          }
+        }
+        let dst_expr = StringBuilder()
+        dst_expr.write_string("\{y_off}")
+        for d = 0; d < rank; d = d + 1 {
+          dst_expr.write_string(" + p_\{d} * \{out_strides[d]}")
+        }
+        if mode_id == 0 {
+          body.write_string(
+            "    \{y_buf}[\{dst_expr.to_string()}] = if oob { \{fmt_float_literal(cval)} } else { \{x_buf}[s_idx] }\n",
+          )
+        } else {
+          body.write_string(
+            "    \{y_buf}[\{dst_expr.to_string()}] = \{x_buf}[s_idx]\n",
+          )
+        }
+        for _d = 0; _d < rank; _d = _d + 1 {
+          body.write_string("  }\n")
+        }
+      }
+      @nn_ir.Slice(starts~, ends~, axes~, steps~) => {
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let sx = shapes.get(ins[0]).unwrap()
+        let rank = sx.length()
+        let s_arr : Array[Int64] = if ins.length() >= 2 && ins[1] != "" {
+          let b = graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
+              e => raise TensorErr("\{e}")
+            }
+          Array::makei(b.length(), fn(k) { b[k] })
+        } else {
+          let v = starts.unwrap()
+          Array::makei(v.length(), fn(k) { v[k].to_int64() })
+        }
+        let a_opt : Array[Int32]? = if ins.length() >= 4 && ins[3] != "" {
+          let b = graph.initializers.get(ins[3]).unwrap().to_i64_buffer() catch {
+              e => raise TensorErr("\{e}")
+            }
+          Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+        } else {
+          axes
+        }
+        let st_opt : Array[Int32]? = if ins.length() >= 5 && ins[4] != "" {
+          let b = graph.initializers.get(ins[4]).unwrap().to_i64_buffer() catch {
+              e => raise TensorErr("\{e}")
+            }
+          Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+        } else {
+          steps
+        }
+        let _ = ends
+        let ax_start = Array::make(rank, 0)
+        let ax_step = Array::make(rank, 1)
+        for k = 0; k < s_arr.length(); k = k + 1 {
+          let raw_ax = match a_opt {
+            Some(a) => a[k]
+            None => k
+          }
+          let ax = if raw_ax < 0 { raw_ax + rank } else { raw_ax }
+          let step = match st_opt {
+            Some(st) => st[k]
+            None => 1
+          }
+          ax_start[ax] = clamp_slice_bound_static(s_arr[k], sx[ax], step)
+          ax_step[ax] = step
+        }
+        let in_strides = @tensor.compute_strides(sx)
+        let out_strides = @tensor.compute_strides(out_sh)
+        for d = 0; d < rank; d = d + 1 {
+          body.write_string(
+            "  for sl_\{d} = 0; sl_\{d} < \{out_sh[d]}; sl_\{d} = sl_\{d} + 1 {\n",
+          )
+        }
+        let src_expr = StringBuilder()
+        let dst_expr = StringBuilder()
+        src_expr.write_string("\{x_off}")
+        dst_expr.write_string("\{y_off}")
+        for d = 0; d < rank; d = d + 1 {
+          src_expr.write_string(
+            " + (\{ax_start[d]} + sl_\{d} * \{ax_step[d]}) * \{in_strides[d]}",
+          )
+          dst_expr.write_string(" + sl_\{d} * \{out_strides[d]}")
+        }
+        body.write_string(
+          "    \{y_buf}[\{dst_expr.to_string()}] = \{x_buf}[\{src_expr.to_string()}]\n",
+        )
+        for _d = 0; _d < rank; _d = _d + 1 {
+          body.write_string("  }\n")
+        }
+      }
+      @nn_ir.Gather(axis~) => {
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let sd = shapes.get(ins[0]).unwrap()
+        let rank = sd.length()
+        let ax = if axis < 0 { axis + rank } else { axis }
+        let axis_dim = sd[ax]
+        let mut outer = 1
+        for d = 0; d < ax; d = d + 1 {
+          outer = outer * sd[d]
+        }
+        let mut inner = 1
+        for d = ax + 1; d < rank; d = d + 1 {
+          inner = inner * sd[d]
+        }
+        let idx_buf = graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
+            e => raise TensorErr("\{e}")
+          }
+        let idx_len = idx_buf.length()
+        for k = 0; k < idx_len; k = k + 1 {
+          let raw = idx_buf[k].to_int()
+          let norm = if raw < 0 { raw + axis_dim } else { raw }
+          if outer == 1 {
+            body.write_string(
+              "  for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[\{y_off + k * inner} + g_j] = \{x_buf}[\{x_off + norm * inner} + g_j] }\n",
+            )
+          } else {
+            body.write_string(
+              "  for g_o = 0; g_o < \{outer}; g_o = g_o + 1 { for g_j = 0; g_j < \{inner}; g_j = g_j + 1 { \{y_buf}[\{y_off} + (g_o * \{idx_len} + \{k}) * \{inner} + g_j] = \{x_buf}[\{x_off} + (g_o * \{axis_dim} + \{norm}) * \{inner} + g_j] } }\n",
+            )
+          }
+        }
+      }
+      @nn_ir.Split(axis~, ..) => {
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let sx = shapes.get(ins[0]).unwrap()
+        let rank = sx.length()
+        let ax = if axis < 0 { axis + rank } else { axis }
+        let axis_dim = sx[ax]
+        let mut outer = 1
+        for d = 0; d < ax; d = d + 1 {
+          outer = outer * sx[d]
+        }
+        let mut inner = 1
+        for d = ax + 1; d < rank; d = d + 1 {
+          inner = inner * sx[d]
+        }
+        let mut axis_off = 0
+        for p = 0; p < node.outputs.length(); p = p + 1 {
+          let pn = node.outputs[p]
+          if pn == "" {
+            continue
+          }
+          let psh = shapes.get(pn).unwrap()
+          let part_dim = psh[ax]
+          let part_inner = part_dim * inner
+          let (p_buf, p_off) = resolve_f32_loc(pn)
+          if outer == 1 {
+            body.write_string(
+              "  for sp_k = 0; sp_k < \{part_inner}; sp_k = sp_k + 1 { \{p_buf}[\{p_off} + sp_k] = \{x_buf}[\{x_off + axis_off * inner} + sp_k] }\n",
+            )
+          } else {
+            body.write_string(
+              "  for sp_o = 0; sp_o < \{outer}; sp_o = sp_o + 1 { for sp_k = 0; sp_k < \{part_inner}; sp_k = sp_k + 1 { \{p_buf}[\{p_off} + sp_o * \{part_inner} + sp_k] = \{x_buf}[\{x_off} + (sp_o * \{axis_dim} + \{axis_off}) * \{inner} + sp_k] } }\n",
+            )
+          }
+          axis_off = axis_off + part_dim
+        }
+      }
+      @nn_ir.Concat(axis~) => {
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let s0 = shapes.get(ins[0]).unwrap()
+        let rank = s0.length()
+        let ax = if axis < 0 { axis + rank } else { axis }
+        let total_axis = out_sh[ax]
+        let mut outer = 1
+        for d = 0; d < ax; d = d + 1 {
+          outer = outer * s0[d]
+        }
+        let mut inner = 1
+        for d = ax + 1; d < rank; d = d + 1 {
+          inner = inner * s0[d]
+        }
+        let mut dst_axis_off = 0
+        for t_idx = 0; t_idx < ins.length(); t_idx = t_idx + 1 {
+          let (s_buf, s_off) = resolve_f32_loc(ins[t_idx])
+          let ts = shapes.get(ins[t_idx]).unwrap()
+          let chunk = ts[ax] * inner
+          if outer == 1 {
+            body.write_string(
+              "  for cc_k = 0; cc_k < \{chunk}; cc_k = cc_k + 1 { \{y_buf}[\{y_off + dst_axis_off * inner} + cc_k] = \{s_buf}[\{s_off} + cc_k] }\n",
+            )
+          } else {
+            body.write_string(
+              "  for cc_o = 0; cc_o < \{outer}; cc_o = cc_o + 1 { for cc_k = 0; cc_k < \{chunk}; cc_k = cc_k + 1 { \{y_buf}[\{y_off} + (cc_o * \{total_axis} + \{dst_axis_off}) * \{inner} + cc_k] = \{s_buf}[\{s_off} + cc_o * \{chunk} + cc_k] } }\n",
+            )
+          }
+          dst_axis_off = dst_axis_off + ts[ax]
+        }
+      }
+      @nn_ir.ReduceMean(axes~, ..) => {
+        let (x_buf, x_off) = resolve_f32_loc(ins[0])
+        let (y_buf, y_off) = resolve_f32_loc(out_n)
+        let sx = shapes.get(ins[0]).unwrap()
+        let rank = sx.length()
+        let ax_opt : Array[Int32]? = if ins.length() >= 2 && ins[1] != "" {
+          let b = graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
+              e => raise TensorErr("\{e}")
+            }
+          Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+        } else {
+          axes
+        }
+        let is_red = Array::make(rank, false)
+        match ax_opt {
+          Some(ax_arr) =>
+            for k = 0; k < ax_arr.length(); k = k + 1 {
+              let norm = if ax_arr[k] < 0 {
+                ax_arr[k] + rank
+              } else {
+                ax_arr[k]
+              }
+              is_red[norm] = true
+            }
+          None =>
+            for k = 0; k < rank; k = k + 1 {
+              is_red[k] = true
+            }
+        }
+        let mut red_count = 1
+        for d = 0; d < rank; d = d + 1 {
+          if is_red[d] {
+            red_count = red_count * sx[d]
+          }
+        }
+        let in_strides = @tensor.compute_strides(sx)
+        // 计算保留轴的输出步长
+        let keep_axes : Array[Int32] = []
+        let red_axes : Array[Int32] = []
+        for d = 0; d < rank; d = d + 1 {
+          if is_red[d] {
+            red_axes.push(d)
+          } else {
+            keep_axes.push(d)
+          }
+        }
+        let keep_dims = Array::makei(keep_axes.length(), fn(k) {
+          sx[keep_axes[k]]
+        })
+        let keep_strides = @tensor.compute_strides(keep_dims)
+        for k = 0; k < keep_axes.length(); k = k + 1 {
+          let d = keep_axes[k]
+          body.write_string(
+            "  for rk_\{d} = 0; rk_\{d} < \{sx[d]}; rk_\{d} = rk_\{d} + 1 {\n",
+          )
+        }
+        body.write_string("    let mut r_sum = 0.0\n")
+        for k = 0; k < red_axes.length(); k = k + 1 {
+          let d = red_axes[k]
+          body.write_string(
+            "    for rr_\{d} = 0; rr_\{d} < \{sx[d]}; rr_\{d} = rr_\{d} + 1 {\n",
+          )
+        }
+        let src_expr = StringBuilder()
+        src_expr.write_string("\{x_off}")
+        for d = 0; d < rank; d = d + 1 {
+          if is_red[d] {
+            src_expr.write_string(" + rr_\{d} * \{in_strides[d]}")
+          } else {
+            src_expr.write_string(" + rk_\{d} * \{in_strides[d]}")
+          }
+        }
+        body.write_string(
+          "      r_sum = r_sum + \{x_buf}[\{src_expr.to_string()}].to_double()\n",
+        )
+        for _k = 0; _k < red_axes.length(); _k = _k + 1 {
+          body.write_string("    }\n")
+        }
+        let dst_expr = StringBuilder()
+        dst_expr.write_string("\{y_off}")
+        for k = 0; k < keep_axes.length(); k = k + 1 {
+          let d = keep_axes[k]
+          dst_expr.write_string(" + rk_\{d} * \{keep_strides[k]}")
+        }
+        let inv_red = 1.0 / red_count.to_double()
+        body.write_string(
+          "    \{y_buf}[\{dst_expr.to_string()}] = Float::from_double(r_sum * \{inv_red})\n",
+        )
+        for _k = 0; _k < keep_axes.length(); _k = _k + 1 {
+          body.write_string("  }\n")
+        }
+      }
       other =>
         raise UnsupportedOp("arena emit unsupported op '\{other.name()}'")
     }
@@ -1268,6 +1807,18 @@ fn emit_arena_model(
     src.write_string("    }\n  }\n}\n\n")
   }
 
+  if need_reflect {
+    src.write_string("///|\n")
+    src.write_string("/// 零分配 `reflect` 填充镜像坐标映射。\n")
+    src.write_string("fn reflect_idx(idx : Int32, dim : Int32) -> Int32 {\n")
+    src.write_string("  if dim <= 1 { return 0 }\n")
+    src.write_string("  let mut cur = idx\n")
+    src.write_string("  while cur < 0 || cur >= dim {\n")
+    src.write_string("    if cur < 0 { cur = -cur }\n")
+    src.write_string("    if cur >= dim { cur = 2 * dim - 2 - cur }\n")
+    src.write_string("  }\n  cur\n}\n\n")
+  }
+
   // 结构体定义
   src.write_string("///|\n")
   src.write_string(
@@ -1301,16 +1852,33 @@ fn emit_arena_model(
   src.write_string("}\n\n")
 
   // 元信息查询方法
-  src.write_string("///|\n")
-  src.write_string("/// 返回模型静态输入 Float32 元素总数。\n")
-  src.write_string(
-    "pub fn \{sname}::input_len() -> Int32 {\n  \{in_len}\n}\n\n",
-  )
-  src.write_string("///|\n")
-  src.write_string("/// 返回模型静态输出 Float32 元素总数。\n")
-  src.write_string(
-    "pub fn \{sname}::output_len() -> Int32 {\n  \{out_len}\n}\n\n",
-  )
+  if single_io {
+    src.write_string("///|\n")
+    src.write_string("/// 返回模型静态输入 Float32 元素总数。\n")
+    src.write_string(
+      "pub fn \{sname}::input_len() -> Int32 {\n  \{in_lens[0]}\n}\n\n",
+    )
+    src.write_string("///|\n")
+    src.write_string("/// 返回模型静态输出 Float32 元素总数。\n")
+    src.write_string(
+      "pub fn \{sname}::output_len() -> Int32 {\n  \{out_lens[0]}\n}\n\n",
+    )
+  } else {
+    src.write_string("///|\n")
+    src.write_string(
+      "/// 返回模型各静态输入的 Float32 元素数列表。\n",
+    )
+    src.write_string(
+      "pub fn \{sname}::input_lens() -> Array[Int32] {\n  \{fmt_int_array(in_lens)}\n}\n\n",
+    )
+    src.write_string("///|\n")
+    src.write_string(
+      "/// 返回模型各静态输出的 Float32 元素数列表。\n",
+    )
+    src.write_string(
+      "pub fn \{sname}::output_lens() -> Array[Int32] {\n  \{fmt_int_array(out_lens)}\n}\n\n",
+    )
+  }
   src.write_string("///|\n")
   src.write_string(
     "/// 返回静态激活 Arena 与卷积共享工作区总内存占用（字节）。\n",
@@ -1414,30 +1982,88 @@ fn emit_arena_model(
   }
 
   // forward_into（真正 0 堆分配热路径）
-  let (final_buf, final_off) = resolve_f32_loc(out_name)
-  src.write_string("///|\n")
-  src.write_string(
-    "/// 零堆分配前向推理入口：将输入 `input[\{in_len}]` 推理结果直接写入调用方缓冲 `output[\{out_len}]`。\n",
-  )
-  src.write_string(
-    "pub fn \{sname}::forward_into(\n  self : \{sname},\n  input : FixedArray[Float],\n  output : FixedArray[Float],\n) -> Unit {\n",
-  )
-  src.write_string(body.to_string())
-  src.write_string("  for k_i = 0; k_i < \{out_len}; k_i = k_i + 1 {\n")
-  src.write_string("    output[k_i] = \{final_buf}[\{final_off} + k_i]\n")
-  src.write_string("  }\n}\n\n")
+  if single_io {
+    let (final_buf, final_off) = resolve_f32_loc(out_names[0])
+    src.write_string("///|\n")
+    src.write_string(
+      "/// 零堆分配前向推理入口：将输入 `input[\{in_lens[0]}]` 推理结果直接写入调用方缓冲 `output[\{out_lens[0]}]`。\n",
+    )
+    src.write_string(
+      "pub fn \{sname}::forward_into(\n  self : \{sname},\n  input : FixedArray[Float],\n  output : FixedArray[Float],\n) -> Unit {\n",
+    )
+    src.write_string(body.to_string())
+    src.write_string("  for k_i = 0; k_i < \{out_lens[0]}; k_i = k_i + 1 {\n")
+    src.write_string("    output[k_i] = \{final_buf}[\{final_off} + k_i]\n")
+    src.write_string("  }\n}\n\n")
 
-  // forward_f32 便捷入口
-  src.write_string("///|\n")
-  src.write_string(
-    "/// 便捷前向推理入口：返回新分配的 `FixedArray[Float]` 输出结果。\n",
-  )
-  src.write_string(
-    "pub fn \{sname}::forward_f32(\n  self : \{sname},\n  input : FixedArray[Float],\n) -> FixedArray[Float] {\n",
-  )
-  src.write_string("  let out = FixedArray::make(\{out_len}, (0.0 : Float))\n")
-  src.write_string("  self.forward_into(input, out)\n")
-  src.write_string("  out\n}\n")
+    // forward_f32 便捷入口
+    src.write_string("///|\n")
+    src.write_string(
+      "/// 便捷前向推理入口：返回新分配的 `FixedArray[Float]` 输出结果。\n",
+    )
+    src.write_string(
+      "pub fn \{sname}::forward_f32(\n  self : \{sname},\n  input : FixedArray[Float],\n) -> FixedArray[Float] {\n",
+    )
+    src.write_string(
+      "  let out = FixedArray::make(\{out_lens[0]}, (0.0 : Float))\n",
+    )
+    src.write_string("  self.forward_into(input, out)\n")
+    src.write_string("  out\n}\n")
+  } else {
+    src.write_string("///|\n")
+    src.write_string(
+      "/// 零堆分配多输入多输出前向推理入口：将结果直接写入调用方预分配的输出缓冲。\n",
+    )
+    src.write_string("pub fn \{sname}::forward_into(\n  self : \{sname},\n")
+    for k = 0; k < in_names.length(); k = k + 1 {
+      src.write_string("  in_\{k} : FixedArray[Float],\n")
+    }
+    for k = 0; k < out_names.length(); k = k + 1 {
+      src.write_string("  out_\{k} : FixedArray[Float],\n")
+    }
+    src.write_string(") -> Unit {\n")
+    src.write_string(body.to_string())
+    for k = 0; k < out_names.length(); k = k + 1 {
+      let (fb, fo) = resolve_f32_loc(out_names[k])
+      src.write_string(
+        "  for k_i = 0; k_i < \{out_lens[k]}; k_i = k_i + 1 { out_\{k}[k_i] = \{fb}[\{fo} + k_i] }\n",
+      )
+    }
+    src.write_string("}\n\n")
+
+    src.write_string("///|\n")
+    src.write_string(
+      "/// 便捷多输入多输出前向推理入口：返回各输出的 `FixedArray[Float]` 数组。\n",
+    )
+    src.write_string("pub fn \{sname}::forward_f32(\n  self : \{sname},\n")
+    for k = 0; k < in_names.length(); k = k + 1 {
+      src.write_string("  in_\{k} : FixedArray[Float],\n")
+    }
+    src.write_string(") -> Array[FixedArray[Float]] {\n")
+    for k = 0; k < out_names.length(); k = k + 1 {
+      src.write_string(
+        "  let out_\{k} = FixedArray::make(\{out_lens[k]}, (0.0 : Float))\n",
+      )
+    }
+    src.write_string("  self.forward_into(")
+    for k = 0; k < in_names.length(); k = k + 1 {
+      if k > 0 {
+        src.write_string(", ")
+      }
+      src.write_string("in_\{k}")
+    }
+    for k = 0; k < out_names.length(); k = k + 1 {
+      src.write_string(", out_\{k}")
+    }
+    src.write_string(")\n  [")
+    for k = 0; k < out_names.length(); k = k + 1 {
+      if k > 0 {
+        src.write_string(", ")
+      }
+      src.write_string("out_\{k}")
+    }
+    src.write_string("]\n}\n")
+  }
 
   // 生成极简 moon.pkg（零 tensor / 零 nn_ir / 零 onnx/ops / 零 onnx_proto！）
   let pkg = StringBuilder()
@@ -1464,8 +2090,8 @@ fn emit_arena_model(
     pkg_config: pkg.to_string(),
     weights_bin,
     weights: weight_entries,
-    input_shapes: [(in_name, in_shape)],
-    output_shapes: [(out_name, out_shape)],
+    input_shapes: in_shapes_arr,
+    output_shapes: out_shapes_arr,
     node_count: graph.nodes.length(),
     arena_f32_elems: f32_plan.peak_elems,
     arena_f32_naive_elems: f32_plan.naive_elems,

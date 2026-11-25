@@ -296,21 +296,23 @@ pub fn plan_static_arenas(
       _ => ()
     }
 
-    if node.outputs.length() == 0 || node.outputs[0] == "" {
-      continue
-    }
-    let out_name = node.outputs[0]
-    if is_arena_alias_op(node.op) && node.inputs.length() > 0 {
-      let in_name = node.inputs[0]
-      let root = match root_of.get(in_name) {
-        Some(r) => r
-        None => in_name
+    for k = 0; k < node.outputs.length(); k = k + 1 {
+      let out_name = node.outputs[k]
+      if out_name == "" {
+        continue
       }
-      root_of[out_name] = root
-    } else {
-      root_of[out_name] = out_name
-      birth_of[out_name] = i
-      death_of[out_name] = i
+      if is_arena_alias_op(node.op) && k == 0 && node.inputs.length() > 0 {
+        let in_name = node.inputs[0]
+        let root = match root_of.get(in_name) {
+          Some(r) => r
+          None => in_name
+        }
+        root_of[out_name] = root
+      } else {
+        root_of[out_name] = out_name
+        birth_of[out_name] = i
+        death_of[out_name] = i
+      }
     }
   }
 
@@ -349,32 +351,33 @@ pub fn plan_static_arenas(
 
   for i = 0; i < num_nodes; i = i + 1 {
     let node = graph.nodes[i]
-    if node.outputs.length() == 0 || node.outputs[0] == "" {
-      continue
-    }
-    let out_name = node.outputs[0]
-    if is_arena_alias_op(node.op) || is_external.contains(out_name) {
-      continue
-    }
-    let sh = match shapes.get(out_name) {
-      Some(s) => s
-      None => raise ShapeError("planner: missing shape for '\{out_name}'")
-    }
-    let numel = @tensor.num_elements(sh) catch {
-      e => raise ShapeError("planner: \{e}")
-    }
-    let b = birth_of.get(out_name).unwrap()
-    let d = death_of.get(out_name).unwrap()
-    let dt = match dtypes.get(out_name) {
-      Some(t) => t
-      None => @tensor.Float32
-    }
-    match dt {
-      @tensor.Float32 =>
-        f32_items.push({ name: out_name, length: numel, birth: b, death: d, })
-      @tensor.Int8 | @tensor.UInt8 =>
-        byte_items.push({ name: out_name, length: numel, birth: b, death: d, })
-      _ => ()
+    for k = 0; k < node.outputs.length(); k = k + 1 {
+      let out_name = node.outputs[k]
+      if out_name == "" ||
+        (is_arena_alias_op(node.op) && k == 0) ||
+        is_external.contains(out_name) {
+        continue
+      }
+      let sh = match shapes.get(out_name) {
+        Some(s) => s
+        None => raise ShapeError("planner: missing shape for '\{out_name}'")
+      }
+      let numel = @tensor.num_elements(sh) catch {
+        e => raise ShapeError("planner: \{e}")
+      }
+      let b = birth_of.get(out_name).unwrap()
+      let d = death_of.get(out_name).unwrap()
+      let dt = match dtypes.get(out_name) {
+        Some(t) => t
+        None => @tensor.Float32
+      }
+      match dt {
+        @tensor.Float32 =>
+          f32_items.push({ name: out_name, length: numel, birth: b, death: d, })
+        @tensor.Int8 | @tensor.UInt8 =>
+          byte_items.push({ name: out_name, length: numel, birth: b, death: d, })
+        _ => ()
+      }
     }
   }
 

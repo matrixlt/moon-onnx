@@ -12,5 +12,6 @@ description = "Native CLI tool for inspecting and running ONNX models with matri
 
 import {
   "moonbitlang/x@0.5.9",
+  "matrixlt/tensor@0.2.0",
   "matrixlt/onnx@0.2.0",
 }

@@ -7,13 +7,13 @@ fn print_usage() -> Unit {
   println("  moon-onnx inspect <model.onnx>")
   println("      Parse and display ONNX model metadata, weights, and graph")
   println(
-    "  moon-onnx run <model.onnx> <input.f32> [golden.f32] [--backend=scalar|simd]",
+    "  moon-onnx run <model.onnx> <input.f32> [golden.f32] [--input-shape=1,1,28,28] [--backend=scalar|simd]",
   )
   println(
-    "      Run MNIST [1,1,28,28] inference and optionally compare against ORT golden output",
+    "      Run single-input inference and optionally compare against ORT golden output",
   )
   println(
-    "  moon-onnx profile <model.onnx> <input.f32> [--backend=scalar|simd]",
+    "  moon-onnx profile <model.onnx> <input.f32> [--input-shape=1,1,28,28] [--backend=scalar|simd]",
   )
   println(
     "      Run inference and print per-operator execution latency breakdown",
@@ -69,10 +69,15 @@ fn handle_run(args : Array[String]) -> Unit {
     None
   }
   let backend = parse_backend_flag(args)
+  let shape_spec = match find_flag_value(args, "--input-shape=") {
+    Some(s) => s
+    None => "1,1,28,28"
+  }
+  let in_dims = parse_shape_csv(shape_spec)
 
   try {
     let session = @onnx.session_from_file(model_path, backend~)
-    let input = @onnx.load_f32_file(input_path, [1, 1, 28, 28])
+    let input = @onnx.load_f32_file(input_path, in_dims)
     let output = session.run_single(input)
     let (pred_cls, pred_val) = output.argmax_f32() catch {
       e => {
@@ -126,10 +131,15 @@ fn handle_profile(args : Array[String]) -> Unit {
   let model_path = pos[0]
   let input_path = pos[1]
   let backend = parse_backend_flag(args)
+  let shape_spec = match find_flag_value(args, "--input-shape=") {
+    Some(s) => s
+    None => "1,1,28,28"
+  }
+  let in_dims = parse_shape_csv(shape_spec)
 
   try {
     let session = @onnx.session_from_file(model_path, backend~)
-    let input = @onnx.load_f32_file(input_path, [1, 1, 28, 28])
+    let input = @onnx.load_f32_file(input_path, in_dims)
     // 先预热 1 次消除冷启动抖动
     session.run_single(input) |> ignore
     let (_, profile) = session.run_single_profiled(input)
@@ -241,9 +251,81 @@ fn handle_compile(args : Array[String]) -> Unit {
       @env.exit(1)
       return
     }
-    let in_dims = parse_shape_csv(shape_spec)
     let input_shapes : Map[String, Array[Int32]] = Map([])
-    input_shapes[m.inputs[0].name] = in_dims
+    // 支持单输入 `--input-shape=1,3,224,224` 与多输入 `--input-shape=input:1,512;state:2,1,128`
+    if shape_spec.contains(":") {
+      let mut seg_start = 0
+      for idx = 0; idx <= shape_spec.length(); idx = idx + 1 {
+        let is_end = idx == shape_spec.length() ||
+          shape_spec.code_unit_at(idx).to_int() == 59 // ';'
+        if is_end && idx > seg_start {
+          let name_sb = StringBuilder()
+          let dims_sb = StringBuilder()
+          let mut seen_colon = false
+          for k = seg_start; k < idx; k = k + 1 {
+            let cu = shape_spec.code_unit_at(k).to_int()
+            if cu == 58 && !seen_colon {
+              seen_colon = true
+            } else if !seen_colon {
+              name_sb.write_char(Int32::unsafe_to_char(cu))
+            } else {
+              dims_sb.write_char(Int32::unsafe_to_char(cu))
+            }
+          }
+          let in_n = name_sb.to_string()
+          if in_n != "" {
+            input_shapes[in_n] = parse_shape_csv(dims_sb.to_string())
+          }
+          seg_start = idx + 1
+        }
+      }
+    } else {
+      input_shapes[m.inputs[0].name] = parse_shape_csv(shape_spec)
+    }
+
+    // 解析 `--freeze-i64=name:val`（支持多个以 ';' 分隔，例如 `sr:16000`）
+    let frozen_inputs : Map[String, @tensor.Tensor] = Map([])
+    match find_flag_value(args, "--freeze-i64=") {
+      Some(spec) => {
+        let mut seg_start = 0
+        for idx = 0; idx <= spec.length(); idx = idx + 1 {
+          let is_end = idx == spec.length() ||
+            spec.code_unit_at(idx).to_int() == 59
+          if is_end && idx > seg_start {
+            let name_sb = StringBuilder()
+            let mut val : Int64 = 0
+            let mut neg = false
+            let mut seen_colon = false
+            for k = seg_start; k < idx; k = k + 1 {
+              let cu = spec.code_unit_at(k).to_int()
+              if cu == 58 && !seen_colon {
+                seen_colon = true
+              } else if !seen_colon {
+                name_sb.write_char(Int32::unsafe_to_char(cu))
+              } else if cu == 45 {
+                neg = true
+              } else if cu >= 48 && cu <= 57 {
+                val = val * (10 : Int64) + (cu - 48).to_int64()
+              }
+            }
+            let fn_name = name_sb.to_string()
+            if fn_name != "" && seen_colon {
+              let final_v = if neg { -val } else { val }
+              let t = @tensor.Tensor::from_i64([], FixedArray::make(1, final_v)) catch {
+                e => {
+                  println("Failed to freeze input '\{fn_name}': \{e}")
+                  @env.exit(1)
+                  return
+                }
+              }
+              frozen_inputs[fn_name] = t
+            }
+            seg_start = idx + 1
+          }
+        }
+      }
+      None => ()
+    }
 
     let cfg : @codegen.CodegenConfig = {
       struct_name,
@@ -252,6 +334,7 @@ fn handle_compile(args : Array[String]) -> Unit {
       target,
       mode,
       embed_weights,
+      frozen_inputs,
     }
     let art = @onnx.compile_model_to_mbt(m, input_shapes, config=cfg)
 

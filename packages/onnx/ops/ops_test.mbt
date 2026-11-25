@@ -680,3 +680,52 @@ test "LSTM matches analytical single-step reference and supports bidirectional &
   assert_eq(b_outs[1].shape(), [2, 2, 2]) // [B, num_dirs, H]
   assert_eq(b_outs[2].shape(), [2, 2, 2])
 }
+
+///|
+/// 验证 `Equal`（含标量广播与多类型支持）及 `ConstantOfShape`（`Int64` / `Float32` 填充）。
+test "Equal and ConstantOfShape match ONNX semantics" {
+  fn read_bools(t : @tensor.Tensor) -> FixedArray[Bool] {
+    let c = t.contiguous() catch { _ => abort("contiguous failed") }
+    match c.data {
+      @tensor.Bool(buf) => buf
+      _ => abort("expected Bool tensor")
+    }
+  }
+
+  let sr = @tensor.Tensor::from_i64([], FixedArray::make(1, (16000 : Int64)))
+  let sr_16k = @tensor.Tensor::from_i64(
+    [],
+    FixedArray::make(1, (16000 : Int64)),
+  )
+  let sr_8k = @tensor.Tensor::from_i64([], FixedArray::make(1, (8000 : Int64)))
+  let eq_t = @ops.equal_op(sr, sr_16k)
+  let eq_f = @ops.equal_op(sr, sr_8k)
+  assert_eq(eq_t.dtype(), @tensor.Bool)
+  assert_eq(eq_t.shape(), [])
+  assert_eq(read_bools(eq_t)[0], true)
+  assert_eq(read_bools(eq_f)[0], false)
+
+  // 广播比较：[2, 3] vs [3]
+  let a = @tensor.Tensor::from_f32_array([2, 3], [1.0, 2.0, 3.0, 1.0, 5.0, 3.0])
+  let b = @tensor.Tensor::from_f32_array([3], [1.0, 2.0, 3.0])
+  let eq_b = @ops.equal_op(a, b)
+  assert_eq(eq_b.shape(), [2, 3])
+  let bb = read_bools(eq_b)
+  assert_eq(bb[0], true)
+  assert_eq(bb[1], true)
+  assert_eq(bb[2], true)
+  assert_eq(bb[3], true)
+  assert_eq(bb[4], false)
+  assert_eq(bb[5], true)
+
+  // ConstantOfShape：构造 [2, 3] 的 Int64 常量 7 张量
+  let sh = @tensor.Tensor::from_i64([2], [2, 3])
+  let fill_i64 = @tensor.Tensor::from_i64([1], [7])
+  let c_i64 = @ops.constant_of_shape_op(sh, fill_i64)
+  assert_eq(c_i64.dtype(), @tensor.Int64)
+  assert_eq(c_i64.shape(), [2, 3])
+  let cb = c_i64.to_i64_buffer()
+  assert_eq(cb.length(), 6)
+  assert_eq(cb[0], (7 : Int64))
+  assert_eq(cb[5], (7 : Int64))
+}

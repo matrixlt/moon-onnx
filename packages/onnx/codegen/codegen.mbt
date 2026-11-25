@@ -77,6 +77,8 @@ pub(all) struct CodegenConfig {
   mode : CodegenMode
   /// 是否将权重二进制块直接内嵌为 MoonBit `Bytes` 常量段（实现单文件 `.wasm` 零外部加载）
   embed_weights : Bool
+  /// 编译期冻结的静态输入常量（例如 Silero VAD 的 `sr = 16000`），用于折叠 `Equal`/`If` 分支特化
+  frozen_inputs : Map[String, @tensor.Tensor]
 }
 
 ///|
@@ -89,6 +91,7 @@ pub fn CodegenConfig::default() -> CodegenConfig {
     target: TargetWasm,
     mode: Arena,
     embed_weights: false,
+    frozen_inputs: Map([]),
   }
 }
 
@@ -239,7 +242,7 @@ fn infer_spatial_dim(
 }
 
 ///|
-/// 对已拓扑排序的 `IrGraph` 执行编译期静态形状推导，返回所有张量名称对应的确定形状表。
+/// 对已拓扑排序的 `IrGraph` 执行编译期静态形状推导，返回所有张量名称对应的确定形状表（支持多输出节点如 `Split`）。
 pub fn infer_static_shapes(
   graph : @nn_ir.IrGraph,
   input_shapes : Map[String, Array[Int32]],
@@ -257,373 +260,17 @@ pub fn infer_static_shapes(
     }
   }
 
-  fn req_shape(name : String) -> Array[Int32] raise CodegenError {
-    match shapes.get(name) {
-      Some(s) => s
-      None => raise ShapeError("unknown shape for tensor '\{name}'")
-    }
-  }
-
   for i = 0; i < graph.nodes.length(); i = i + 1 {
     let node = graph.nodes[i]
-    let ins = node.inputs
-    let outs = node.outputs
-    if outs.length() == 0 {
+    if node.outputs.length() == 0 {
       continue
     }
-    let out_shape : Array[Int32] = match node.op {
-      @nn_ir.Add | @nn_ir.Sub | @nn_ir.Mul | @nn_ir.Div | @nn_ir.Pow => {
-        let sa = req_shape(ins[0])
-        let sb = req_shape(ins[1])
-        @tensor.broadcast_shape(sa, sb) catch {
-          e => raise ShapeError("node '\{node.name}': \{e}")
-        }
+    let out_shapes = infer_node_output_shapes(node, shapes, graph.initializers)
+    for k = 0; k < out_shapes.length() && k < node.outputs.length(); k = k + 1 {
+      if node.outputs[k] != "" {
+        shapes[node.outputs[k]] = out_shapes[k]
       }
-      @nn_ir.Sqrt
-      | @nn_ir.Exp
-      | @nn_ir.Neg
-      | @nn_ir.Relu
-      | @nn_ir.Clip(..)
-      | @nn_ir.Sigmoid
-      | @nn_ir.Tanh
-      | @nn_ir.Gelu
-      | @nn_ir.HardSwish
-      | @nn_ir.LeakyRelu(..)
-      | @nn_ir.Identity
-      | @nn_ir.Softmax(..)
-      | @nn_ir.BatchNormalization(..)
-      | @nn_ir.LayerNormalization(..)
-      | @nn_ir.Cast(..) => req_shape(ins[0]).copy()
-      @nn_ir.Constant(value~) => value.shape()
-      @nn_ir.Flatten(axis~) => {
-        let s = req_shape(ins[0])
-        let rank = s.length()
-        let ax = if axis < 0 { axis + rank } else { axis }
-        let mut d0 = 1
-        for k = 0; k < ax; k = k + 1 {
-          d0 = d0 * s[k]
-        }
-        let mut d1 = 1
-        for k = ax; k < rank; k = k + 1 {
-          d1 = d1 * s[k]
-        }
-        [d0, d1]
-      }
-      @nn_ir.Reshape(allowzero~) => {
-        let s = req_shape(ins[0])
-        let total = @tensor.num_elements(s) catch {
-          e => raise ShapeError("\{e}")
-        }
-        let target_t = match graph.initializers.get(ins[1]) {
-          Some(t) => t
-          None =>
-            raise UnsupportedGraph(
-              "Reshape '\{node.name}' requires static constant shape tensor '\{ins[1]}'",
-            )
-        }
-        let raw_dims = target_t.to_i64_buffer() catch {
-          e => raise TensorErr("\{e}")
-        }
-        let out = Array::make(raw_dims.length(), 0)
-        let mut neg_idx = -1
-        let mut known = 1
-        for k = 0; k < raw_dims.length(); k = k + 1 {
-          let d = raw_dims[k].to_int()
-          if d == -1 {
-            neg_idx = k
-          } else if d == 0 && !allowzero {
-            out[k] = s[k]
-            known = known * s[k]
-          } else {
-            out[k] = d
-            known = known * d
-          }
-        }
-        if neg_idx >= 0 {
-          out[neg_idx] = total / known
-        }
-        out
-      }
-      @nn_ir.Transpose(perm~) => {
-        let s = req_shape(ins[0])
-        let r = s.length()
-        if perm.length() == 0 {
-          Array::makei(r, fn(k) { s[r - 1 - k] })
-        } else {
-          Array::makei(r, fn(k) { s[perm[k]] })
-        }
-      }
-      @nn_ir.Squeeze(axes~) => {
-        let s = req_shape(ins[0])
-        let rank = s.length()
-        let resolved : Array[Int32]? = if ins.length() >= 2 && ins[1] != "" {
-          match graph.initializers.get(ins[1]) {
-            Some(t) => {
-              let b = t.to_i64_buffer() catch { e => raise TensorErr("\{e}") }
-              Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
-            }
-            None =>
-              raise UnsupportedGraph(
-                "Squeeze '\{node.name}' requires static axes",
-              )
-          }
-        } else {
-          axes
-        }
-        let drop = Array::make(rank, false)
-        match resolved {
-          Some(ax_arr) =>
-            for k = 0; k < ax_arr.length(); k = k + 1 {
-              let a = if ax_arr[k] < 0 { ax_arr[k] + rank } else { ax_arr[k] }
-              drop[a] = true
-            }
-          None =>
-            for k = 0; k < rank; k = k + 1 {
-              if s[k] == 1 {
-                drop[k] = true
-              }
-            }
-        }
-        let out : Array[Int32] = []
-        for k = 0; k < rank; k = k + 1 {
-          if !drop[k] {
-            out.push(s[k])
-          }
-        }
-        out
-      }
-      @nn_ir.Unsqueeze(axes~) => {
-        let s = req_shape(ins[0])
-        let resolved : Array[Int32] = if ins.length() >= 2 && ins[1] != "" {
-          match graph.initializers.get(ins[1]) {
-            Some(t) => {
-              let b = t.to_i64_buffer() catch { e => raise TensorErr("\{e}") }
-              Array::makei(b.length(), fn(k) { b[k].to_int() })
-            }
-            None =>
-              raise UnsupportedGraph(
-                "Unsqueeze '\{node.name}' requires static axes",
-              )
-          }
-        } else {
-          match axes {
-            Some(a) => a
-            None =>
-              raise UnsupportedGraph("Unsqueeze '\{node.name}' missing axes")
-          }
-        }
-        let new_rank = s.length() + resolved.length()
-        let is_new = Array::make(new_rank, false)
-        for k = 0; k < resolved.length(); k = k + 1 {
-          let a = if resolved[k] < 0 {
-            resolved[k] + new_rank
-          } else {
-            resolved[k]
-          }
-          is_new[a] = true
-        }
-        let out = Array::make(new_rank, 1)
-        let mut src_i = 0
-        for k = 0; k < new_rank; k = k + 1 {
-          if !is_new[k] {
-            out[k] = s[src_i]
-            src_i = src_i + 1
-          }
-        }
-        out
-      }
-      @nn_ir.MatMul => {
-        let sa = req_shape(ins[0])
-        let sb = req_shape(ins[1])
-        if sa.length() == 2 && sb.length() == 2 {
-          [sa[0], sb[1]]
-        } else {
-          let out = sa.copy()
-          out[out.length() - 1] = sb[sb.length() - 1]
-          out
-        }
-      }
-      @nn_ir.Gemm(trans_a~, trans_b~, ..) => {
-        let sa = req_shape(ins[0])
-        let sb = req_shape(ins[1])
-        let m = if trans_a { sa[1] } else { sa[0] }
-        let n = if trans_b { sb[0] } else { sb[1] }
-        [m, n]
-      }
-      @nn_ir.Conv(strides~, pads~, dilations~, auto_pad~, ..) => {
-        let sx = req_shape(ins[0])
-        let sw = req_shape(ins[1])
-        if sx.length() == 3 && sw.length() == 3 {
-          let s_w = if strides.length() == 1 { strides[0] } else { strides[1] }
-          let d_w = if dilations.length() == 1 {
-            dilations[0]
-          } else {
-            dilations[1]
-          }
-          let p_l = if pads.length() == 2 { pads[0] } else { pads[1] }
-          let p_r = if pads.length() == 2 { pads[1] } else { pads[3] }
-          let ol = infer_spatial_dim(
-            sx[2],
-            sw[2],
-            s_w,
-            d_w,
-            p_l,
-            p_r,
-            auto_pad,
-            false,
-          )
-          [sx[0], sw[0], ol]
-        } else {
-          let oh = infer_spatial_dim(
-            sx[2],
-            sw[2],
-            strides[0],
-            dilations[0],
-            pads[0],
-            pads[2],
-            auto_pad,
-            false,
-          )
-          let ow = infer_spatial_dim(
-            sx[3],
-            sw[3],
-            strides[1],
-            dilations[1],
-            pads[1],
-            pads[3],
-            auto_pad,
-            false,
-          )
-          [sx[0], sw[0], oh, ow]
-        }
-      }
-      @nn_ir.MaxPool(
-        kernel_shape~,
-        strides~,
-        pads~,
-        dilations~,
-        ceil_mode~,
-        auto_pad~,
-      ) => {
-        let sx = req_shape(ins[0])
-        let oh = infer_spatial_dim(
-          sx[2],
-          kernel_shape[0],
-          strides[0],
-          dilations[0],
-          pads[0],
-          pads[2],
-          auto_pad,
-          ceil_mode,
-        )
-        let ow = infer_spatial_dim(
-          sx[3],
-          kernel_shape[1],
-          strides[1],
-          dilations[1],
-          pads[1],
-          pads[3],
-          auto_pad,
-          ceil_mode,
-        )
-        [sx[0], sx[1], oh, ow]
-      }
-      @nn_ir.AveragePool(
-        kernel_shape~,
-        strides~,
-        pads~,
-        ceil_mode~,
-        auto_pad~,
-        ..
-      ) => {
-        let sx = req_shape(ins[0])
-        let oh = infer_spatial_dim(
-          sx[2],
-          kernel_shape[0],
-          strides[0],
-          1,
-          pads[0],
-          pads[2],
-          auto_pad,
-          ceil_mode,
-        )
-        let ow = infer_spatial_dim(
-          sx[3],
-          kernel_shape[1],
-          strides[1],
-          1,
-          pads[1],
-          pads[3],
-          auto_pad,
-          ceil_mode,
-        )
-        [sx[0], sx[1], oh, ow]
-      }
-      @nn_ir.GlobalAveragePool => {
-        let sx = req_shape(ins[0])
-        let out = Array::make(sx.length(), 1)
-        out[0] = sx[0]
-        out[1] = sx[1]
-        out
-      }
-      @nn_ir.Concat(axis~) => {
-        let s0 = req_shape(ins[0])
-        let ax = if axis < 0 { axis + s0.length() } else { axis }
-        let out = s0.copy()
-        let mut total_ax = s0[ax]
-        for k = 1; k < ins.length(); k = k + 1 {
-          total_ax = total_ax + req_shape(ins[k])[ax]
-        }
-        out[ax] = total_ax
-        out
-      }
-      @nn_ir.ReduceMean(axes~, keepdims~, ..)
-      | @nn_ir.ReduceSum(axes~, keepdims~, ..) => {
-        let sx = req_shape(ins[0])
-        let rank = sx.length()
-        let drop = Array::make(rank, false)
-        match axes {
-          Some(ax_arr) =>
-            for k = 0; k < ax_arr.length(); k = k + 1 {
-              let a = if ax_arr[k] < 0 { ax_arr[k] + rank } else { ax_arr[k] }
-              drop[a] = true
-            }
-          None =>
-            for k = 0; k < rank; k = k + 1 {
-              drop[k] = true
-            }
-        }
-        let out : Array[Int32] = []
-        for k = 0; k < rank; k = k + 1 {
-          if drop[k] {
-            if keepdims {
-              out.push(1)
-            }
-          } else {
-            out.push(sx[k])
-          }
-        }
-        out
-      }
-      @nn_ir.QuantizeLinear(..) | @nn_ir.DequantizeLinear(..) =>
-        req_shape(ins[0]).copy()
-      @nn_ir.QLinearMatMul => {
-        let sa = req_shape(ins[0])
-        let sb = req_shape(ins[3])
-        if sa.length() == 2 && sb.length() == 2 {
-          [sa[0], sb[1]]
-        } else {
-          let out = sa.copy()
-          out[out.length() - 1] = sb[sb.length() - 1]
-          out
-        }
-      }
-      other =>
-        raise UnsupportedOp(
-          "shape inference not yet implemented for '\{other.name()}' in AOT compiler",
-        )
     }
-    shapes[outs[0]] = out_shape
   }
   shapes
 }
@@ -644,18 +291,20 @@ fn is_aot_view_op(op : @nn_ir.Op) -> Bool {
 
 ///|
 /// 将 `IrGraph` 编译为独立、零 `Map`、零 Protobuf 的纯 MoonBit 静态推理代码与紧凑权重二进制包。
-/// 默认启用 `Arena` 模式（编译期静态内存区间复用 + 零堆分配 + 零 `Tensor` 依赖），遇到多输出或特殊算子时自动回退至 `Tensor` 模式。
+/// 默认启用 `Arena` 模式（编译期静态内存区间复用 + 零堆分配 + 零 `Tensor` 依赖），遇到特殊算子时自动回退至 `Tensor` 模式。
 pub fn compile_graph_to_mbt(
   raw_graph : @nn_ir.IrGraph,
   input_shapes : Map[String, Array[Int32]],
   config~ : CodegenConfig = CodegenConfig::default(),
 ) -> AotArtifact raise CodegenError {
-  let graph = if config.optimize {
+  let base_graph = if config.optimize {
     let (opt_g, _) = @opt.optimize_graph(raw_graph)
     opt_g
   } else {
     raw_graph
   }
+  // 执行编译期特化（冻结输入、`If` 分支内联、静态 `Shape`/元数据常量折叠、冗余 `Cast` 消除）
+  let graph = specialize_graph(base_graph, input_shapes, config.frozen_inputs)
   if graph.inputs.length() == 0 || graph.outputs.length() == 0 {
     raise UnsupportedGraph("graph must have at least 1 input and 1 output")
   }
