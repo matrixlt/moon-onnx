@@ -36,6 +36,7 @@ pub(all) enum FusedActivation {
   NoAct
   ReluAct
   ClipAct(min~ : Float, max~ : Float)
+  SiluAct
 }
 
 pub(all) struct IrGraph {
@@ -122,6 +123,7 @@ pub(all) enum Op {
   RotaryEmbedding(interleaved~ : Int32, num_heads~ : Int32, rotary_embedding_dim~ : Int32)
   GroupQueryAttention(num_heads~ : Int32, kv_num_heads~ : Int32, scale~ : Float, local_window_size~ : Int32, softcap~ : Float, do_rotary~ : Int32, rotary_interleaved~ : Int32)
   MatMulNBits(k~ : Int32, n~ : Int32, bits~ : Int32, block_size~ : Int32)
+  NonMaxSuppression(center_point_box~ : Int32)
 }
 pub fn Op::name(Self) -> String
 

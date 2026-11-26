@@ -506,6 +506,10 @@ fn lower_node(
           attrs, "nearest_mode", "round_prefer_floor",
         ),
       )
+    "NonMaxSuppression" =>
+      @nn_ir.NonMaxSuppression(
+        center_point_box=get_attr_int(attrs, "center_point_box", 0),
+      )
     "LSTM" =>
       @nn_ir.Lstm(
         hidden_size=get_attr_int_opt(attrs, "hidden_size"),

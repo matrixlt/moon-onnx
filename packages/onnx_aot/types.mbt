@@ -202,6 +202,7 @@ fn fmt_activation(act : @nn_ir.FusedActivation) -> String {
     @nn_ir.ReluAct => "@nn_ir.ReluAct"
     @nn_ir.ClipAct(min~, max~) =>
       "@nn_ir.ClipAct(min=\{fmt_float_literal(min)}, max=\{fmt_float_literal(max)})"
+    @nn_ir.SiluAct => "@nn_ir.SiluAct"
   }
 }
 

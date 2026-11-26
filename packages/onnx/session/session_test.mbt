@@ -1302,3 +1302,133 @@ test "End-to-end Q4 LLM Transformer block (MatMulNBits + RoPE + GQA KV-Cache + S
     (1.0e-5 : Float),
   )
 }
+
+///|
+/// 端到端验证 YOLOv8 典型结构（`Conv -> SiLU 融合 -> MaxPool -> Resize(nearest) -> Concat -> Split -> Conv`）
+/// 及标准 ONNX `NonMaxSuppression` 算子执行。
+test "End-to-end YOLOv8 FPN block (SiLU fusion + Resize + Split + Concat) and NonMaxSuppression" {
+  // 1. Mini YOLOv8 neck: Conv -> Sigmoid+Mul(fused to Silu) -> Split -> Concat
+  let w1 = @tensor.Tensor::from_f32(
+    [4, 2, 1, 1],
+    FixedArray::makei(8, fn(i) { Float::from_int(i - 3) * (0.2 : Float) }),
+  )
+  let scales = @tensor.Tensor::from_f32_array([4], [1.0, 1.0, 2.0, 2.0])
+  let raw_g : @nn_ir.IrGraph = {
+    name: "mini_yolov8_fpn",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: Map([("w1", w1), ("scales", scales)]),
+    nodes: [
+      {
+        name: "c0",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([1, 1]),
+          strides=[1, 1],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["x", "w1"],
+        outputs: ["c0_out"],
+      },
+      { name: "sig0", op: @nn_ir.Sigmoid, inputs: ["c0_out"], outputs: ["s0"], },
+      {
+        name: "mul0",
+        op: @nn_ir.Mul,
+        inputs: ["c0_out", "s0"],
+        outputs: ["a0"],
+      },
+      {
+        name: "pool0",
+        op: @nn_ir.MaxPool(
+          kernel_shape=[2, 2],
+          strides=[2, 2],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          ceil_mode=false,
+          auto_pad=@nn_ir.NotSet,
+        ),
+        inputs: ["a0"],
+        outputs: ["p0"],
+      },
+      {
+        name: "up0",
+        op: @nn_ir.Resize(
+          mode="nearest",
+          coordinate_transformation_mode="asymmetric",
+          nearest_mode="floor",
+        ),
+        inputs: ["p0", "", "scales"],
+        outputs: ["u0"],
+      },
+      {
+        name: "sp0",
+        op: @nn_ir.Split(axis=1, split=Some([2, 2]), num_outputs=None),
+        inputs: ["u0"],
+        outputs: ["sp_a", "sp_b"],
+      },
+      {
+        name: "cat0",
+        op: @nn_ir.Concat(axis=1),
+        inputs: ["sp_a", "sp_b", "x"],
+        outputs: ["y"],
+      },
+    ],
+  }
+  let (opt_g, stats) = @opt.optimize_graph(raw_g)
+  assert_eq(stats.folded_silu, 1)
+  let s_sc = @session.Session::from_graph(raw_g, backend=@session.Scalar)
+  let s_si = @session.Session::from_graph(opt_g, backend=@session.Simd)
+  let inp = @tensor.Tensor::from_f32(
+    [1, 2, 4, 4],
+    FixedArray::makei(32, fn(i) { Float::from_int(i - 16) * (0.15 : Float) }),
+  )
+  let o_sc = s_sc.run_single(inp)
+  let o_si = s_si.run_single(inp)
+  assert_eq(o_si.shape(), [1, 6, 4, 4])
+  assert_true(@session.max_abs_diff_f32(o_si, o_sc) <= (1.0e-5 : Float))
+
+  // 2. NonMaxSuppression 算子端到端验证
+  let nms_g : @nn_ir.IrGraph = {
+    name: "nms_post",
+    inputs: ["boxes", "scores"],
+    outputs: ["selected"],
+    initializers: Map([
+      ("max_boxes", @tensor.Tensor::from_i64([1], [5])),
+      ("iou_th", @tensor.Tensor::from_f32_array([1], [0.5])),
+      ("score_th", @tensor.Tensor::from_f32_array([1], [0.3])),
+    ]),
+    nodes: [
+      {
+        name: "nms0",
+        op: @nn_ir.NonMaxSuppression(center_point_box=1),
+        inputs: ["boxes", "scores", "max_boxes", "iou_th", "score_th"],
+        outputs: ["selected"],
+      },
+    ],
+  }
+  let nms_sess = @session.Session::from_graph(nms_g, backend=@session.Simd)
+  let boxes = @tensor.Tensor::from_f32_array([1, 3, 4], [
+    10.0, 10.0, 20.0, 20.0, 11.0, 11.0, 20.0, 20.0, 100.0, 100.0, 20.0, 20.0,
+  ])
+  let scores = @tensor.Tensor::from_f32_array([1, 2, 3], [
+    0.9, 0.85, 0.1, // class 0: box 0 kept, box 1 suppressed, box 2 below score_th
+     0.2, 0.4, 0.8, // class 1: box 2 kept, box 1 kept, box 0 below score_th
+  ])
+  let res = nms_sess.run(Map([("boxes", boxes), ("scores", scores)]))
+  let sel = res.get("selected").unwrap()
+  assert_eq(sel.shape(), [3, 3])
+  let sbuf = sel.to_i64_buffer()
+  // (0, 0, 0), (0, 1, 2), (0, 1, 1)
+  assert_eq(sbuf[0], (0 : Int64))
+  assert_eq(sbuf[1], (0 : Int64))
+  assert_eq(sbuf[2], (0 : Int64))
+  assert_eq(sbuf[3], (0 : Int64))
+  assert_eq(sbuf[4], (1 : Int64))
+  assert_eq(sbuf[5], (2 : Int64))
+  assert_eq(sbuf[6], (0 : Int64))
+  assert_eq(sbuf[7], (1 : Int64))
+  assert_eq(sbuf[8], (1 : Int64))
+}

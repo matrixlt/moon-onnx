@@ -734,6 +734,46 @@ pub fn infer_node_output_shapes(
       let pk_sh : Array[Int32] = [b, kv_num_heads, present_seq, head_dim]
       return [sq.copy(), pk_sh, pk_sh.copy()]
     }
+    @nn_ir.Resize(..) => {
+      let sx = req_shape(ins[0])
+      let rank = sx.length()
+      let out = sx.copy()
+      let mut resolved = false
+      if ins.length() >= 4 && ins[3] != "" {
+        match read_const_ints(ins[3]) {
+          Some(sz) if sz.length() == rank => {
+            for d = 0; d < rank; d = d + 1 {
+              out[d] = sz[d]
+            }
+            resolved = true
+          }
+          _ => ()
+        }
+      }
+      if !resolved && ins.length() >= 3 && ins[2] != "" {
+        match consts.get(ins[2]) {
+          Some(sc_t) if sc_t.numel() == rank => {
+            let sc_buf = sc_t.to_f32_buffer() catch {
+              e => raise @nn_ir.InvalidGraph("Resize '\{node.name}': \{e}")
+            }
+            for d = 0; d < rank; d = d + 1 {
+              let od = (sx[d].to_double() * sc_buf[d].to_double())
+                .floor()
+                .to_int()
+              out[d] = if od > 0 { od } else { 1 }
+            }
+            resolved = true
+          }
+          _ => ()
+        }
+      }
+      if !resolved {
+        raise @nn_ir.InvalidGraph(
+          "Resize '\{node.name}': static scales or sizes initializer required",
+        )
+      }
+      out
+    }
     @nn_ir.MatMulNBits(n~, ..) => {
       let sa = req_shape(ins[0])
       if sa.length() < 2 {
@@ -812,7 +852,7 @@ pub fn infer_node_output_dtypes(
   }
   let out_dt : @tensor.DType = match node.op {
     @nn_ir.Cast(to~) => to
-    @nn_ir.Shape(..) => @tensor.Int64
+    @nn_ir.Shape(..) | @nn_ir.NonMaxSuppression(..) => @tensor.Int64
     @nn_ir.MatMulInteger => @tensor.Int32
     @nn_ir.MatMulNBits(..)
     | @nn_ir.Silu

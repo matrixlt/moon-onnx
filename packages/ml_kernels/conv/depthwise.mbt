@@ -1,15 +1,7 @@
 ///|
-/// 对单个 V128 向量应用与 GEMM 共享的融合激活（ReLU / Clip）。
+/// 对单个 V128 向量应用与 GEMM 共享的融合激活（ReLU / Clip / SiLU）。
 fn apply_dw_epilogue_v128(v : V128, epilogue : @gemm.Epilogue) -> V128 {
-  match epilogue {
-    @gemm.NoEpilogue => v
-    @gemm.Relu => @simd.f32x4_pmax(@simd.f32x4_splat((0.0 : Float)), v)
-    @gemm.Clip(min~, max~) =>
-      @simd.f32x4_pmin(
-        @simd.f32x4_splat(max),
-        @simd.f32x4_pmax(@simd.f32x4_splat(min), v),
-      )
-  }
+  @gemm.apply_epilogue_v128(v, epilogue)
 }
 
 ///|

@@ -46,6 +46,8 @@ pub(all) enum FusedActivation {
   ReluAct
   /// 区间裁剪激活：`min(max, max(min, x))`（例如 MobileNetV2 的 ReLU6 即 `[0.0, 6.0]`）
   ClipAct(min~ : Float, max~ : Float)
+  /// SiLU / Swish 激活：`x * sigmoid(x)`（YOLOv8 卷积-激活核心融合）
+  SiluAct
 }
 
 ///|
@@ -202,6 +204,8 @@ pub(all) enum Op {
   )
   /// 4-bit / N-bit 分块量化矩阵乘法 `com.microsoft::MatMulNBits`
   MatMulNBits(k~ : Int32, n~ : Int32, bits~ : Int32, block_size~ : Int32)
+  /// 非极大值抑制 `NonMaxSuppression`（目标检测后处理标准算子，输出 `[num_selected, 3]` 的 `Int64` 索引）
+  NonMaxSuppression(center_point_box~ : Int32)
 }
 
 ///|
@@ -238,6 +242,7 @@ pub fn Op::name(self : Op) -> String {
         NoAct => "Conv"
         ReluAct => "Conv+Relu"
         ClipAct(..) => "Conv+Clip"
+        SiluAct => "Conv+Silu"
       }
     MaxPool(..) => "MaxPool"
     AveragePool(..) => "AveragePool"
@@ -280,6 +285,7 @@ pub fn Op::name(self : Op) -> String {
     RotaryEmbedding(..) => "RotaryEmbedding"
     GroupQueryAttention(..) => "GroupQueryAttention"
     MatMulNBits(..) => "MatMulNBits"
+    NonMaxSuppression(..) => "NonMaxSuppression"
   }
 }
 

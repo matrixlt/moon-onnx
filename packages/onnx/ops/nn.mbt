@@ -61,6 +61,7 @@ fn to_gemm_epilogue(act : @nn_ir.FusedActivation) -> @gemm.Epilogue {
     @nn_ir.NoAct => @gemm.NoEpilogue
     @nn_ir.ReluAct => @gemm.Relu
     @nn_ir.ClipAct(min~, max~) => @gemm.Clip(min~, max~)
+    @nn_ir.SiluAct => @gemm.Silu
   }
 }
 
@@ -496,6 +497,7 @@ pub fn conv2d_f32(
         let lo = if v > min { v } else { min }
         out_buf[i] = if lo < max { lo } else { max }
       }
+    @nn_ir.SiluAct => @nn.silu_f32(out_buf, 0, out_buf, 0, out_buf.length())
   }
 
   @tensor.Tensor::from_f32([n_batch, c_out, out_h, out_w], out_buf)

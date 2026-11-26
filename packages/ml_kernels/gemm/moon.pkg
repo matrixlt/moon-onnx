@@ -1,5 +1,7 @@
 import {
+  "moonbitlang/core/math",
   "moonbitlang/core/simd",
+  "matrixlt/ml_kernels/vecmath",
 }
 
 options(

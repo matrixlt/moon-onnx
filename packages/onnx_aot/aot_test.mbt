@@ -916,3 +916,69 @@ test "onnx_aot Arena mode compiles Q4 MatMulNBits + RMSNorm + SkipRMSNorm + RoPE
   assert_true(art.pkg_config.contains("matrixlt/ml_kernels/quant"))
   assert_true(!art.pkg_config.contains("matrixlt/tensor"))
 }
+
+///|
+/// 验证 `onnx_aot` Arena 模式支持 YOLOv8 FPN 算子链（`Conv -> SiLU -> Resize(nearest) -> Concat`），
+/// 发射零分配 `@nn.silu_f32` 与 `@nn.resize_2d_f32` 且不依赖动态 `matrixlt/tensor`。
+test "onnx_aot Arena mode compiles YOLOv8 Conv + SiLU + Resize + Concat" {
+  let w = @tensor.Tensor::from_f32(
+    [4, 2, 1, 1],
+    FixedArray::make(8, (0.25 : Float)),
+  )
+  let scales = @tensor.Tensor::from_f32_array([4], [1.0, 1.0, 2.0, 2.0])
+  let g : @nn_ir.IrGraph = {
+    name: "mini_yolo_aot",
+    inputs: ["x"],
+    outputs: ["out"],
+    initializers: Map([("w", w), ("scales", scales)]),
+    nodes: [
+      {
+        name: "c0",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([1, 1]),
+          strides=[2, 2],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["x", "w"],
+        outputs: ["c0_out"],
+      },
+      { name: "sig0", op: @nn_ir.Sigmoid, inputs: ["c0_out"], outputs: ["s0"], },
+      {
+        name: "mul0",
+        op: @nn_ir.Mul,
+        inputs: ["c0_out", "s0"],
+        outputs: ["a0"],
+      },
+      {
+        name: "up0",
+        op: @nn_ir.Resize(
+          mode="nearest",
+          coordinate_transformation_mode="asymmetric",
+          nearest_mode="floor",
+        ),
+        inputs: ["a0", "", "scales"],
+        outputs: ["u0"],
+      },
+      {
+        name: "cat0",
+        op: @nn_ir.Concat(axis=1),
+        inputs: ["x", "u0"],
+        outputs: ["out"],
+      },
+    ],
+  }
+  let art = @onnx_aot.compile_graph_to_mbt(g, Map([("x", [1, 2, 8, 8])]), config={
+    ..@onnx_aot.CodegenConfig::default(),
+    struct_name: "MiniYoloFpn",
+    target: @onnx_aot.TargetWasm,
+  })
+  assert_eq(art.mode_used, @onnx_aot.Arena)
+  assert_true(art.mbt_source.contains("@gemm.Silu"))
+  assert_true(art.mbt_source.contains("@nn.resize_2d_f32("))
+  assert_true(art.pkg_config.contains("matrixlt/ml_kernels/nn"))
+  assert_true(!art.pkg_config.contains("matrixlt/tensor"))
+}

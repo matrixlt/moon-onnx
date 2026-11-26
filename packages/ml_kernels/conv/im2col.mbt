@@ -87,7 +87,8 @@ pub fn im2col_2d_nhwc_f32(
   let out_spatial = out_h * out_w
   let k_cols = channels * kh * kw
 
-  // 快速路径 1：1x1 点卷积（stride=1, pad=0），直接执行 NCHW -> NHWC 紧凑转置
+  // 快速路径 1：1x1 点卷积（stride=1, pad=0），使用 16×16 缓存分块执行 NCHW -> NHWC 转置，
+  // 消除高分辨率特征图（如 YOLOv8 80×80 / MobileNetV2 56×56）跨通道访问引起的 L1 Cache 抖动
   if kh == 1 &&
     kw == 1 &&
     stride_h == 1 &&
@@ -96,11 +97,22 @@ pub fn im2col_2d_nhwc_f32(
     pad_left == 0 &&
     out_h == in_h &&
     out_w == in_w {
-    for s = 0; s < out_spatial; s = s + 1 {
-      let dst_row = s * channels
-      for c = 0; c < channels; c = c + 1 {
-        col_t[dst_row + c] = input[in_base + c * in_hw + s]
+    let blk = 16
+    let mut c0 = 0
+    while c0 < channels {
+      let c_end = if c0 + blk < channels { c0 + blk } else { channels }
+      let mut s0 = 0
+      while s0 < out_spatial {
+        let s_end = if s0 + blk < out_spatial { s0 + blk } else { out_spatial }
+        for c = c0; c < c_end; c = c + 1 {
+          let src_ch = in_base + c * in_hw
+          for s = s0; s < s_end; s = s + 1 {
+            col_t[s * channels + c] = input[src_ch + s]
+          }
+        }
+        s0 = s0 + blk
       }
+      c0 = c0 + blk
     }
     return
   }

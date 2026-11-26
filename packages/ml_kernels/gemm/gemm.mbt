@@ -452,11 +452,13 @@ pub(all) enum Epilogue {
   Relu
   /// 融合区间裁剪（`min(max, max(min, acc))`，典型如 MobileNetV2 ReLU6 `[0.0, 6.0]`）
   Clip(min~ : Float, max~ : Float)
+  /// 融合 SiLU / Swish（`x * sigmoid(x)`，在 V128 寄存器内直接调用 4-wide 快速 `sigmoid_f32x4`，消除 YOLOv8 独立 SiLU 访存与 libm 开销）
+  Silu
 }
 
 ///|
 /// 对单个 V128 累加器应用融合激活（无激活时零开销透传）。
-fn apply_epilogue_v128(v : V128, epilogue : Epilogue) -> V128 {
+pub fn apply_epilogue_v128(v : V128, epilogue : Epilogue) -> V128 {
   match epilogue {
     NoEpilogue => v
     Relu => @simd.f32x4_pmax(@simd.f32x4_splat((0.0 : Float)), v)
@@ -465,6 +467,7 @@ fn apply_epilogue_v128(v : V128, epilogue : Epilogue) -> V128 {
         @simd.f32x4_splat(max),
         @simd.f32x4_pmax(@simd.f32x4_splat(min), v),
       )
+    Silu => @simd.f32x4_mul(v, @vecmath.sigmoid_f32x4(v))
   }
 }
 
@@ -481,6 +484,10 @@ pub fn apply_epilogue_scalar(x : Float, epilogue : Epilogue) -> Float {
       } else {
         max
       }
+    }
+    Silu => {
+      let vd = x.to_double()
+      Float::from_double(vd / (1.0 + @math.exp(-vd)))
     }
   }
 }

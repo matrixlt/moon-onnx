@@ -125,6 +125,7 @@ fn fmt_gemm_epilogue(act : @nn_ir.FusedActivation) -> String {
     @nn_ir.ReluAct => "@gemm.Relu"
     @nn_ir.ClipAct(min~, max~) =>
       "@gemm.Clip(min=\{fmt_float_literal(min)}, max=\{fmt_float_literal(max)})"
+    @nn_ir.SiluAct => "@gemm.Silu"
   }
 }
 
@@ -361,6 +362,21 @@ fn can_emit_arena(
           Some(sx) => sx.length() == 4
           None => false
         }
+      @nn_ir.Resize(mode~, ..) => {
+        let mode_ok = match mode {
+          "" | "nearest" | "linear" | "bilinear" => true
+          _ => false
+        }
+        match (shapes.get(ins[0]), shapes.get(node.outputs[0])) {
+          (Some(sx), Some(sy)) =>
+            mode_ok &&
+            sx.length() == 4 &&
+            sy.length() == 4 &&
+            sx[0] == sy[0] &&
+            sx[1] == sy[1]
+          _ => false
+        }
+      }
       @nn_ir.MatMul =>
         match (shapes.get(ins[0]), shapes.get(ins[1])) {
           (Some(sa), Some(sb)) =>

@@ -166,6 +166,32 @@ const allTargets = [
     kind: "minilm",
     goldenFile: "minilm_q8_s16_golden.f32",
   },
+  {
+    id: "yolov8n_wasm",
+    label: "YOLOv8n 640x640  (wasm V128 Arena)",
+    model: path.join(modelDir, "yolov8n.onnx"),
+    struct: "Yolov8n",
+    cliArgs: [
+      "--input-shape=images:1,3,640,640",
+      "--target=wasm",
+      "--mode=arena",
+    ],
+    buildTarget: "wasm",
+    kind: "yolov8",
+  },
+  {
+    id: "yolov8n_wasmgc",
+    label: "YOLOv8n 640x640  (wasm-gc Arena)",
+    model: path.join(modelDir, "yolov8n.onnx"),
+    struct: "Yolov8n",
+    cliArgs: [
+      "--input-shape=images:1,3,640,640",
+      "--target=wasm-gc",
+      "--mode=arena",
+    ],
+    buildTarget: "wasm-gc",
+    kind: "yolov8",
+  },
 ];
 
 const targets = allTargets.filter(
@@ -302,7 +328,33 @@ pub fn run_infer() -> Int32 {
 #export_name("get_output_f32")
 pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
 `
-        : `${weightLoaderSnippet}
+        : t.kind === "yolov8"
+          ? `${weightLoaderSnippet}
+let in_buf : FixedArray[Float] = FixedArray::make(1228800, (0.0 : Float))
+let out_buf : FixedArray[Float] = FixedArray::make(705600, (0.0 : Float))
+let model_ref : Ref[${t.struct}?] = { val: None }
+
+#export_name("init_model")
+pub fn init_model() -> Int32 {
+  model_ref.val = Some(${t.struct}::load(Bytes::makei(${weightBytes}, fn(i) { w_buf[i] })))
+  1
+}
+#export_name("set_input_f32")
+pub fn set_input_f32(idx : Int32, val : Float) -> Unit { in_buf[idx] = val }
+#export_name("run_infer")
+pub fn run_infer() -> Int32 {
+  match model_ref.val {
+    Some(m) => {
+      m.forward_into(in_buf, out_buf)
+      1
+    }
+    None => -1
+  }
+}
+#export_name("get_output_f32")
+pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
+`
+          : `${weightLoaderSnippet}
 let in_buf : FixedArray[Float] = FixedArray::make(150528, (0.0 : Float))
 let out_buf : FixedArray[Float] = FixedArray::make(1000, (0.0 : Float))
 let model_ref : Ref[${t.struct}?] = { val: None }
@@ -361,6 +413,10 @@ const hasMiniLm = targets.some((t) => t.kind === "minilm");
 const minilmIds16 = [101, 2054, 2003, 1996, 3007, 1997, 2605, 1029, 102, 0, 0, 0, 0, 0, 0, 0];
 const minilmMask16 = [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0];
 const minilmGold16 = hasMiniLm ? readF32(path.join(modelDir, "minilm_s16_golden.f32")) : null;
+
+const hasYolo = targets.some((t) => t.kind === "yolov8");
+const yoloIn = hasYolo ? readF32(path.join(modelDir, "yolov8n_input.f32")) : null;
+const yoloGold = hasYolo ? readF32(path.join(modelDir, "yolov8n_golden.f32")) : null;
 
 for (const t of targets) {
   const dir = path.join(workDir, t.id);
@@ -463,6 +519,30 @@ for (const t of targets) {
 
     console.log(
       `  ${t.label.padEnd(36)} | wasm=${(wasmBytes.length / 1024).toFixed(1).padStart(5)} KB (gz ${(gzBytes.length / 1024).toFixed(1).padStart(4)} KB) | arena=${arenaKB.padStart(6)} KB | inst=${instMs.toFixed(2)}ms | diff=${diff.toExponential(2)} | ${avgMs.toFixed(1)} ms (${(1000 / avgMs).toFixed(1)} emb/s)`
+    );
+  } else if (t.kind === "yolov8") {
+    for (let i = 0; i < yoloIn.length; i++) exp.set_input_f32(i, yoloIn[i]);
+    exp.run_infer();
+    const out = new Float32Array(705600);
+    for (let i = 0; i < 705600; i++) out[i] = exp.get_output_f32(i);
+    // [1, 84, 8400]: 前 4 通道为像素坐标 [0..640]，后 80 通道为类别置信度 [0..1]
+    const bboxDiff = maxAbsDiff(out.subarray(0, 4 * 8400), yoloGold.subarray(0, 4 * 8400));
+    const clsDiff = maxAbsDiff(out.subarray(4 * 8400), yoloGold.subarray(4 * 8400));
+    if (bboxDiff > 5e-3 || clsDiff > 1e-4) {
+      throw new Error(
+        `${t.id} accuracy mismatch: bboxDiff=${bboxDiff} px, clsDiff=${clsDiff}`
+      );
+    }
+
+    // 预热 + 3 次完整 640x640 YOLOv8n 目标检测推理计时
+    exp.run_infer();
+    const iters = 3;
+    const t0 = performance.now();
+    for (let r = 0; r < iters; r++) exp.run_infer();
+    const avgMs = (performance.now() - t0) / iters;
+
+    console.log(
+      `  ${t.label.padEnd(36)} | wasm=${(wasmBytes.length / 1024).toFixed(1).padStart(5)} KB (gz ${(gzBytes.length / 1024).toFixed(1).padStart(4)} KB) | arena=${arenaKB.padStart(6)} KB | inst=${instMs.toFixed(2)}ms | box=${bboxDiff.toExponential(1)}px cls=${clsDiff.toExponential(1)} | ${avgMs.toFixed(1)} ms (${(1000 / avgMs).toFixed(2)} FPS)`
     );
   } else {
     for (let i = 0; i < mnIn.length; i++) exp.set_input_f32(i, mnIn[i]);

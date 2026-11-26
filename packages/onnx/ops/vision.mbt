@@ -201,106 +201,88 @@ pub fn resize_f32(
     return @tensor.Tensor::from_f32(out_shape, out)
   }
 
-  // 4D [N, C, H, W]
-  let in_h = in_shape[2]
-  let in_w = in_shape[3]
-  let out_h = out_shape[2]
-  let out_w = out_shape[3]
-  let sc_h = axis_scales[2]
-  let sc_w = axis_scales[3]
-  let in_plane = in_h * in_w
-  let out_plane = out_h * out_w
-
-  if !is_linear {
-    let h_map = FixedArray::makei(out_h, fn(r) {
-      let orig = map_resize_coord(
-        r, in_h, out_h, sc_h, coordinate_transformation_mode,
-      )
-      map_nearest_index(orig, in_h, nearest_mode)
-    })
-    let w_map = FixedArray::makei(out_w, fn(col) {
-      let orig = map_resize_coord(
-        col, in_w, out_w, sc_w, coordinate_transformation_mode,
-      )
-      map_nearest_index(orig, in_w, nearest_mode)
-    })
-    for ch = 0; ch < nc; ch = ch + 1 {
-      let ib = ch * in_plane
-      let ob = ch * out_plane
-      for r = 0; r < out_h; r = r + 1 {
-        let src_row = ib + h_map[r] * in_w
-        let dst_row = ob + r * out_w
-        for col = 0; col < out_w; col = col + 1 {
-          out[dst_row + col] = src[src_row + w_map[col]]
-        }
-      }
-    }
-  } else {
-    // 预计算行/列双线性插值索引与权重，彻底消除内层浮点坐标映射开销
-    let y0_arr = FixedArray::make(out_h, 0)
-    let y1_arr = FixedArray::make(out_h, 0)
-    let wy_arr = FixedArray::make(out_h, 0.0)
-    let max_y = (in_h - 1).to_double()
-    for r = 0; r < out_h; r = r + 1 {
-      let mut orig = map_resize_coord(
-        r, in_h, out_h, sc_h, coordinate_transformation_mode,
-      )
-      if orig < 0.0 {
-        orig = 0.0
-      } else if orig > max_y {
-        orig = max_y
-      }
-      let y0 = orig.floor().to_int()
-      let y1 = if y0 + 1 < in_h { y0 + 1 } else { in_h - 1 }
-      y0_arr[r] = y0
-      y1_arr[r] = y1
-      wy_arr[r] = orig - y0.to_double()
-    }
-
-    let x0_arr = FixedArray::make(out_w, 0)
-    let x1_arr = FixedArray::make(out_w, 0)
-    let wx_arr = FixedArray::make(out_w, 0.0)
-    let max_x = (in_w - 1).to_double()
-    for col = 0; col < out_w; col = col + 1 {
-      let mut orig = map_resize_coord(
-        col, in_w, out_w, sc_w, coordinate_transformation_mode,
-      )
-      if orig < 0.0 {
-        orig = 0.0
-      } else if orig > max_x {
-        orig = max_x
-      }
-      let x0 = orig.floor().to_int()
-      let x1 = if x0 + 1 < in_w { x0 + 1 } else { in_w - 1 }
-      x0_arr[col] = x0
-      x1_arr[col] = x1
-      wx_arr[col] = orig - x0.to_double()
-    }
-
-    for ch = 0; ch < nc; ch = ch + 1 {
-      let ib = ch * in_plane
-      let ob = ch * out_plane
-      for r = 0; r < out_h; r = r + 1 {
-        let row0 = ib + y0_arr[r] * in_w
-        let row1 = ib + y1_arr[r] * in_w
-        let wy = wy_arr[r]
-        let wy0 = 1.0 - wy
-        let dst_row = ob + r * out_w
-        for col = 0; col < out_w; col = col + 1 {
-          let x0 = x0_arr[col]
-          let x1 = x1_arr[col]
-          let wx = wx_arr[col]
-          let wx0 = 1.0 - wx
-          let v00 = src[row0 + x0].to_double()
-          let v01 = src[row0 + x1].to_double()
-          let v10 = src[row1 + x0].to_double()
-          let v11 = src[row1 + x1].to_double()
-          let top = v00 * wx0 + v01 * wx
-          let bot = v10 * wx0 + v11 * wx
-          out[dst_row + col] = Float::from_double(top * wy0 + bot * wy)
-        }
-      }
-    }
-  }
+  // 4D [N, C, H, W]：复用 ml_kernels/nn 零分配共享内核
+  @nn.resize_2d_f32(
+    src,
+    0,
+    out,
+    0,
+    n,
+    c,
+    in_shape[2],
+    in_shape[3],
+    out_shape[2],
+    out_shape[3],
+    is_linear,
+    coordinate_transformation_mode,
+    nearest_mode,
+    scale_h=axis_scales[2],
+    scale_w=axis_scales[3],
+  )
   @tensor.Tensor::from_f32(out_shape, out)
+}
+
+///|
+/// ONNX `NonMaxSuppression` 算子（Opset 10~19）：
+/// - `boxes`: `[num_batches, spatial_dimension, 4]`（Float32）
+/// - `scores`: `[num_batches, num_classes, spatial_dimension]`（Float32）
+/// - `max_output_boxes_per_class`: 可选标量 Int64（默认 0，按 ONNX 规范表示不输出任何框）
+/// - `iou_threshold`: 可选标量 Float32（默认 0.0）
+/// - `score_threshold`: 可选标量 Float32（未提供时不按分数过滤）
+/// 返回 `Int64` 张量，形状 `[num_selected_indices, 3]`，每行为 `[batch_index, class_index, box_index]`。
+pub fn nms_op(
+  boxes : @tensor.Tensor,
+  scores : @tensor.Tensor,
+  max_output_boxes_per_class : @tensor.Tensor?,
+  iou_threshold : @tensor.Tensor?,
+  score_threshold : @tensor.Tensor?,
+  center_point_box~ : Int32 = 0,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let b_sh = boxes.shape()
+  let s_sh = scores.shape()
+  if b_sh.length() != 3 || b_sh[2] != 4 {
+    raise @tensor.InvalidShape(
+      "NonMaxSuppression: boxes must have shape [B, N, 4], got rank=\{b_sh.length()}",
+    )
+  }
+  if s_sh.length() != 3 || s_sh[0] != b_sh[0] || s_sh[2] != b_sh[1] {
+    raise @tensor.ShapeMismatch(
+      "NonMaxSuppression: scores shape incompatible with boxes (rank=\{s_sh.length()})",
+    )
+  }
+  let max_boxes = match max_output_boxes_per_class {
+    Some(t) if t.numel() > 0 => t.to_i64_buffer()[0].to_int()
+    _ => 0
+  }
+  let iou_th : Float = match iou_threshold {
+    Some(t) if t.numel() > 0 => t.to_f32_buffer()[0]
+    _ => (0.0 : Float)
+  }
+  let (has_score_th, score_th) : (Bool, Float) = match score_threshold {
+    Some(t) if t.numel() > 0 => (true, t.to_f32_buffer()[0])
+    _ => (false, (0.0 : Float))
+  }
+  let b_buf = boxes.to_f32_buffer()
+  let s_buf = scores.to_f32_buffer()
+  let sel = @nn.nms_f32(
+    b_buf,
+    s_buf,
+    b_sh[0],
+    s_sh[1],
+    b_sh[1],
+    max_boxes,
+    iou_th,
+    score_th,
+    has_score_th,
+    center_point_box,
+  )
+  let count = sel.length()
+  let out = FixedArray::make(count * 3, (0 : Int64))
+  for i = 0; i < count; i = i + 1 {
+    let (bi, ci, idx) = sel[i]
+    out[i * 3] = bi.to_int64()
+    out[i * 3 + 1] = ci.to_int64()
+    out[i * 3 + 2] = idx.to_int64()
+  }
+  @tensor.Tensor::from_i64([count, 3], out)
 }

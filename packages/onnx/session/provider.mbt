@@ -703,6 +703,21 @@ fn eval_cpu_node_single(
           pool=out_pool,
         )
       }
+      @nn_ir.NonMaxSuppression(center_point_box~) => {
+        let boxes = ctx.require_tensor(n, ins, 0)
+        let scores = ctx.require_tensor(n, ins, 1)
+        let max_boxes = ctx.optional_tensor(n, ins, 2)
+        let iou_th = ctx.optional_tensor(n, ins, 3)
+        let score_th = ctx.optional_tensor(n, ins, 4)
+        @ops.nms_op(
+          boxes,
+          scores,
+          max_boxes,
+          iou_th,
+          score_th,
+          center_point_box~,
+        )
+      }
       @nn_ir.Equal => {
         let a = ctx.require_tensor(n, ins, 0)
         let b = ctx.require_tensor(n, ins, 1)

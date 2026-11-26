@@ -177,6 +177,16 @@ fn ArenaEmitter::emit_nn_op(
         "  @nn.gap_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{sx[0] * sx[1]}, \{spatial})\n",
       )
     }
+    @nn_ir.Resize(mode~, coordinate_transformation_mode~, nearest_mode~) => {
+      self.need_nn = true
+      let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
+      let (y_buf, y_off) = self.resolve_f32_loc(out_n)
+      let sx = self.shapes.get(ins[0]).unwrap()
+      let is_linear = mode == "linear" || mode == "bilinear"
+      self.body.write_string(
+        "  @nn.resize_2d_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{sx[0]}, \{sx[1]}, \{sx[2]}, \{sx[3]}, \{out_sh[2]}, \{out_sh[3]}, \{is_linear}, \"\{coordinate_transformation_mode}\", \"\{nearest_mode}\")\n",
+      )
+    }
     @nn_ir.MatMul => {
       self.need_gemm = true
       let (a_buf, a_off) = self.resolve_f32_loc(ins[0])

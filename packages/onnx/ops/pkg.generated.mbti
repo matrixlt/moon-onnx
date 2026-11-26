@@ -89,6 +89,8 @@ pub fn mul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @tensor
 
 pub fn neg_f32(@tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn nms_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, center_point_box? : Int32) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn not_op(@tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn pack_conv2d_weight_f32(@tensor.Tensor, Int32) -> PackedConvWeight raise @tensor.TensorError

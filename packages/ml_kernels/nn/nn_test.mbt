@@ -135,3 +135,68 @@ test "ml_kernels/nn LLM kernels (SiLU, RMSNorm, SkipRMSNorm, RoPE, GQA)" {
   assert_true((pk[2] - (0.0 : Float)).abs() < (1.0e-6 : Float))
   assert_true((pv[3] - (40.0 : Float)).abs() < (1.0e-6 : Float))
 }
+
+///|
+/// 验证 `ml_kernels/nn` 视觉检测内核 `resize_2d_f32`（nearest/bilinear）与 `nms_f32`（角点/中心框模式）。
+test "ml_kernels/nn resize_2d_f32 and nms_f32 kernels" {
+  // 1. 2x2 -> 4x4 nearest (YOLOv8 asymmetric + floor 模式)
+  let x : FixedArray[Float] = [1.0, 2.0, 3.0, 4.0]
+  let y_near = FixedArray::make(16, (0.0 : Float))
+  @nn.resize_2d_f32(
+    x, 0, y_near, 0, 1, 1, 2, 2, 4, 4, false, "asymmetric", "floor",
+  )
+  assert_eq(y_near[0], (1.0 : Float))
+  assert_eq(y_near[1], (1.0 : Float))
+  assert_eq(y_near[2], (2.0 : Float))
+  assert_eq(y_near[15], (4.0 : Float))
+
+  // 2. 2x2 -> 3x3 bilinear (align_corners)
+  let y_lin = FixedArray::make(9, (0.0 : Float))
+  @nn.resize_2d_f32(
+    x, 0, y_lin, 0, 1, 1, 2, 2, 3, 3, true, "align_corners", "floor",
+  )
+  assert_true((y_lin[0] - (1.0 : Float)).abs() < (1.0e-5 : Float))
+  assert_true((y_lin[1] - (1.5 : Float)).abs() < (1.0e-5 : Float))
+  assert_true((y_lin[4] - (2.5 : Float)).abs() < (1.0e-5 : Float))
+  assert_true((y_lin[8] - (4.0 : Float)).abs() < (1.0e-5 : Float))
+
+  // 3. NMS (corner mode: box0=[0,0,10,10] score=0.9, box1=[1,1,11,11] score=0.8 (IoU>0.5), box2=[50,50,60,60] score=0.7)
+  let boxes : FixedArray[Float] = [
+    0.0, 0.0, 10.0, 10.0, 1.0, 1.0, 11.0, 11.0, 50.0, 50.0, 60.0, 60.0,
+  ]
+  let scores : FixedArray[Float] = [0.9, 0.8, 0.7]
+  let sel = @nn.nms_f32(
+    boxes,
+    scores,
+    1,
+    1,
+    3,
+    10,
+    (0.5 : Float),
+    (0.5 : Float),
+    true,
+    0,
+  )
+  assert_eq(sel.length(), 2)
+  assert_eq(sel[0], (0, 0, 0))
+  assert_eq(sel[1], (0, 0, 2))
+
+  // 4. NMS (center_point_box=1: [cx, cy, w, h])
+  let cboxes : FixedArray[Float] = [
+    5.0, 5.0, 10.0, 10.0, 6.0, 6.0, 10.0, 10.0, 55.0, 55.0, 10.0, 10.0,
+  ]
+  let csel = @nn.nms_f32(
+    cboxes,
+    scores,
+    1,
+    1,
+    3,
+    10,
+    (0.5 : Float),
+    (0.75 : Float),
+    true,
+    1,
+  )
+  assert_eq(csel.length(), 1)
+  assert_eq(csel[0], (0, 0, 0))
+}

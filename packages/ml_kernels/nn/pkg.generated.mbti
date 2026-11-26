@@ -22,7 +22,11 @@ pub fn layernorm_f32(FixedArray[Float], Int32, FixedArray[Float], FixedArray[Flo
 
 pub fn maxpool2d_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32) -> Unit
 
+pub fn nms_f32(FixedArray[Float], FixedArray[Float], Int32, Int32, Int32, Int32, Float, Float, Bool, Int32) -> Array[(Int32, Int32, Int32)]
+
 pub fn reflect_idx(Int32, Int32) -> Int32
+
+pub fn resize_2d_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Bool, String, String, scale_h? : Double, scale_w? : Double) -> Unit
 
 pub fn rmsnorm_f32(FixedArray[Float], Int32, FixedArray[Float], FixedArray[Float], Int32, Int32, Int32, Float) -> Unit
 

@@ -299,3 +299,68 @@ test "pass_fold_silu fuses Mul(x, Sigmoid(x)) into single Silu node" {
   assert_eq(opt_g.nodes[0].inputs, ["x"])
   assert_eq(opt_g.nodes[1].inputs, ["h1"])
 }
+
+///|
+/// 验证 YOLOv8 核心图优化：`Conv -> Sigmoid + Mul`（含非紧邻并行分支拓扑）全自动折叠为单个 `Conv+Silu` 节点。
+test "pass_fold_conv_activation fuses Conv + SiLU across parallel branches" {
+  let w1 = @tensor.Tensor::full_f32([4, 2, 1, 1], (0.25 : Float))
+  let w2 = @tensor.Tensor::full_f32([4, 2, 1, 1], (0.5 : Float))
+  let g : @nn_ir.IrGraph = {
+    name: "conv_silu_parallel",
+    inputs: ["x"],
+    outputs: ["y1", "y2"],
+    initializers: Map([("w1", w1), ("w2", w2)]),
+    nodes: [
+      {
+        name: "c1",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([1, 1]),
+          strides=[1, 1],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["x", "w1"],
+        outputs: ["c1_out"],
+      },
+      {
+        name: "c2",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([1, 1]),
+          strides=[1, 1],
+          pads=[0, 0, 0, 0],
+          dilations=[1, 1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["x", "w2"],
+        outputs: ["c2_out"],
+      },
+      { name: "s1", op: @nn_ir.Sigmoid, inputs: ["c1_out"], outputs: ["sig1"], },
+      {
+        name: "m1",
+        op: @nn_ir.Mul,
+        inputs: ["c1_out", "sig1"],
+        outputs: ["y1"],
+      },
+      { name: "s2", op: @nn_ir.Sigmoid, inputs: ["c2_out"], outputs: ["sig2"], },
+      {
+        name: "m2",
+        op: @nn_ir.Mul,
+        inputs: ["sig2", "c2_out"],
+        outputs: ["y2"],
+      },
+    ],
+  }
+  let (opt_g, stats) = @opt.optimize_graph(g)
+  assert_eq(stats.folded_silu, 2)
+  assert_eq(stats.folded_conv_activation, 2)
+  assert_eq(opt_g.nodes.length(), 2)
+  assert_eq(opt_g.nodes[0].op.name(), "Conv+Silu")
+  assert_eq(opt_g.nodes[1].op.name(), "Conv+Silu")
+  assert_eq(opt_g.nodes[0].outputs, ["y1"])
+  assert_eq(opt_g.nodes[1].outputs, ["y2"])
+}
