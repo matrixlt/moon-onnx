@@ -127,6 +127,7 @@ pub fn Tensor::strides(Self) -> Array[Int32]
 pub fn Tensor::summary(Self) -> String
 pub fn Tensor::to_f32_buffer(Self) -> FixedArray[Float] raise TensorError
 pub fn Tensor::to_f32_bytes_le(Self) -> FixedArray[Byte] raise TensorError
+pub fn Tensor::to_i32_buffer(Self) -> FixedArray[Int32] raise TensorError
 pub fn Tensor::to_i64_buffer(Self) -> FixedArray[Int64] raise TensorError
 pub fn Tensor::to_i8_buffer(Self) -> FixedArray[Byte] raise TensorError
 pub fn Tensor::to_u8_buffer(Self) -> FixedArray[Byte] raise TensorError

@@ -1053,3 +1053,252 @@ test "If control-flow subgraphs capture outer scope and prepack weights on Scala
     (1.0e-5 : Float),
   )
 }
+
+///|
+/// 端到端验证现代 Q4 大模型单层 Transformer Block（RMSNorm -> Q/K/V MatMulNBits(4-bit) -> RoPE -> GQA KV-Cache
+/// -> O_proj MatMulNBits -> SkipRMSNorm -> SwiGLU(SiLU 融合) -> Down_proj MatMulNBits）：
+/// 在纯内存四端覆盖 prefill (`past_seq=0, seq=2`) + decode (`past_seq=2, seq=1`) 与 Scalar vs V128 SIMD 数值对齐。
+test "End-to-end Q4 LLM Transformer block (MatMulNBits + RoPE + GQA KV-Cache + SkipRMSNorm + SiLU)" {
+  // hidden=32, num_heads=4, kv_num_heads=2, head_dim=8, block_size=32
+  let hidden = 32
+  let kv_dim = 16
+  let make_q4 = fn(
+    n_out : Int32,
+    seed : Int32,
+  ) -> (@tensor.Tensor, @tensor.Tensor) raise {
+    let w_b = @tensor.Tensor::from_u8(
+      [n_out, 1, 16],
+      FixedArray::makei(n_out * 16, fn(i) {
+        ((i * 19 + seed * 7) & 0xFF).to_byte()
+      }),
+    )
+    let w_s = @tensor.Tensor::from_f32(
+      [n_out],
+      FixedArray::makei(n_out, fn(i) {
+        Float::from_int(i % 5 + 1) * (0.02 : Float)
+      }),
+    )
+    (w_b, w_s)
+  }
+  let (wq_b, wq_s) = make_q4(hidden, 1)
+  let (wk_b, wk_s) = make_q4(kv_dim, 2)
+  let (wv_b, wv_s) = make_q4(kv_dim, 3)
+  let (wo_b, wo_s) = make_q4(hidden, 4)
+  let (wg_b, wg_s) = make_q4(hidden, 5)
+  let (wu_b, wu_s) = make_q4(hidden, 6)
+  let (wd_b, wd_s) = make_q4(hidden, 7)
+
+  let norm1_w = @tensor.Tensor::full_f32([hidden], (1.0 : Float))
+  let norm2_w = @tensor.Tensor::full_f32([hidden], (1.0 : Float))
+  let cos_cache = @tensor.Tensor::from_f32(
+    [8, 4],
+    FixedArray::makei(32, fn(i) {
+      if i / 4 % 2 == 0 {
+        (1.0 : Float)
+      } else {
+        (0.6 : Float)
+      }
+    }),
+  )
+  let sin_cache = @tensor.Tensor::from_f32(
+    [8, 4],
+    FixedArray::makei(32, fn(i) {
+      if i / 4 % 2 == 0 {
+        (0.0 : Float)
+      } else {
+        (0.8 : Float)
+      }
+    }),
+  )
+
+  let g : @nn_ir.IrGraph = {
+    name: "mini_q4_llama_block",
+    inputs: ["x", "pos", "past_k", "past_v", "seqlens_k", "tot_seq"],
+    outputs: ["out", "present_k", "present_v"],
+    initializers: Map([
+      ("norm1.w", norm1_w),
+      ("norm2.w", norm2_w),
+      ("cos", cos_cache),
+      ("sin", sin_cache),
+      ("wq.b", wq_b),
+      ("wq.s", wq_s),
+      ("wk.b", wk_b),
+      ("wk.s", wk_s),
+      ("wv.b", wv_b),
+      ("wv.s", wv_s),
+      ("wo.b", wo_b),
+      ("wo.s", wo_s),
+      ("wg.b", wg_b),
+      ("wg.s", wg_s),
+      ("wu.b", wu_b),
+      ("wu.s", wu_s),
+      ("wd.b", wd_b),
+      ("wd.s", wd_s),
+    ]),
+    nodes: [
+      {
+        name: "rms1",
+        op: @nn_ir.RmsNormalization(axis=-1, epsilon=(1.0e-5 : Float)),
+        inputs: ["x", "norm1.w"],
+        outputs: ["h0"],
+      },
+      {
+        name: "q_proj",
+        op: @nn_ir.MatMulNBits(k=hidden, n=hidden, bits=4, block_size=32),
+        inputs: ["h0", "wq.b", "wq.s"],
+        outputs: ["q"],
+      },
+      {
+        name: "k_proj",
+        op: @nn_ir.MatMulNBits(k=hidden, n=kv_dim, bits=4, block_size=32),
+        inputs: ["h0", "wk.b", "wk.s"],
+        outputs: ["k"],
+      },
+      {
+        name: "v_proj",
+        op: @nn_ir.MatMulNBits(k=hidden, n=kv_dim, bits=4, block_size=32),
+        inputs: ["h0", "wv.b", "wv.s"],
+        outputs: ["v"],
+      },
+      {
+        name: "rope_q",
+        op: @nn_ir.RotaryEmbedding(
+          interleaved=0,
+          num_heads=0,
+          rotary_embedding_dim=0,
+        ),
+        inputs: ["q", "pos", "cos", "sin"],
+        outputs: ["qr"],
+      },
+      {
+        name: "rope_k",
+        op: @nn_ir.RotaryEmbedding(
+          interleaved=0,
+          num_heads=0,
+          rotary_embedding_dim=0,
+        ),
+        inputs: ["k", "pos", "cos", "sin"],
+        outputs: ["kr"],
+      },
+      {
+        name: "gqa",
+        op: @nn_ir.GroupQueryAttention(
+          num_heads=4,
+          kv_num_heads=2,
+          scale=(0.35355338 : Float),
+          local_window_size=-1,
+          softcap=(0.0 : Float),
+          do_rotary=0,
+          rotary_interleaved=0,
+        ),
+        inputs: ["qr", "kr", "v", "past_k", "past_v", "seqlens_k", "tot_seq"],
+        outputs: ["attn_out", "present_k", "present_v"],
+      },
+      {
+        name: "o_proj",
+        op: @nn_ir.MatMulNBits(k=hidden, n=hidden, bits=4, block_size=32),
+        inputs: ["attn_out", "wo.b", "wo.s"],
+        outputs: ["o"],
+      },
+      {
+        name: "skip_rms",
+        op: @nn_ir.SkipRmsNormalization(epsilon=(1.0e-5 : Float)),
+        inputs: ["x", "o", "norm2.w"],
+        outputs: ["h1", "", "", "res1"],
+      },
+      {
+        name: "gate_proj",
+        op: @nn_ir.MatMulNBits(k=hidden, n=hidden, bits=4, block_size=32),
+        inputs: ["h1", "wg.b", "wg.s"],
+        outputs: ["gate"],
+      },
+      {
+        name: "up_proj",
+        op: @nn_ir.MatMulNBits(k=hidden, n=hidden, bits=4, block_size=32),
+        inputs: ["h1", "wu.b", "wu.s"],
+        outputs: ["up"],
+      },
+      {
+        name: "silu",
+        op: @nn_ir.Silu,
+        inputs: ["gate"],
+        outputs: ["gate_act"],
+      },
+      {
+        name: "swiglu",
+        op: @nn_ir.Mul,
+        inputs: ["gate_act", "up"],
+        outputs: ["mlp_mid"],
+      },
+      {
+        name: "down_proj",
+        op: @nn_ir.MatMulNBits(k=hidden, n=hidden, bits=4, block_size=32),
+        inputs: ["mlp_mid", "wd.b", "wd.s"],
+        outputs: ["mlp_out"],
+      },
+      {
+        name: "res_add",
+        op: @nn_ir.Add,
+        inputs: ["res1", "mlp_out"],
+        outputs: ["out"],
+      },
+    ],
+  }
+
+  let s_scalar = @session.Session::from_graph(g, backend=@session.Scalar)
+  let s_simd = @session.Session::from_graph(g, backend=@session.Simd)
+
+  // Step 1: Prefill (seq=2, past=0)
+  let x_pre = @tensor.Tensor::from_f32(
+    [1, 2, hidden],
+    FixedArray::makei(2 * hidden, fn(i) {
+      Float::from_int(i % 13 - 6) * (0.1 : Float)
+    }),
+  )
+  let pre_feeds : Map[String, @tensor.Tensor] = Map([
+    ("x", x_pre),
+    ("pos", @tensor.Tensor::from_i64([1, 2], [0, 1])),
+    ("past_k", @tensor.Tensor::from_f32([1, 2, 0, 8], [])),
+    ("past_v", @tensor.Tensor::from_f32([1, 2, 0, 8], [])),
+    ("seqlens_k", @tensor.Tensor::from_i32([1], [1])),
+    ("tot_seq", @tensor.Tensor::from_i32([1], [2])),
+  ])
+  let r_pre_sc = s_scalar.run(pre_feeds)
+  let r_pre_si = s_simd.run(pre_feeds)
+  assert_eq(r_pre_si.get("out").unwrap().shape(), [1, 2, 32])
+  assert_eq(r_pre_si.get("present_k").unwrap().shape(), [1, 2, 2, 8])
+  assert_true(
+    @session.max_abs_diff_f32(
+      r_pre_si.get("out").unwrap(),
+      r_pre_sc.get("out").unwrap(),
+    ) <=
+    (1.0e-5 : Float),
+  )
+
+  // Step 2: Decode (seq=1, past=2)
+  let x_dec = @tensor.Tensor::from_f32(
+    [1, 1, hidden],
+    FixedArray::makei(hidden, fn(i) {
+      Float::from_int(i % 11 - 5) * (0.12 : Float)
+    }),
+  )
+  let dec_feeds : Map[String, @tensor.Tensor] = Map([
+    ("x", x_dec),
+    ("pos", @tensor.Tensor::from_i64([1, 1], [2])),
+    ("past_k", r_pre_si.get("present_k").unwrap()),
+    ("past_v", r_pre_si.get("present_v").unwrap()),
+    ("seqlens_k", @tensor.Tensor::from_i32([1], [2])),
+    ("tot_seq", @tensor.Tensor::from_i32([1], [3])),
+  ])
+  let r_dec_sc = s_scalar.run(dec_feeds)
+  let r_dec_si = s_simd.run(dec_feeds)
+  assert_eq(r_dec_si.get("out").unwrap().shape(), [1, 1, 32])
+  assert_eq(r_dec_si.get("present_k").unwrap().shape(), [1, 2, 3, 8])
+  assert_true(
+    @session.max_abs_diff_f32(
+      r_dec_si.get("out").unwrap(),
+      r_dec_sc.get("out").unwrap(),
+    ) <=
+    (1.0e-5 : Float),
+  )
+}

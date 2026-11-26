@@ -463,6 +463,39 @@ fn lower_node(
     "QLinearMatMul" => @nn_ir.QLinearMatMul
     "DynamicQuantizeLinear" => @nn_ir.DynamicQuantizeLinear
     "MatMulInteger" => @nn_ir.MatMulInteger
+    "Silu" => @nn_ir.Silu
+    "RMSNormalization" | "SimplifiedLayerNormalization" =>
+      @nn_ir.RmsNormalization(
+        axis=get_attr_int(attrs, "axis", -1),
+        epsilon=get_attr_float(attrs, "epsilon", (1.0e-5 : Float)),
+      )
+    "SkipSimplifiedLayerNormalization" =>
+      @nn_ir.SkipRmsNormalization(
+        epsilon=get_attr_float(attrs, "epsilon", (1.0e-5 : Float)),
+      )
+    "RotaryEmbedding" =>
+      @nn_ir.RotaryEmbedding(
+        interleaved=get_attr_int(attrs, "interleaved", 0),
+        num_heads=get_attr_int(attrs, "num_heads", 0),
+        rotary_embedding_dim=get_attr_int(attrs, "rotary_embedding_dim", 0),
+      )
+    "GroupQueryAttention" =>
+      @nn_ir.GroupQueryAttention(
+        num_heads=get_attr_int(attrs, "num_heads", 1),
+        kv_num_heads=get_attr_int(attrs, "kv_num_heads", 1),
+        scale=get_attr_float(attrs, "scale", (0.0 : Float)),
+        local_window_size=get_attr_int(attrs, "local_window_size", -1),
+        softcap=get_attr_float(attrs, "softcap", (0.0 : Float)),
+        do_rotary=get_attr_int(attrs, "do_rotary", 0),
+        rotary_interleaved=get_attr_int(attrs, "rotary_interleaved", 0),
+      )
+    "MatMulNBits" =>
+      @nn_ir.MatMulNBits(
+        k=get_attr_int(attrs, "K", 0),
+        n=get_attr_int(attrs, "N", 0),
+        bits=get_attr_int(attrs, "bits", 4),
+        block_size=get_attr_int(attrs, "block_size", 32),
+      )
     "Resize" =>
       @nn_ir.Resize(
         mode=get_attr_string(attrs, "mode", "nearest"),

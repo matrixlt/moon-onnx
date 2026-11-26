@@ -833,3 +833,86 @@ test "Quantized INT8 Transformer block compiles to zero-allocation Arena mode" {
   )
   assert_true(!art.pkg_config.contains("matrixlt/tensor"))
 }
+
+///|
+/// 验证 `onnx_aot` Arena 模式支持现代 Q4 LLM 算子组合（`RMSNorm -> MatMulNBits(Q4) -> RotaryEmbedding -> SkipRMSNorm -> SiLU`），
+/// 直接发射 `@nn.*` 与 `@quant.matmul_nbits_q4_v128_f32` 零堆分配代码。
+test "onnx_aot Arena mode compiles Q4 MatMulNBits + RMSNorm + SkipRMSNorm + RoPE + SiLU" {
+  let wq_b = @tensor.Tensor::from_u8(
+    [32, 1, 16],
+    FixedArray::make(32 * 16, b'\x88'),
+  )
+  let wq_s = @tensor.Tensor::full_f32([32], (0.05 : Float))
+  let norm_w = @tensor.Tensor::full_f32([32], (1.0 : Float))
+  let cos_c = @tensor.Tensor::full_f32([8, 4], (1.0 : Float))
+  let sin_c = @tensor.Tensor::full_f32([8, 4], (0.0 : Float))
+  let g : @nn_ir.IrGraph = {
+    name: "mini_q4_aot",
+    inputs: ["x", "pos"],
+    outputs: ["out"],
+    initializers: Map([
+      ("norm_w", norm_w),
+      ("wq.b", wq_b),
+      ("wq.s", wq_s),
+      ("cos", cos_c),
+      ("sin", sin_c),
+    ]),
+    nodes: [
+      {
+        name: "rms0",
+        op: @nn_ir.RmsNormalization(axis=-1, epsilon=(1.0e-5 : Float)),
+        inputs: ["x", "norm_w"],
+        outputs: ["h0"],
+      },
+      {
+        name: "q4_0",
+        op: @nn_ir.MatMulNBits(k=32, n=32, bits=4, block_size=32),
+        inputs: ["h0", "wq.b", "wq.s"],
+        outputs: ["q"],
+      },
+      {
+        name: "rope0",
+        op: @nn_ir.RotaryEmbedding(
+          interleaved=0,
+          num_heads=0,
+          rotary_embedding_dim=0,
+        ),
+        inputs: ["q", "pos", "cos", "sin"],
+        outputs: ["qr"],
+      },
+      {
+        name: "skip0",
+        op: @nn_ir.SkipRmsNormalization(epsilon=(1.0e-5 : Float)),
+        inputs: ["x", "qr", "norm_w"],
+        outputs: ["h1", "", "", "res1"],
+      },
+      { name: "sig0", op: @nn_ir.Sigmoid, inputs: ["h1"], outputs: ["s0"], },
+      { name: "mul0", op: @nn_ir.Mul, inputs: ["h1", "s0"], outputs: ["act"], },
+      {
+        name: "add0",
+        op: @nn_ir.Add,
+        inputs: ["res1", "act"],
+        outputs: ["out"],
+      },
+    ],
+  }
+  let art = @onnx_aot.compile_graph_to_mbt(
+    g,
+    Map([("x", [1, 2, 32]), ("pos", [1, 2])]),
+    config={
+      ..@onnx_aot.CodegenConfig::default(),
+      struct_name: "MiniQ4Block",
+      target: @onnx_aot.TargetWasm,
+      input_dtypes: Map([("x", @tensor.Float32), ("pos", @tensor.Int64)]),
+    },
+  )
+  assert_eq(art.mode_used, @onnx_aot.Arena)
+  assert_true(art.mbt_source.contains("@nn.rmsnorm_f32("))
+  assert_true(art.mbt_source.contains("@quant.matmul_nbits_q4_v128_f32("))
+  assert_true(art.mbt_source.contains("@nn.rotary_embedding_f32("))
+  assert_true(art.mbt_source.contains("@nn.skip_rmsnorm_f32("))
+  assert_true(art.mbt_source.contains("@nn.silu_f32("))
+  assert_true(art.pkg_config.contains("matrixlt/ml_kernels/nn"))
+  assert_true(art.pkg_config.contains("matrixlt/ml_kernels/quant"))
+  assert_true(!art.pkg_config.contains("matrixlt/tensor"))
+}

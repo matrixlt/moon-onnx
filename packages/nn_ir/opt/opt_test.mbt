@@ -275,3 +275,27 @@ test "pass_fold_layernorm fuses 9-node PyTorch decomposed LayerNorm" {
     _ => fail("expected fused LayerNormalization")
   }
 }
+
+///|
+/// 验证 SiLU 融合 Pass：将 `Mul(x, Sigmoid(x))` 与对称 `Mul(Sigmoid(x), x)` 折叠为单节点 `Silu(x)`。
+test "pass_fold_silu fuses Mul(x, Sigmoid(x)) into single Silu node" {
+  let g : @nn_ir.IrGraph = {
+    name: "silu_fusion_test",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: Map([]),
+    nodes: [
+      { name: "sig1", op: @nn_ir.Sigmoid, inputs: ["x"], outputs: ["s1"], },
+      { name: "mul1", op: @nn_ir.Mul, inputs: ["x", "s1"], outputs: ["h1"], },
+      { name: "sig2", op: @nn_ir.Sigmoid, inputs: ["h1"], outputs: ["s2"], },
+      { name: "mul2", op: @nn_ir.Mul, inputs: ["s2", "h1"], outputs: ["y"], },
+    ],
+  }
+  let (opt_g, stats) = @opt.optimize_graph(g)
+  assert_eq(stats.folded_silu, 2)
+  assert_eq(opt_g.nodes.length(), 2)
+  assert_eq(opt_g.nodes[0].op.name(), "Silu")
+  assert_eq(opt_g.nodes[1].op.name(), "Silu")
+  assert_eq(opt_g.nodes[0].inputs, ["x"])
+  assert_eq(opt_g.nodes[1].inputs, ["h1"])
+}

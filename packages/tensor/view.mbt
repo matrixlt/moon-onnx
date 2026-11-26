@@ -160,6 +160,22 @@ pub fn Tensor::to_i64_buffer(
 }
 
 ///|
+/// 将张量转换为连续的 `FixedArray[Int32]` 缓冲（兼容 `Int32` 与 `Int64`）。
+pub fn Tensor::to_i32_buffer(
+  self : Tensor,
+) -> FixedArray[Int32] raise TensorError {
+  let contig = self.contiguous()
+  match contig.data {
+    I32(buf) => buf
+    I64(buf) => FixedArray::makei(buf.length(), fn(i) { buf[i].to_int() })
+    _ =>
+      raise DTypeMismatch(
+        "to_i32_buffer: expected Int32 or Int64, got \{self.dtype}",
+      )
+  }
+}
+
+///|
 /// 按 ONNX Reshape 语义重塑张量形状：
 /// - 维度值 `0`（当 allowzero == false 时）：从输入张量对应轴复制维度大小。
 /// - 维度值 `-1`：最多出现一次，根据总元素数自动推导。

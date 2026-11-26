@@ -635,3 +635,133 @@ pub fn matmul_2d_simd_f32(
   let packed_b = pack_matrix_b_f32(b, b_offset, k, n)
   matmul_2d_prepacked_simd_f32(a, a_offset, packed_b, out, out_offset, m)
 }
+
+///|
+/// V128 SIMD 零拷贝转置右矩阵乘法：`out[M, N] = A[M, K] @ B^T`（其中 `B` 直接以行主序 `[N, K]` 传入，无需百兆级转置拷贝）。
+/// 针对 LLM 共享词表投影 `lm_head`（如 `[1, 576] @ [49152, 576]^T`）采用 4 列寄存器展开复用 `A` 向量，
+/// 消除 100% 权重拷贝开销并实现 4× 浮点向量化吞吐。
+pub fn matmul_2d_nt_simd_f32(
+  a : FixedArray[Float],
+  a_offset : Int32,
+  b_nk : FixedArray[Float],
+  b_offset : Int32,
+  out : FixedArray[Float],
+  out_offset : Int32,
+  m : Int32,
+  k : Int32,
+  n : Int32,
+) -> Unit {
+  if m == 0 || n == 0 {
+    return
+  }
+  let k4 = k - k % 4
+  let v_zero = @simd.f32x4_splat((0.0 : Float))
+  for i = 0; i < m; i = i + 1 {
+    let a_row = a_offset + i * k
+    let o_row = out_offset + i * n
+    let mut j = 0
+    while j + 4 <= n {
+      let b0 = b_offset + j * k
+      let b1 = b0 + k
+      let b2 = b1 + k
+      let b3 = b2 + k
+      let mut acc0 = v_zero
+      let mut acc1 = v_zero
+      let mut acc2 = v_zero
+      let mut acc3 = v_zero
+      let mut kk = 0
+      while kk < k4 {
+        let va = @simd.f32x4_const(
+          a[a_row + kk],
+          a[a_row + kk + 1],
+          a[a_row + kk + 2],
+          a[a_row + kk + 3],
+        )
+        let vb0 = @simd.f32x4_const(
+          b_nk[b0 + kk],
+          b_nk[b0 + kk + 1],
+          b_nk[b0 + kk + 2],
+          b_nk[b0 + kk + 3],
+        )
+        let vb1 = @simd.f32x4_const(
+          b_nk[b1 + kk],
+          b_nk[b1 + kk + 1],
+          b_nk[b1 + kk + 2],
+          b_nk[b1 + kk + 3],
+        )
+        let vb2 = @simd.f32x4_const(
+          b_nk[b2 + kk],
+          b_nk[b2 + kk + 1],
+          b_nk[b2 + kk + 2],
+          b_nk[b2 + kk + 3],
+        )
+        let vb3 = @simd.f32x4_const(
+          b_nk[b3 + kk],
+          b_nk[b3 + kk + 1],
+          b_nk[b3 + kk + 2],
+          b_nk[b3 + kk + 3],
+        )
+        acc0 = @simd.f32x4_relaxed_madd(va, vb0, acc0)
+        acc1 = @simd.f32x4_relaxed_madd(va, vb1, acc1)
+        acc2 = @simd.f32x4_relaxed_madd(va, vb2, acc2)
+        acc3 = @simd.f32x4_relaxed_madd(va, vb3, acc3)
+        kk = kk + 4
+      }
+      let mut s0 = @simd.f32x4_extract_lane(acc0, 0) +
+        @simd.f32x4_extract_lane(acc0, 1) +
+        (@simd.f32x4_extract_lane(acc0, 2) + @simd.f32x4_extract_lane(acc0, 3))
+      let mut s1 = @simd.f32x4_extract_lane(acc1, 0) +
+        @simd.f32x4_extract_lane(acc1, 1) +
+        (@simd.f32x4_extract_lane(acc1, 2) + @simd.f32x4_extract_lane(acc1, 3))
+      let mut s2 = @simd.f32x4_extract_lane(acc2, 0) +
+        @simd.f32x4_extract_lane(acc2, 1) +
+        (@simd.f32x4_extract_lane(acc2, 2) + @simd.f32x4_extract_lane(acc2, 3))
+      let mut s3 = @simd.f32x4_extract_lane(acc3, 0) +
+        @simd.f32x4_extract_lane(acc3, 1) +
+        (@simd.f32x4_extract_lane(acc3, 2) + @simd.f32x4_extract_lane(acc3, 3))
+      while kk < k {
+        let av = a[a_row + kk]
+        s0 = s0 + av * b_nk[b0 + kk]
+        s1 = s1 + av * b_nk[b1 + kk]
+        s2 = s2 + av * b_nk[b2 + kk]
+        s3 = s3 + av * b_nk[b3 + kk]
+        kk = kk + 1
+      }
+      out[o_row + j] = s0
+      out[o_row + j + 1] = s1
+      out[o_row + j + 2] = s2
+      out[o_row + j + 3] = s3
+      j = j + 4
+    }
+    while j < n {
+      let b0 = b_offset + j * k
+      let mut acc0 = v_zero
+      let mut kk = 0
+      while kk < k4 {
+        let va = @simd.f32x4_const(
+          a[a_row + kk],
+          a[a_row + kk + 1],
+          a[a_row + kk + 2],
+          a[a_row + kk + 3],
+        )
+        let vb0 = @simd.f32x4_const(
+          b_nk[b0 + kk],
+          b_nk[b0 + kk + 1],
+          b_nk[b0 + kk + 2],
+          b_nk[b0 + kk + 3],
+        )
+        acc0 = @simd.f32x4_relaxed_madd(va, vb0, acc0)
+        kk = kk + 4
+      }
+      let mut s0 = @simd.f32x4_extract_lane(acc0, 0) +
+        @simd.f32x4_extract_lane(acc0, 1) +
+        (@simd.f32x4_extract_lane(acc0, 2) + @simd.f32x4_extract_lane(acc0, 3))
+      while kk < k {
+        s0 = s0 + a[a_row + kk] * b_nk[b0 + kk]
+        kk = kk + 1
+      }
+      out[o_row + j] = s0
+      j = j + 1
+    }
+  }
+}

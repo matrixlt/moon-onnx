@@ -52,6 +52,84 @@ fn binary_f32(
   let out_shape = @tensor.broadcast_shape(a_shape, b_shape)
   let total = @tensor.num_elements(out_shape)
 
+  // Int64 / Int32 整型广播算术支持（用于 LLM attention_mask / shape 索引计算子图）
+  if a.dtype() == @tensor.Int64 && b.dtype() == @tensor.Int64 {
+    let a_buf = a.to_i64_buffer()
+    let b_buf = b.to_i64_buffer()
+    let a_bs = @tensor.broadcast_strides(
+      a_shape,
+      @tensor.compute_strides(a_shape),
+      out_shape,
+    )
+    let b_bs = @tensor.broadcast_strides(
+      b_shape,
+      @tensor.compute_strides(b_shape),
+      out_shape,
+    )
+    let rank = out_shape.length()
+    let out = FixedArray::make(total, (0 : Int64))
+    for linear = 0; linear < total; linear = linear + 1 {
+      let mut rem = linear
+      let mut ia = 0
+      let mut ib = 0
+      for axis = rank - 1; axis >= 0; axis = axis - 1 {
+        let dim = out_shape[axis]
+        let coord = rem % dim
+        rem = rem / dim
+        ia = ia + coord * a_bs[axis]
+        ib = ib + coord * b_bs[axis]
+      }
+      let va = a_buf[ia]
+      let vb = b_buf[ib]
+      out[linear] = match op {
+        BAdd => va + vb
+        BSub => va - vb
+        BMul => va * vb
+        BDiv => va / vb
+        BPow => @math.pow(va.to_double(), vb.to_double()).to_int64()
+      }
+    }
+    return @tensor.Tensor::from_i64(out_shape, out)
+  }
+  if a.dtype() == @tensor.Int32 && b.dtype() == @tensor.Int32 {
+    let a_buf = a.to_i32_buffer()
+    let b_buf = b.to_i32_buffer()
+    let a_bs = @tensor.broadcast_strides(
+      a_shape,
+      @tensor.compute_strides(a_shape),
+      out_shape,
+    )
+    let b_bs = @tensor.broadcast_strides(
+      b_shape,
+      @tensor.compute_strides(b_shape),
+      out_shape,
+    )
+    let rank = out_shape.length()
+    let out = FixedArray::make(total, 0)
+    for linear = 0; linear < total; linear = linear + 1 {
+      let mut rem = linear
+      let mut ia = 0
+      let mut ib = 0
+      for axis = rank - 1; axis >= 0; axis = axis - 1 {
+        let dim = out_shape[axis]
+        let coord = rem % dim
+        rem = rem / dim
+        ia = ia + coord * a_bs[axis]
+        ib = ib + coord * b_bs[axis]
+      }
+      let va = a_buf[ia]
+      let vb = b_buf[ib]
+      out[linear] = match op {
+        BAdd => va + vb
+        BSub => va - vb
+        BMul => va * vb
+        BDiv => va / vb
+        BPow => @math.pow(va.to_double(), vb.to_double()).to_int()
+      }
+    }
+    return @tensor.Tensor::from_i32(out_shape, out)
+  }
+
   let a_buf = a.to_f32_buffer()
   let b_buf = b.to_f32_buffer()
   let out = alloc_f32(pool, total)

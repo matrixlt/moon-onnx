@@ -733,6 +733,144 @@ fn ArenaEmitter::emit_nn_op(
         "  \{mmi_fn}(\{a_buf}, \{a_off}, \{a_zp_expr}, self.\{wf}, \{b_zp_expr}, \{y_buf}, \{y_off}, \{m_tot})\n",
       )
     }
+    @nn_ir.Silu => {
+      self.need_nn = true
+      let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
+      let (y_buf, y_off) = self.resolve_f32_loc(out_n)
+      self.body.write_string(
+        "  @nn.silu_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{out_numel})\n",
+      )
+    }
+    @nn_ir.RmsNormalization(axis~, epsilon~) => {
+      self.need_nn = true
+      self.need_f32_loader = true
+      let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
+      let (y_buf, y_off) = self.resolve_f32_loc(out_n)
+      let sf = self.reg_weight(ins[1], RawF32)
+      let rank = out_sh.length()
+      let ax = if axis < 0 { axis + rank } else { axis }
+      let mut outer = 1
+      for d = 0; d < ax; d = d + 1 {
+        outer = outer * out_sh[d]
+      }
+      let mut norm_sz = 1
+      for d = ax; d < rank; d = d + 1 {
+        norm_sz = norm_sz * out_sh[d]
+      }
+      self.body.write_string(
+        "  @nn.rmsnorm_f32(\{x_buf}, \{x_off}, self.\{sf}, \{y_buf}, \{y_off}, \{outer}, \{norm_sz}, \{fmt_float_literal(epsilon)})\n",
+      )
+    }
+    @nn_ir.SkipRmsNormalization(epsilon~) => {
+      self.need_nn = true
+      self.need_f32_loader = true
+      let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
+      let (sk_buf, sk_off) = self.resolve_f32_loc(ins[1])
+      let (y_buf, y_off) = self.resolve_f32_loc(out_n)
+      let sf = self.reg_weight(ins[2], RawF32)
+      let bias_expr = if ins.length() >= 4 && ins[3] != "" {
+        let bf = self.reg_weight(ins[3], RawF32)
+        "Some(self.\{bf})"
+      } else {
+        "None"
+      }
+      let (sum_expr, sum_off) = if node.outputs.length() >= 4 &&
+        node.outputs[3] != "" {
+        let (sb, so) = self.resolve_f32_loc(node.outputs[3])
+        ("Some(\{sb})", so)
+      } else {
+        ("None", 0)
+      }
+      let norm_sz = out_sh[out_sh.length() - 1]
+      let outer = out_numel / norm_sz
+      self.body.write_string(
+        "  @nn.skip_rmsnorm_f32(\{x_buf}, \{x_off}, \{sk_buf}, \{sk_off}, self.\{sf}, \{bias_expr}, \{y_buf}, \{y_off}, \{sum_expr}, \{sum_off}, \{outer}, \{norm_sz}, \{fmt_float_literal(epsilon)})\n",
+      )
+    }
+    @nn_ir.RotaryEmbedding(interleaved~, num_heads~, rotary_embedding_dim~) => {
+      self.need_nn = true
+      self.need_f32_loader = true
+      let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
+      let (y_buf, y_off) = self.resolve_f32_loc(out_n)
+      let pos_param = self.input_param_of.get(ins[1]).unwrap()
+      let cos_f = self.reg_weight(ins[2], RawF32)
+      let sin_f = self.reg_weight(ins[3], RawF32)
+      let cs = self.shapes.get(ins[2]).unwrap()
+      let cache_half = cs[1]
+      let is_bhsd = out_sh.length() == 4
+      let batch = out_sh[0]
+      let seq_len = if is_bhsd { out_sh[2] } else { out_sh[1] }
+      let (eff_heads, head_dim) = if is_bhsd {
+        (out_sh[1], out_sh[3])
+      } else if num_heads > 0 {
+        (num_heads, out_sh[2] / num_heads)
+      } else {
+        let hd = cache_half * 2
+        (out_sh[2] / hd, hd)
+      }
+      let rot_dim = if rotary_embedding_dim > 0 {
+        rotary_embedding_dim
+      } else {
+        cache_half * 2
+      }
+      let pos_sh = self.shapes.get(ins[1]).unwrap()
+      let pos_numel = @tensor.num_elements(pos_sh) catch {
+        e => raise ShapeError("\{e}")
+      }
+      let pos_is_scalar = pos_numel == 1 && batch * seq_len > 1
+      self.body.write_string(
+        "  @nn.rotary_embedding_f32(\{x_buf}, \{x_off}, \{pos_param}, \{pos_is_scalar}, self.\{cos_f}, self.\{sin_f}, \{cache_half}, \{y_buf}, \{y_off}, \{batch}, \{seq_len}, \{eff_heads}, \{head_dim}, \{rot_dim}, \{interleaved != 0}, \{is_bhsd})\n",
+      )
+    }
+    @nn_ir.MatMulNBits(k~, n=out_n_dim, block_size~, ..) => {
+      self.need_quant = true
+      self.need_byte_loader = true
+      self.need_f32_loader = true
+      let (a_buf, a_off) = self.resolve_f32_loc(ins[0])
+      let (y_buf, y_off) = self.resolve_f32_loc(out_n)
+      let sa = self.shapes.get(ins[0]).unwrap()
+      let mut m_tot = 1
+      for d = 0; d < sa.length() - 1; d = d + 1 {
+        m_tot = m_tot * sa[d]
+      }
+      let eff_k = if k > 0 { k } else { sa[sa.length() - 1] }
+      let eff_n = if out_n_dim > 0 {
+        out_n_dim
+      } else {
+        self.shapes.get(ins[1]).unwrap()[0]
+      }
+      let wf = self.reg_weight(ins[1], RawBytes(trans_b=false))
+      let sf = self.reg_weight(ins[2], RawF32)
+      let (zp_b_expr, zp_f_expr) = if ins.length() >= 4 && ins[3] != "" {
+        let zt = self.graph.initializers.get(ins[3]).unwrap()
+        match zt.dtype() {
+          @tensor.UInt8 => {
+            let zf = self.reg_weight(ins[3], RawBytes(trans_b=false))
+            ("Some(self.\{zf})", "None")
+          }
+          _ => {
+            let zf = self.reg_weight(ins[3], RawF32)
+            ("None", "Some(self.\{zf})")
+          }
+        }
+      } else {
+        ("None", "None")
+      }
+      let bias_expr = if ins.length() >= 6 && ins[5] != "" {
+        let bf = self.reg_weight(ins[5], RawF32)
+        "Some(self.\{bf})"
+      } else {
+        "None"
+      }
+      let q4_fn = if self.use_quant_simd {
+        "@quant.matmul_nbits_q4_v128_f32"
+      } else {
+        "@quant.matmul_nbits_q4_scalar_f32"
+      }
+      self.body.write_string(
+        "  \{q4_fn}(\{a_buf}, \{a_off}, self.\{wf}, self.\{sf}, \{zp_b_expr}, \{zp_f_expr}, \{bias_expr}, \{y_buf}, \{y_off}, \{m_tot}, \{eff_k}, \{eff_n}, \{block_size})\n",
+      )
+    }
     _ => return false
   }
   true

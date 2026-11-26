@@ -701,6 +701,50 @@ pub fn infer_node_output_shapes(
         out
       }
     }
+    @nn_ir.Silu | @nn_ir.RmsNormalization(..) | @nn_ir.RotaryEmbedding(..) =>
+      req_shape(ins[0]).copy()
+    @nn_ir.SkipRmsNormalization(..) => {
+      let sx = req_shape(ins[0])
+      let res : Array[Array[Int32]] = [sx.copy()]
+      if node.outputs.length() >= 2 {
+        res.push([])
+      }
+      if node.outputs.length() >= 3 {
+        res.push([])
+      }
+      if node.outputs.length() >= 4 {
+        res.push(sx.copy())
+      }
+      return res
+    }
+    @nn_ir.GroupQueryAttention(num_heads~, kv_num_heads~, ..) => {
+      let sq = req_shape(ins[0])
+      let b = sq[0]
+      let s = sq[1]
+      let head_dim = sq[2] / num_heads
+      let past_seq = if ins.length() >= 4 && ins[3] != "" {
+        match shapes.get(ins[3]) {
+          Some(pk) if pk.length() >= 3 => pk[2]
+          _ => 0
+        }
+      } else {
+        0
+      }
+      let present_seq = past_seq + s
+      let pk_sh : Array[Int32] = [b, kv_num_heads, present_seq, head_dim]
+      return [sq.copy(), pk_sh, pk_sh.copy()]
+    }
+    @nn_ir.MatMulNBits(n~, ..) => {
+      let sa = req_shape(ins[0])
+      if sa.length() < 2 {
+        raise @nn_ir.InvalidGraph(
+          "MatMulNBits '\{node.name}' requires rank >= 2",
+        )
+      }
+      let out = sa.copy()
+      out[out.length() - 1] = n
+      out
+    }
     other =>
       raise @nn_ir.UnsupportedOp(
         "shape inference not yet implemented for '\{other.name()}'",
@@ -770,6 +814,12 @@ pub fn infer_node_output_dtypes(
     @nn_ir.Cast(to~) => to
     @nn_ir.Shape(..) => @tensor.Int64
     @nn_ir.MatMulInteger => @tensor.Int32
+    @nn_ir.MatMulNBits(..)
+    | @nn_ir.Silu
+    | @nn_ir.RmsNormalization(..)
+    | @nn_ir.SkipRmsNormalization(..)
+    | @nn_ir.RotaryEmbedding(..)
+    | @nn_ir.GroupQueryAttention(..) => @tensor.Float32
     @nn_ir.Equal
     | @nn_ir.Less
     | @nn_ir.Greater

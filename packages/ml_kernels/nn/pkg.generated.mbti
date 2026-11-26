@@ -16,11 +16,21 @@ pub fn gap_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32)
 
 pub fn gelu_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32) -> Unit
 
+pub fn gqa_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Int32], FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Float, Int32, Float) -> Unit
+
 pub fn layernorm_f32(FixedArray[Float], Int32, FixedArray[Float], FixedArray[Float]?, FixedArray[Float], Int32, Int32, Int32, Float) -> Unit
 
 pub fn maxpool2d_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32) -> Unit
 
 pub fn reflect_idx(Int32, Int32) -> Int32
+
+pub fn rmsnorm_f32(FixedArray[Float], Int32, FixedArray[Float], FixedArray[Float], Int32, Int32, Int32, Float) -> Unit
+
+pub fn rotary_embedding_f32(FixedArray[Float], Int32, FixedArray[Int64], Bool, FixedArray[Float], FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Bool, Bool) -> Unit
+
+pub fn silu_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32) -> Unit
+
+pub fn skip_rmsnorm_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], FixedArray[Float]?, FixedArray[Float], Int32, FixedArray[Float]?, Int32, Int32, Int32, Float) -> Unit
 
 pub fn softmax_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
 

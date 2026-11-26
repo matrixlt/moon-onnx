@@ -55,6 +55,8 @@ pub fn gemm_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB, @tensor.Tensor?, 
 
 pub fn global_avgpool_f32(@tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn gqa_f32(@tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor?, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, num_heads? : Int32, kv_num_heads? : Int32, scale? : Float, local_window_size? : Int32, softcap? : Float, do_rotary? : Int32, rotary_interleaved? : Int32, pool? : @tensor.BufferPool?) -> Array[@tensor.Tensor] raise @tensor.TensorError
+
 pub fn greater_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn greater_or_equal_op(@tensor.Tensor, @tensor.Tensor) -> @tensor.Tensor raise @tensor.TensorError
@@ -76,6 +78,8 @@ pub fn matmul_f32(@tensor.Tensor, @tensor.Tensor, use_simd? : Bool, pool? : @ten
 pub fn matmul_integer_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, use_simd? : Bool) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn matmul_integer_prepacked_op(@tensor.Tensor, @quant.PackedInt8MatrixB, @tensor.Tensor?, @tensor.Tensor?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn matmul_nbits_op(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, k? : Int32, n? : Int32, bits? : Int32, block_size? : Int32, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn matmul_prepacked_f32(@tensor.Tensor, @gemm.PackedMatrixB, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
@@ -109,9 +113,17 @@ pub fn reshape_op(@tensor.Tensor, @tensor.Tensor, allowzero? : Bool) -> @tensor.
 
 pub fn resize_f32(@tensor.Tensor, @tensor.Tensor?, @tensor.Tensor?, mode? : String, coordinate_transformation_mode? : String, nearest_mode? : String, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 
+pub fn rms_norm_f32(@tensor.Tensor, @tensor.Tensor, axis? : Int32, epsilon? : Float, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn rotary_embedding_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor, interleaved? : Int32, num_heads? : Int32, rotary_embedding_dim? : Int32, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
 pub fn shape_op(@tensor.Tensor, start? : Int32?, end? : Int32?) -> @tensor.Tensor raise @tensor.TensorError
 
 pub fn sigmoid_f32(@tensor.Tensor, use_simd? : Bool, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn silu_f32(@tensor.Tensor, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
+
+pub fn skip_rms_norm_f32(@tensor.Tensor, @tensor.Tensor, @tensor.Tensor, @tensor.Tensor?, epsilon? : Float, need_sum_out? : Bool, pool? : @tensor.BufferPool?) -> Array[@tensor.Tensor] raise @tensor.TensorError
 
 pub fn slice_op(@tensor.Tensor, Array[Int64], Array[Int64], Array[Int32]?, Array[Int32]?, pool? : @tensor.BufferPool?) -> @tensor.Tensor raise @tensor.TensorError
 

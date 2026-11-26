@@ -787,6 +787,55 @@ fn eval_cpu_node_single(
           }
         }
       }
+      @nn_ir.Silu => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.silu_f32(x, pool=out_pool)
+      }
+      @nn_ir.RmsNormalization(axis~, epsilon~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let scale = ctx.require_tensor(n, ins, 1)
+        @ops.rms_norm_f32(x, scale, axis~, epsilon~, pool=out_pool)
+      }
+      @nn_ir.RotaryEmbedding(interleaved~, num_heads~, rotary_embedding_dim~) => {
+        let x = ctx.require_tensor(n, ins, 0)
+        let pos_ids = ctx.require_tensor(n, ins, 1)
+        let cos_c = ctx.require_tensor(n, ins, 2)
+        let sin_c = ctx.require_tensor(n, ins, 3)
+        @ops.rotary_embedding_f32(
+          x,
+          pos_ids,
+          cos_c,
+          sin_c,
+          interleaved~,
+          num_heads~,
+          rotary_embedding_dim~,
+          pool=out_pool,
+        )
+      }
+      @nn_ir.MatMulNBits(k~, n=out_n, bits~, block_size~) => {
+        let a = ctx.require_tensor(n, ins, 0)
+        let b = ctx.require_tensor(n, ins, 1)
+        let scales = ctx.require_tensor(n, ins, 2)
+        let zp = ctx.optional_tensor(n, ins, 3)
+        let bias = ctx.optional_tensor(n, ins, 5)
+        @ops.matmul_nbits_op(
+          a,
+          b,
+          scales,
+          zp,
+          bias,
+          k~,
+          n=out_n,
+          bits~,
+          block_size~,
+          use_simd~,
+          pool=out_pool,
+        )
+      }
+      @nn_ir.SkipRmsNormalization(..) | @nn_ir.GroupQueryAttention(..) =>
+        raise TensorErr(
+          "internal error: multi-output op '\{node.op.name()}' must be dispatched via eval_cpu_node_multi",
+        )
     }
   } catch {
     MissingTensor(msg) => raise MissingTensor(msg)
@@ -819,7 +868,7 @@ fn read_scalar_bool(
 }
 
 ///|
-/// 内置 CPU 统一算子分派入口：集中处理 `Split`、`LSTM`、`DynamicQuantizeLinear` 与 `If` 多输出节点，
+/// 内置 CPU 统一算子分派入口：集中处理 `Split`、`LSTM`、`DynamicQuantizeLinear`、`SkipRmsNormalization`、`GroupQueryAttention` 与 `If` 多输出节点，
 /// 其余单输出算子委托给 `eval_cpu_node_single`，彻底消除单/多输出重复分派代码。
 fn eval_cpu_node_multi(
   node : @nn_ir.IrNode,
@@ -888,6 +937,76 @@ fn eval_cpu_node_multi(
         MissingTensor(msg) => raise MissingTensor(msg)
         UnsupportedOp(msg) => raise UnsupportedOp(msg)
         e => raise TensorErr("node '\{n}' (DynamicQuantizeLinear): \{e}")
+      }
+    }
+    @nn_ir.SkipRmsNormalization(epsilon~) => {
+      let n = node.name
+      let ins = node.inputs
+      try {
+        let x = ctx.require_tensor(n, ins, 0)
+        let skip = ctx.require_tensor(n, ins, 1)
+        let scale = ctx.require_tensor(n, ins, 2)
+        let bias = ctx.optional_tensor(n, ins, 3)
+        let need_sum_out = node.outputs.length() >= 4 && node.outputs[3] != ""
+        @ops.skip_rms_norm_f32(
+          x,
+          skip,
+          scale,
+          bias,
+          epsilon~,
+          need_sum_out~,
+          pool=ctx.out_pool,
+        )
+      } catch {
+        MissingTensor(msg) => raise MissingTensor(msg)
+        UnsupportedOp(msg) => raise UnsupportedOp(msg)
+        e => raise TensorErr("node '\{n}' (SkipRMSNormalization): \{e}")
+      }
+    }
+    @nn_ir.GroupQueryAttention(
+      num_heads~,
+      kv_num_heads~,
+      scale~,
+      local_window_size~,
+      softcap~,
+      do_rotary~,
+      rotary_interleaved~,
+    ) => {
+      let n = node.name
+      let ins = node.inputs
+      try {
+        let q = ctx.require_tensor(n, ins, 0)
+        let k = ctx.optional_tensor(n, ins, 1)
+        let v = ctx.optional_tensor(n, ins, 2)
+        let pk = ctx.optional_tensor(n, ins, 3)
+        let pv = ctx.optional_tensor(n, ins, 4)
+        let seqlens_k = ctx.require_tensor(n, ins, 5)
+        let tot_seq = ctx.require_tensor(n, ins, 6)
+        let cos_c = ctx.optional_tensor(n, ins, 7)
+        let sin_c = ctx.optional_tensor(n, ins, 8)
+        @ops.gqa_f32(
+          q,
+          k,
+          v,
+          pk,
+          pv,
+          seqlens_k,
+          tot_seq,
+          cos_c,
+          sin_c,
+          num_heads~,
+          kv_num_heads~,
+          scale~,
+          local_window_size~,
+          softcap~,
+          do_rotary~,
+          rotary_interleaved~,
+          pool=ctx.out_pool,
+        )
+      } catch {
+        MissingTensor(msg) => raise MissingTensor(msg)
+        UnsupportedOp(msg) => raise UnsupportedOp(msg)
+        e => raise TensorErr("node '\{n}' (GroupQueryAttention): \{e}")
       }
     }
     @nn_ir.If(then_branch~, else_branch~) => {

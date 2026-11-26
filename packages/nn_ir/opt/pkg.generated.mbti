@@ -20,6 +20,7 @@ pub(all) struct OptStats {
   folded_conv_bias : Int32
   folded_conv_activation : Int32
   folded_layernorm : Int32
+  folded_silu : Int32
   pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }

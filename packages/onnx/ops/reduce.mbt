@@ -160,7 +160,7 @@ pub fn reduce_mean_f32(
 }
 
 ///|
-/// ONNX `ReduceSum` 算子（兼容 Opset 1~18 属性与输入张量形式的 `axes`）。
+/// ONNX `ReduceSum` 算子（兼容 Opset 1~18 属性与输入张量形式的 `axes`，支持 `Float32` / `Int64` / `Int32`）。
 pub fn reduce_sum_f32(
   x : @tensor.Tensor,
   attr_axes : Array[Int32]?,
@@ -172,6 +172,82 @@ pub fn reduce_sum_f32(
   let resolved = match axes_tensor {
     Some(t) => Some(tensor_to_int_array(t))
     None => attr_axes
+  }
+  if x.dtype() == @tensor.Int64 || x.dtype() == @tensor.Int32 {
+    let shape = x.shape()
+    let rank = shape.length()
+    let is_reduced = Array::make(rank, false)
+    match resolved {
+      Some(axes) =>
+        if axes.length() == 0 {
+          if noop_with_empty_axes {
+            return x.contiguous()
+          }
+          for d = 0; d < rank; d = d + 1 {
+            is_reduced[d] = true
+          }
+        } else {
+          for i = 0; i < axes.length(); i = i + 1 {
+            is_reduced[@tensor.normalize_axis(axes[i], rank)] = true
+          }
+        }
+      None =>
+        if noop_with_empty_axes {
+          return x.contiguous()
+        } else {
+          for d = 0; d < rank; d = d + 1 {
+            is_reduced[d] = true
+          }
+        }
+    }
+    let out_shape : Array[Int32] = []
+    let kept_dims : Array[Int32] = []
+    for d = 0; d < rank; d = d + 1 {
+      if is_reduced[d] {
+        if keepdims {
+          out_shape.push(1)
+        }
+        kept_dims.push(1)
+      } else {
+        out_shape.push(shape[d])
+        kept_dims.push(shape[d])
+      }
+    }
+    let out_total = @tensor.num_elements(out_shape)
+    let out_strides = @tensor.compute_strides(kept_dims)
+    if x.dtype() == @tensor.Int64 {
+      let src = x.to_i64_buffer()
+      let acc = FixedArray::make(out_total, (0 : Int64))
+      for linear = 0; linear < src.length(); linear = linear + 1 {
+        let mut rem = linear
+        let mut out_idx = 0
+        for d = rank - 1; d >= 0; d = d - 1 {
+          let coord = rem % shape[d]
+          rem = rem / shape[d]
+          if !is_reduced[d] {
+            out_idx = out_idx + coord * out_strides[d]
+          }
+        }
+        acc[out_idx] = acc[out_idx] + src[linear]
+      }
+      return @tensor.Tensor::from_i64(out_shape, acc)
+    } else {
+      let src = x.to_i32_buffer()
+      let acc = FixedArray::make(out_total, 0)
+      for linear = 0; linear < src.length(); linear = linear + 1 {
+        let mut rem = linear
+        let mut out_idx = 0
+        for d = rank - 1; d >= 0; d = d - 1 {
+          let coord = rem % shape[d]
+          rem = rem / shape[d]
+          if !is_reduced[d] {
+            out_idx = out_idx + coord * out_strides[d]
+          }
+        }
+        acc[out_idx] = acc[out_idx] + src[linear]
+      }
+      return @tensor.Tensor::from_i32(out_shape, acc)
+    }
   }
   reduce_f32_impl(x, resolved, keepdims, noop_with_empty_axes, false, pool)
 }

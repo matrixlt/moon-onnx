@@ -160,6 +160,69 @@ pub fn matmul_f32(
     raise @tensor.ShapeMismatch("matmul_f32: inputs must have rank >= 1")
   }
 
+  // 零拷贝快速路径：当 B 为 2D 转置视图（如 LLM 共享词表权重 `Transpose(embed_tokens[N, K]) -> [K, N]`）时，
+  // 直接按行连续点积底层 `[N, K]` 缓冲，避免百兆级权重拷贝（SmolLM2 lm_head 节省 113 MB 内存与拷贝耗时）
+  if rb == 2 && ra >= 2 && b.offset == 0 {
+    let sb = b.shape()
+    let b_st = b.strides()
+    let k = sb[0]
+    let n = sb[1]
+    if b_st.length() == 2 && b_st[0] == 1 && b_st[1] == k {
+      match b.data {
+        @tensor.F32(b_raw) => {
+          let sa = a.shape()
+          if sa[ra - 1] != k {
+            raise @tensor.ShapeMismatch(
+              "matmul_f32: inner dimension mismatch (\{sa[ra - 1]} vs \{k})",
+            )
+          }
+          let mut m_tot = 1
+          for d = 0; d < ra - 1; d = d + 1 {
+            m_tot = m_tot * sa[d]
+          }
+          let a_buf = a.to_f32_buffer()
+          let out_buf = alloc_f32(pool, m_tot * n)
+          if use_simd {
+            @gemm.matmul_2d_nt_simd_f32(
+              a_buf, 0, b_raw, 0, out_buf, 0, m_tot, k, n,
+            )
+          } else {
+            let k4 = k - k % 4
+            for i = 0; i < m_tot; i = i + 1 {
+              let a_row = i * k
+              let o_row = i * n
+              for j = 0; j < n; j = j + 1 {
+                let b_row = j * k
+                let mut s0 : Float = (0.0 : Float)
+                let mut s1 : Float = (0.0 : Float)
+                let mut s2 : Float = (0.0 : Float)
+                let mut s3 : Float = (0.0 : Float)
+                let mut kk = 0
+                while kk < k4 {
+                  s0 = s0 + a_buf[a_row + kk] * b_raw[b_row + kk]
+                  s1 = s1 + a_buf[a_row + kk + 1] * b_raw[b_row + kk + 1]
+                  s2 = s2 + a_buf[a_row + kk + 2] * b_raw[b_row + kk + 2]
+                  s3 = s3 + a_buf[a_row + kk + 3] * b_raw[b_row + kk + 3]
+                  kk = kk + 4
+                }
+                let mut acc = s0 + s1 + (s2 + s3)
+                while kk < k {
+                  acc = acc + a_buf[a_row + kk] * b_raw[b_row + kk]
+                  kk = kk + 1
+                }
+                out_buf[o_row + j] = acc
+              }
+            }
+          }
+          let out_shape = sa.copy()
+          out_shape[ra - 1] = n
+          return @tensor.Tensor::from_f32(out_shape, out_buf)
+        }
+        _ => ()
+      }
+    }
+  }
+
   if ra == 2 && rb == 2 {
     let sa = a.shape()
     let sb = b.shape()

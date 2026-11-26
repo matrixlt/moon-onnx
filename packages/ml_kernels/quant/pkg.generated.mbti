@@ -20,6 +20,10 @@ pub fn matmul_integer_u8_i8_prepacked_to_f32_v128(FixedArray[Byte], Int32, Byte,
 
 pub fn matmul_integer_u8_i8_prepacked_v128(FixedArray[Byte], Int32, Byte, PackedInt8MatrixB, FixedArray[Byte]?, FixedArray[Int32], Int32, Int32) -> Unit
 
+pub fn matmul_nbits_q4_scalar_f32(FixedArray[Float], Int32, FixedArray[Byte], FixedArray[Float], FixedArray[Byte]?, FixedArray[Float]?, FixedArray[Float]?, FixedArray[Float], Int32, Int32, Int32, Int32, Int32) -> Unit
+
+pub fn matmul_nbits_q4_v128_f32(FixedArray[Float], Int32, FixedArray[Byte], FixedArray[Float], FixedArray[Byte]?, FixedArray[Float]?, FixedArray[Float]?, FixedArray[Float], Int32, Int32, Int32, Int32, Int32) -> Unit
+
 pub fn pack_int8_matrix_b(FixedArray[Byte], Int32, Int32) -> PackedInt8MatrixB
 
 pub fn qlinear_matmul_i8_pretransposed_v128(FixedArray[Byte], Int32, Float, Byte, FixedArray[Byte], Float, Byte, Float, Byte, FixedArray[Byte], Int32, Int32, Int32, Int32) -> Unit

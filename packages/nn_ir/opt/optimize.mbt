@@ -8,6 +8,7 @@ pub(all) struct OptStats {
   folded_conv_bias : Int32
   folded_conv_activation : Int32
   folded_layernorm : Int32
+  folded_silu : Int32
   pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }
@@ -805,6 +806,69 @@ fn pass_fold_layernorm(
 }
 
 ///|
+/// SiLU 算子融合 Pass：将 `Mul(x, Sigmoid(x))` 或 `Mul(Sigmoid(x), x)`（当 `Sigmoid` 输出仅被该 `Mul` 消费时）
+/// 自动折叠为单节点 `Silu(x)`，消除 50% 激活节点与中间激活内存往返（覆盖 Llama / Qwen / SmolLM2 / YOLOv8）。
+fn pass_fold_silu(
+  nodes : Array[@nn_ir.IrNode],
+  graph_outputs : Array[String],
+) -> (Array[@nn_ir.IrNode], Int32) {
+  let use_counts = count_tensor_uses(nodes, graph_outputs)
+  let sig_input_of : Map[String, String] = Map([])
+  for i = 0; i < nodes.length(); i = i + 1 {
+    let nd = nodes[i]
+    match nd.op {
+      @nn_ir.Sigmoid if nd.inputs.length() == 1 &&
+        nd.outputs.length() == 1 &&
+        nd.outputs[0] != "" => sig_input_of[nd.outputs[0]] = nd.inputs[0]
+      _ => ()
+    }
+  }
+  let out : Array[@nn_ir.IrNode] = []
+  let mut folded = 0
+  for i = 0; i < nodes.length(); i = i + 1 {
+    let nd = nodes[i]
+    match nd.op {
+      @nn_ir.Mul if nd.inputs.length() == 2 && nd.outputs.length() == 1 => {
+        let a = nd.inputs[0]
+        let b = nd.inputs[1]
+        let matched_x : String? = match sig_input_of.get(b) {
+          Some(x) if x == a =>
+            match use_counts.get(b) {
+              Some(1) => Some(x)
+              _ => None
+            }
+          _ =>
+            match sig_input_of.get(a) {
+              Some(x) if x == b =>
+                match use_counts.get(a) {
+                  Some(1) => Some(x)
+                  _ => None
+                }
+              _ => None
+            }
+        }
+        match matched_x {
+          Some(x) => {
+            out.push({
+              name: nd.name,
+              op: @nn_ir.Silu,
+              inputs: [x],
+              outputs: nd.outputs.copy(),
+            })
+            folded = folded + 1
+            continue
+          }
+          None => ()
+        }
+      }
+      _ => ()
+    }
+    out.push(nd)
+  }
+  (out, folded)
+}
+
+///|
 /// 递归优化 `If` 控制流节点内部的 `then_branch` 与 `else_branch` 子图，累加统计信息。
 fn pass_optimize_subgraphs(
   nodes : Array[@nn_ir.IrNode],
@@ -816,6 +880,7 @@ fn pass_optimize_subgraphs(
   let mut conv_bias = 0
   let mut conv_act = 0
   let mut ln_fold = 0
+  let mut silu_fold = 0
   let mut gemm_pt = 0
   let mut dead = 0
 
@@ -833,6 +898,7 @@ fn pass_optimize_subgraphs(
           s1.folded_conv_activation +
           s2.folded_conv_activation
         ln_fold = ln_fold + s1.folded_layernorm + s2.folded_layernorm
+        silu_fold = silu_fold + s1.folded_silu + s2.folded_silu
         gemm_pt = gemm_pt +
           s1.pretransposed_gemm_weights +
           s2.pretransposed_gemm_weights
@@ -856,6 +922,7 @@ fn pass_optimize_subgraphs(
       folded_conv_bias: conv_bias,
       folded_conv_activation: conv_act,
       folded_layernorm: ln_fold,
+      folded_silu: silu_fold,
       pretransposed_gemm_weights: gemm_pt,
       eliminated_dead_nodes: dead,
     },
@@ -889,8 +956,9 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     initializers,
     graph.outputs,
   )
+  let (n6b, folded_silu) = pass_fold_silu(n6, graph.outputs)
   let (n7, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(
-    n6, initializers,
+    n6b, initializers,
   )
   let (n8, eliminated_dead_nodes) = pass_dce(n7, graph.outputs)
 
@@ -910,6 +978,7 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     folded_conv_activation: folded_conv_activation +
     sub_stats.folded_conv_activation,
     folded_layernorm: folded_layernorm + sub_stats.folded_layernorm,
+    folded_silu: folded_silu + sub_stats.folded_silu,
     pretransposed_gemm_weights: pretransposed_gemm_weights +
     sub_stats.pretransposed_gemm_weights,
     eliminated_dead_nodes: eliminated_dead_nodes +

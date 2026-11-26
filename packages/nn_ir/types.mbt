@@ -178,6 +178,30 @@ pub(all) enum Op {
   DynamicQuantizeLinear
   /// 整数矩阵乘法 `MatMulInteger(A, B, a_zero_point?, b_zero_point?) -> Int32`（支持 N-D × 2D 与 INT8/UINT8 混合）
   MatMulInteger
+  /// SiLU / Swish 激活函数 `x * sigmoid(x)`（Llama / Qwen / SmolLM2 / YOLOv8 标配）
+  Silu
+  /// 均方根归一化 `RMSNormalization` / `SimplifiedLayerNormalization`
+  RmsNormalization(axis~ : Int32, epsilon~ : Float)
+  /// 融合残差加与均方根归一化 `com.microsoft::SkipSimplifiedLayerNormalization`（4 输出：`output, _, _, sum_out`）
+  SkipRmsNormalization(epsilon~ : Float)
+  /// 旋转位置编码 `com.microsoft::RotaryEmbedding`
+  RotaryEmbedding(
+    interleaved~ : Int32,
+    num_heads~ : Int32,
+    rotary_embedding_dim~ : Int32,
+  )
+  /// 分组查询注意力 `com.microsoft::GroupQueryAttention`（3 输出：`output, present_key, present_value`）
+  GroupQueryAttention(
+    num_heads~ : Int32,
+    kv_num_heads~ : Int32,
+    scale~ : Float,
+    local_window_size~ : Int32,
+    softcap~ : Float,
+    do_rotary~ : Int32,
+    rotary_interleaved~ : Int32,
+  )
+  /// 4-bit / N-bit 分块量化矩阵乘法 `com.microsoft::MatMulNBits`
+  MatMulNBits(k~ : Int32, n~ : Int32, bits~ : Int32, block_size~ : Int32)
 }
 
 ///|
@@ -250,6 +274,12 @@ pub fn Op::name(self : Op) -> String {
     If(..) => "If"
     DynamicQuantizeLinear => "DynamicQuantizeLinear"
     MatMulInteger => "MatMulInteger"
+    Silu => "Silu"
+    RmsNormalization(..) => "RMSNormalization"
+    SkipRmsNormalization(..) => "SkipRMSNormalization"
+    RotaryEmbedding(..) => "RotaryEmbedding"
+    GroupQueryAttention(..) => "GroupQueryAttention"
+    MatMulNBits(..) => "MatMulNBits"
   }
 }
 

@@ -8,6 +8,8 @@ import {
 // Values
 pub fn apply_epilogue_scalar(Float, Epilogue) -> Float
 
+pub fn matmul_2d_nt_simd_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32) -> Unit
+
 pub fn matmul_2d_prepacked_nchw_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float]?, Int32, FixedArray[Float], Int32, Int32, epilogue? : Epilogue) -> Unit
 
 pub fn matmul_2d_prepacked_simd_f32(FixedArray[Float], Int32, PackedMatrixB, FixedArray[Float], Int32, Int32) -> Unit

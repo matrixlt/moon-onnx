@@ -24,19 +24,20 @@
 
 ## 核心亮点与实测数据
 
-- **61 个高频 ONNX 算子（含 `If` 控制流、完整 Transformer/NLP 与动态 INT8 量化套件）**：覆盖视觉（`Conv1D`/`Conv2D`/Depthwise、`MaxPool`/`AveragePool`/`GlobalAveragePool`、`Resize`、`BatchNormalization`）、语音/时序（多输出 `LSTM`、`If` 条件分支子图）、Transformer/NLP（`LayerNormalization` + 9 节点自动融合、`Erf`/`Gelu`/`HardSwish`、N-D 预打包 `MatMul`/`Gemm`、`Softmax`、`Where`/`Range`/`Expand`/`Tile`、完整比较与逻辑族 `Equal`/`Less`/`Greater`/`LessOrEqual`/`GreaterOrEqual`/`Not`/`And`）、张量变换（`Split`/`Concat`/`Slice`/`Pad`/`Gather` 含 `UInt8`/`Int8` 词表/`Transpose`/`Cast`/`Shape`/`ReduceMean`/`ReduceSum`）与静态/动态量化（`QuantizeLinear`/`DequantizeLinear`/`QLinearMatMul`/`DynamicQuantizeLinear`/`MatMulInteger`）。
-- **真实开源生产模型端到端打通 + `onnx2mbt` 零分配 Wasm AOT 实测（Node.js V8，对比官方 ONNX Runtime 1.32.0）**：
+- **67 个高频 ONNX 算子（含现代生成式 Q4 LLM 套件、`If` 控制流与动态 INT8 量化）**：覆盖生成式 LLM（`MatMulNBits` 4-bit 奇偶拆分 V128 内核、`RMSNormalization`/`SkipSimplifiedLayerNormalization`、`RotaryEmbedding`、`GroupQueryAttention` 含流式在线 Softmax 与 KV-Cache、`Silu` 自动融合）、视觉（`Conv1D`/`Conv2D`/Depthwise、`MaxPool`/`AveragePool`/`GlobalAveragePool`、`Resize`、`BatchNormalization`）、语音/时序（多输出 `LSTM`、`If` 条件分支子图）、Transformer/NLP（`LayerNormalization` + 9 节点自动融合、`Erf`/`Gelu`/`HardSwish`、N-D 预打包与零拷贝转置 `MatMul`/`Gemm`、`Softmax`、`Where`/`Range`/`Expand`/`Tile`、完整比较与逻辑族）与静态/动态量化（`QuantizeLinear`/`DequantizeLinear`/`QLinearMatMul`/`DynamicQuantizeLinear`/`MatMulInteger`）。
+- **真实开源生产模型端到端打通 + 实测数据（MoonBit 1.0 RC1，对比官方 ONNX Runtime 1.32.0）**：
 
-| 真实开源模型 | Wasm 目标 | `.wasm` 体积（raw / gzip） | 静态 Arena RAM | 误差（vs ORT） | 实测速度 |
+| 真实开源模型 | 运行模式 / 目标 | 产物体积（raw / gzip） | 静态 Arena RAM | 误差（vs ORT） | 实测速度 |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Silero VAD v5** (16kHz 流式) | `wasm-gc` Arena | **7.9 KB / 3.8 KB** | **13.8 KB** | `1.17e-7` | **1.05 ms/帧（30.6× 实时）** |
-| **Silero VAD v5** (16kHz 流式) | `wasm` V128 Arena | 25.9 KB / 13.3 KB | **13.8 KB** | `1.17e-7` | **1.04 ms/帧（30.7× 实时）** |
-| **MobileNetV2-12** (3.49M, 224²) | `wasm-gc` Arena | **12.1 KB / 4.6 KB** | 7.64 MB（省 78%） | `1.17e-5`（Top-1 一致） | 582 ms（Native 114 ms） |
-| **MobileNetV2-12** (3.49M, 224²) | `wasm` V128 Arena | 31.8 KB / 15.8 KB | 7.64 MB（省 78%） | `1.06e-5`（Top-1 一致） | 663 ms（Native 114 ms） |
-| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm-gc` Arena | **21.5 KB / 7.4 KB** | **312.1 KB（省 95.7%）** | `3.78e-6` | 319 ms（Native `seq=8/16`: 94/121 ms） |
-| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm` V128 Arena | 50.1 KB / 25.4 KB | **312.1 KB（省 95.7%）** | `3.95e-6` | **209.7 ms（4.8 emb/s）** |
-| **all-MiniLM-L6-v2 INT8** (**21.5 MB**, 4× 压缩) | `wasm` V128 `i32x4.dot` | **79.2 KB / 39.5 KB** | **336.1 KB（省 96.4%）** | **`1.07e-6`** | **75.2 ms（13.3 emb/s, 2.79× FP32）** |
-| **MNIST CNN** (外置 / 单文件内嵌) | `wasm-gc` Arena | **3.2 KB / 1.8 KB**（内嵌 26.8 KB） | 12.9 KB | `8.34e-7` | **627–641 FPS** |
+| **SmolLM2-135M-Instruct Q4** (30 层, 174 MB) | Native V128 `Session` (Q4 + KV-Cache) | 纯 MoonBit 零 FFI | 零拷贝 `lm_head` | **`5.44e-5`**（Token 100% 一致） | **107.0 ms/tok（9.4 tok/s）** |
+| **Silero VAD v5** (16kHz 流式) | `wasm-gc` Arena | **7.9 KB / 3.8 KB** | **13.8 KB** | `1.17e-7` | **1.07 ms/帧（29.8× 实时）** |
+| **Silero VAD v5** (16kHz 流式) | `wasm` V128 Arena | 25.9 KB / 13.3 KB | **13.8 KB** | `1.17e-7` | **0.93 ms/帧（34.6× 实时）** |
+| **MobileNetV2-12** (3.49M, 224²) | `wasm-gc` Arena | **12.1 KB / 4.6 KB** | 7.64 MB（省 78%） | `1.17e-5`（Top-1 一致） | **530.7 ms**（Native 114 ms） |
+| **MobileNetV2-12** (3.49M, 224²) | `wasm` V128 Arena | 31.8 KB / 15.8 KB | 7.64 MB（省 78%） | `1.06e-5`（Top-1 一致） | 654.1 ms（Native 114 ms） |
+| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm-gc` Arena | **21.5 KB / 7.4 KB** | **312.1 KB（省 95.7%）** | `3.78e-6` | 323.6 ms（Native `seq=8/16`: 94/121 ms） |
+| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm` V128 Arena | 50.1 KB / 25.4 KB | **312.1 KB（省 95.7%）** | `3.95e-6` | **200.5 ms（5.0 emb/s）** |
+| **all-MiniLM-L6-v2 INT8** (**21.5 MB**, 4× 压缩) | `wasm` V128 `i32x4.dot` | **79.1 KB / 39.4 KB** | **336.1 KB（省 96.4%）** | **`1.07e-6`** | **85.3 ms（11.7 emb/s）** |
+| **MNIST CNN** (外置 / 单文件内嵌) | `wasm-gc` Arena | **3.2 KB / 1.8 KB**（内嵌 26.8 KB） | 12.9 KB | `8.34e-7` | **651–654 FPS** |
 
 - **Node.js V8 Wasm `V128` SIMD 算子实测加速**：`GEMM 128³` **19.4×**，`INT8 QLinearMatMul 128³ (i32x4.dot)` **25.4×**，`Conv2D + Relu` **10.9×**，`Relu 65K` **37.8×**。
 

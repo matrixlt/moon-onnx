@@ -217,7 +217,9 @@ fn can_emit_arena(
       return false
     }
     let is_multi_out = match node.op {
-      @nn_ir.Split(..) | @nn_ir.DynamicQuantizeLinear => true
+      @nn_ir.Split(..)
+      | @nn_ir.DynamicQuantizeLinear
+      | @nn_ir.SkipRmsNormalization(..) => true
       _ => false
     }
     if !is_multi_out && (node.outputs.length() != 1 || node.outputs[0] == "") {
@@ -238,6 +240,7 @@ fn can_emit_arena(
       | @nn_ir.Sigmoid
       | @nn_ir.Tanh
       | @nn_ir.Gelu
+      | @nn_ir.Silu
       | @nn_ir.Erf
       | @nn_ir.HardSwish
       | @nn_ir.LeakyRelu(..)
@@ -246,7 +249,36 @@ fn can_emit_arena(
       | @nn_ir.Neg
       | @nn_ir.GlobalAveragePool
       | @nn_ir.Softmax(..)
-      | @nn_ir.LayerNormalization(..) => true
+      | @nn_ir.LayerNormalization(..)
+      | @nn_ir.RmsNormalization(..) => true
+      @nn_ir.SkipRmsNormalization(..) =>
+        ins.length() >= 3 &&
+        graph.initializers.contains(ins[2]) &&
+        (
+          ins.length() < 4 ||
+          ins[3] == "" ||
+          graph.initializers.contains(ins[3])
+        )
+      @nn_ir.RotaryEmbedding(..) =>
+        ins.length() >= 4 &&
+        input_or_alias_i64.contains(ins[1]) &&
+        graph.initializers.contains(ins[2]) &&
+        graph.initializers.contains(ins[3])
+      @nn_ir.MatMulNBits(bits~, ..) =>
+        bits == 4 &&
+        ins.length() >= 3 &&
+        graph.initializers.contains(ins[1]) &&
+        graph.initializers.contains(ins[2]) &&
+        (
+          ins.length() < 4 ||
+          ins[3] == "" ||
+          graph.initializers.contains(ins[3])
+        ) &&
+        (
+          ins.length() < 6 ||
+          ins[5] == "" ||
+          graph.initializers.contains(ins[5])
+        )
       @nn_ir.DynamicQuantizeLinear =>
         ins.length() >= 1 &&
         node.outputs.length() >= 3 &&
