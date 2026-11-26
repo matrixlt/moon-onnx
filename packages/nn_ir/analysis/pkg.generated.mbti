@@ -1,0 +1,28 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/nn_ir/analysis"
+
+import {
+  "matrixlt/nn_ir",
+  "matrixlt/tensor",
+}
+
+// Values
+pub fn clamp_slice_bound_static(Int64, Int32, Int32) -> Int32
+
+pub fn infer_node_output_dtypes(@nn_ir.IrNode, Map[String, @tensor.DType]) -> Unit
+
+pub fn infer_node_output_shapes(@nn_ir.IrNode, Map[String, Array[Int32]], Map[String, @tensor.Tensor]) -> Array[Array[Int32]] raise @nn_ir.IrError
+
+pub fn infer_spatial_dim(Int32, Int32, Int32, Int32, Int32, Int32, @nn_ir.AutoPad, Bool) -> Int32
+
+pub fn infer_static_dtypes(@nn_ir.IrGraph, Map[String, @tensor.DType]) -> Map[String, @tensor.DType]
+
+pub fn infer_static_shapes(@nn_ir.IrGraph, Map[String, Array[Int32]]) -> Map[String, Array[Int32]] raise @nn_ir.IrError
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

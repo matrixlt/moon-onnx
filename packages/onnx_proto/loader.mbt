@@ -327,11 +327,11 @@ fn parse_value_info(vi : @schema.ValueInfoProto) -> ValueSpec {
                 let d = ts.dim[i]
                 match d.value {
                   @schema.TensorShapeProto_Dimension_Value::DimValue(v) =>
-                    shape.push(Static(v.to_int()))
+                    shape.push(@tensor.Static(v.to_int()))
                   @schema.TensorShapeProto_Dimension_Value::DimParam(p) =>
-                    shape.push(Symbolic(p))
+                    shape.push(@tensor.Sym(p))
                   @schema.TensorShapeProto_Dimension_Value::NotSet =>
-                    shape.push(Unknown)
+                    shape.push(@tensor.Unknown)
                 }
               }
             None => ()

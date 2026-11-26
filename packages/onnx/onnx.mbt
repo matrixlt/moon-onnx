@@ -1,5 +1,6 @@
 ///|
-/// `matrixlt/onnx` 根包门面：对外提供简洁稳定的推理引擎入口。
+/// `matrixlt/onnx` 根包门面（100% 纯内存、四端通用）：对外提供简洁稳定的 ONNX 推理引擎入口。
+/// 本地文件系统读取入口请使用 `matrixlt/onnx/fs`，静态 AOT 编译（`onnx2mbt`）请使用独立模块 `matrixlt/onnx_aot`。
 pub type Session = @session.Session
 
 ///|
@@ -35,33 +36,15 @@ pub type CpuSimdProvider = @session.CpuSimdProvider
 ///|
 /// 返回当前引擎版本字符串。
 pub fn engine_version() -> String {
-  "moon-onnx 0.2.0"
+  "moon-onnx 0.4.0"
 }
 
 ///|
-/// 从内存 `.onnx` 字节流加载模型元信息与权重。
+/// 从内存 `.onnx` 字节流加载模型元信息与权重（全平台通用）。
 pub fn load_model_from_bytes(
   bytes : Bytes,
 ) -> OnnxModel raise @onnx_proto.ModelError {
   @onnx_proto.load_model_from_bytes(bytes)
-}
-
-///|
-/// 从本地文件路径加载 `.onnx` 模型。
-pub fn load_model_from_file(
-  path : String,
-) -> OnnxModel raise @onnx_proto.ModelError {
-  @onnx_fs.load_model_from_file(path)
-}
-
-///|
-/// 从本地 `.onnx` 文件直接创建推理会话。
-pub fn session_from_file(
-  path : String,
-  backend~ : BackendKind = @session.Scalar,
-  optimize~ : Bool = true,
-) -> Session raise RuntimeError {
-  @session.Session::from_file(path, backend~, optimize~)
 }
 
 ///|
@@ -75,49 +58,10 @@ pub fn session_from_bytes(
 }
 
 ///|
-/// 从小端序 `.f32` 文件读取张量。
-pub fn load_f32_file(
-  path : String,
-  shape : Array[Int32],
-) -> Tensor raise RuntimeError {
-  @session.load_f32_file(path, shape)
-}
-
-///|
 /// 计算两个 Float32 张量之间的最大绝对误差。
 pub fn max_abs_diff_f32(
   actual : Tensor,
   expected : Tensor,
 ) -> Float raise RuntimeError {
   @session.max_abs_diff_f32(actual, expected)
-}
-
-///|
-pub type CodegenConfig = @codegen.CodegenConfig
-
-///|
-pub type AotArtifact = @codegen.AotArtifact
-
-///|
-/// 将已加载的 `OnnxModel` 静态编译为独立、零 Map、零 Protobuf 的 MoonBit 推理源码与权重包（`onnx2mbt`）。
-pub fn compile_model_to_mbt(
-  m : OnnxModel,
-  input_shapes : Map[String, Array[Int32]],
-  config~ : CodegenConfig = @codegen.CodegenConfig::default(),
-) -> AotArtifact raise RuntimeError {
-  let graph = @frontend.lower_onnx_model(m) catch {
-    e => raise @session.IrErr("\{e}")
-  }
-  let merged_dtypes : Map[String, @tensor.DType] = Map([])
-  for i = 0; i < m.inputs.length(); i = i + 1 {
-    match m.inputs[i].dtype {
-      Some(dt) => merged_dtypes[m.inputs[i].name] = dt
-      None => ()
-    }
-  }
-  config.input_dtypes.each(fn(k, v) { merged_dtypes[k] = v })
-  let eff_cfg : CodegenConfig = { ..config, input_dtypes: merged_dtypes, }
-  @codegen.compile_graph_to_mbt(graph, input_shapes, config=eff_cfg) catch {
-    e => raise @session.IrErr("AOT codegen failed: \{e}")
-  }
 }

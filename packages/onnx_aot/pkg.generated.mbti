@@ -1,14 +1,17 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "matrixlt/onnx/codegen"
+package "matrixlt/onnx_aot"
 
 import {
   "matrixlt/nn_ir",
+  "matrixlt/onnx_proto",
   "matrixlt/tensor",
   "moonbitlang/core/debug",
 }
 
 // Values
 pub fn compile_graph_to_mbt(@nn_ir.IrGraph, Map[String, Array[Int32]], config? : CodegenConfig) -> AotArtifact raise CodegenError
+
+pub fn compile_model_to_mbt(@onnx_proto.OnnxModel, Map[String, Array[Int32]], config? : CodegenConfig) -> AotArtifact raise CodegenError
 
 pub fn infer_static_dtypes(@nn_ir.IrGraph, Map[String, @tensor.DType]) -> Map[String, @tensor.DType]
 

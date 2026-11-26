@@ -28,23 +28,8 @@ pub impl Show for ModelError with fn output(self, logger) {
 }
 
 ///|
-/// ONNX 张量输入/输出的维度规格（支持静态整数维度、符号动态维度与未知维度）。
-#derive(Debug, Eq)
-pub(all) enum DimSpec {
-  Static(Int32)
-  Symbolic(String)
-  Unknown
-}
-
-///|
-/// 将单个维度规格格式化为简洁字符串。
-pub fn DimSpec::to_label(self : DimSpec) -> String {
-  match self {
-    Static(n) => n.to_string()
-    Symbolic(name) => name
-    Unknown => "?"
-  }
-}
+/// ONNX 张量输入/输出的维度规格：直接复用 Layer 0 `@tensor.SymDim`（消除跨层重复枚举定义）。
+pub type DimSpec = @tensor.SymDim
 
 ///|
 /// 计算图的输入或输出签名（名称、数据类型与维度规格）。
@@ -100,7 +85,7 @@ pub struct OnnxModel {
   initializers : Map[String, @tensor.Tensor]
   /// 保持初始权重在模型文件中的原始顺序，便于稳定输出摘要
   initializer_order : Array[String]
-  /// 保留原始 NodeProto 列表，交由 src/ir 进一步 Lowering 为强类型算子图
+  /// 保留原始 NodeProto 列表，交由 `matrixlt/onnx/frontend` 进一步 Lowering 为强类型算子图
   nodes : Array[@schema.NodeProto]
 }
 

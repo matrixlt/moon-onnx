@@ -1,10 +1,7 @@
 ///|
-/// 单节点执行上下文，向 `ExecutionProvider` 传递运行期张量环境、预打包权重缓存与 `BufferPool`。
+/// 单节点执行上下文，向 `ExecutionProvider` 传递纯运行期张量环境与 `BufferPool`（不泄露具体后端私有权重格式）。
 pub struct EvalContext {
   env : Map[String, @tensor.Tensor]
-  packed_weights : Map[String, @gemm.PackedMatrixB]
-  packed_conv_weights : Map[String, @ops.PackedConvWeight]
-  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   scratch_pool : @tensor.BufferPool
   out_pool : @tensor.BufferPool?
 }
@@ -60,18 +57,146 @@ pub fn EvalContext::optional_tensor(
 pub(open) trait ExecutionProvider {
   /// 返回后端唯一标识名称（如 `"scalar"`、`"simd-v128"`、`"webgpu"`）
   fn name(Self) -> String
-  /// 指示会话初始化期是否需要预打包静态 2D/4D Float32 权重
-  fn uses_prepacked_weights(Self) -> Bool
+  /// 指示后端是否采用 SIMD 加速路径（默认 `false`）
+  fn is_simd(Self) -> Bool = _
+  /// 会话初始化期图准备钩子：由后端私有完成静态权重预打包或设备上传（默认空操作）
+  fn prepare_graph(Self, @nn_ir.IrGraph) -> Unit = _
+  /// 查询后端已预打包的静态权重总数（供诊断与测试使用，默认返回 0）
+  fn packed_weight_count(Self) -> Int32 = _
+  /// 查询后端已预打包的静态卷积权重数（供诊断与测试使用，默认返回 0）
+  fn packed_conv_weight_count(Self) -> Int32 = _
   /// 执行单个强类型 IR 节点并返回主输出张量
   fn eval_node(Self, @nn_ir.IrNode, EvalContext) -> @tensor.Tensor raise RuntimeError
-  /// 执行可能产生多个输出张量的 IR 节点（例如 `Split`），默认退化为单输出包装
+  /// 执行可能产生多个输出张量的 IR 节点（例如 `Split`、`LSTM`、`DynamicQuantizeLinear`、`If`），默认退化为单输出包装
   fn eval_node_multi(Self, @nn_ir.IrNode, EvalContext) -> Array[@tensor.Tensor] raise RuntimeError = _
+}
+
+///|
+impl ExecutionProvider with fn is_simd(_self) {
+  false
+}
+
+///|
+impl ExecutionProvider with fn prepare_graph(_self, _graph) {
+  ()
+}
+
+///|
+impl ExecutionProvider with fn packed_weight_count(_self) {
+  0
+}
+
+///|
+impl ExecutionProvider with fn packed_conv_weight_count(_self) {
+  0
 }
 
 ///|
 /// `ExecutionProvider::eval_node_multi` 默认实现：直接复用单输出 `eval_node`。
 impl ExecutionProvider with fn eval_node_multi(self, node, ctx) {
   [self.eval_node(node, ctx)]
+}
+
+///|
+/// `CpuSimdProvider` 私有静态权重预打包缓存（不暴露给 `Session` 或 `EvalContext`）。
+priv struct CpuWeightCache {
+  packed_weights : Map[String, @gemm.PackedMatrixB]
+  packed_conv_weights : Map[String, @ops.PackedConvWeight]
+  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
+}
+
+///|
+/// 扫描计算图并将所有静态 2D/4D Float32 权重与 2D Int8 量化权重离线预打包写入 `CpuWeightCache`。
+fn CpuWeightCache::prepare(
+  self : CpuWeightCache,
+  graph : @nn_ir.IrGraph,
+) -> Unit {
+  for i = 0; i < graph.nodes.length(); i = i + 1 {
+    let node = graph.nodes[i]
+    if node.inputs.length() < 2 {
+      continue
+    }
+    let w_name = node.inputs[1]
+    match node.op {
+      @nn_ir.MatMul =>
+        if !self.packed_weights.contains(w_name) {
+          match graph.initializers.get(w_name) {
+            Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Float32 => {
+              let ws = w_t.shape()
+              try {
+                let w_buf = w_t.to_f32_buffer()
+                self.packed_weights[w_name] = @gemm.pack_matrix_b_f32(
+                  w_buf,
+                  0,
+                  ws[0],
+                  ws[1],
+                )
+              } catch {
+                _ => ()
+              }
+            }
+            _ => ()
+          }
+        }
+      @nn_ir.Gemm(trans_b~, ..) => {
+        let key = if trans_b { "\{w_name}#T" } else { w_name }
+        if !self.packed_weights.contains(key) {
+          match graph.initializers.get(w_name) {
+            Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Float32 => {
+              let ws = w_t.shape()
+              try {
+                let w_buf = w_t.to_f32_buffer()
+                self.packed_weights[key] = if trans_b {
+                  @gemm.pack_matrix_b_transposed_f32(w_buf, 0, ws[0], ws[1])
+                } else {
+                  @gemm.pack_matrix_b_f32(w_buf, 0, ws[0], ws[1])
+                }
+              } catch {
+                _ => ()
+              }
+            }
+            _ => ()
+          }
+        }
+      }
+      @nn_ir.Conv(group~, ..) => {
+        let key = "\{w_name}#g\{group}"
+        if !self.packed_conv_weights.contains(key) {
+          match graph.initializers.get(w_name) {
+            Some(w_t) if (w_t.rank() == 4 || w_t.rank() == 3) &&
+              w_t.dtype() == @tensor.Float32 =>
+              try {
+                self.packed_conv_weights[key] = @ops.pack_conv2d_weight_f32(
+                  w_t, group,
+                )
+              } catch {
+                _ => ()
+              }
+            _ => ()
+          }
+        }
+      }
+      @nn_ir.MatMulInteger =>
+        if !self.packed_i8_weights.contains(w_name) {
+          match graph.initializers.get(w_name) {
+            Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Int8 => {
+              let ws = w_t.shape()
+              try {
+                self.packed_i8_weights[w_name] = @quant.pack_int8_matrix_b(
+                  w_t.to_i8_buffer(),
+                  ws[0],
+                  ws[1],
+                )
+              } catch {
+                _ => ()
+              }
+            }
+            _ => ()
+          }
+        }
+      _ => ()
+    }
+  }
 }
 
 ///|
@@ -85,21 +210,30 @@ pub fn CpuScalarProvider::new() -> CpuScalarProvider {
 }
 
 ///|
-/// 内置基于 MoonBit 原生 `V128` SIMD 与静态权重预打包的高性能 CPU/Wasm 执行后端。
-pub struct CpuSimdProvider {}
-
-///|
-/// 创建 `V128` SIMD 执行后端实例。
-pub fn CpuSimdProvider::new() -> CpuSimdProvider {
-  CpuSimdProvider::{ }
+/// 内置基于 MoonBit 原生 `V128` SIMD 与私有静态权重预打包缓存的高性能 CPU/Wasm 执行后端。
+pub struct CpuSimdProvider {
+  priv cache : CpuWeightCache
 }
 
 ///|
-/// 内置 CPU 算子分派核心实现，由 `CpuScalarProvider` 与 `CpuSimdProvider` 共享。
-fn eval_cpu_node(
+/// 创建 `V128` SIMD 执行后端实例（私有权重缓存在 `Session::with_provider` 调用 `prepare_graph` 时填充）。
+pub fn CpuSimdProvider::new() -> CpuSimdProvider {
+  {
+    cache: {
+      packed_weights: Map([]),
+      packed_conv_weights: Map([]),
+      packed_i8_weights: Map([]),
+    },
+  }
+}
+
+///|
+/// 内置 CPU 单输出算子分派核心实现，由 `CpuScalarProvider` 与 `CpuSimdProvider` 共享。
+fn eval_cpu_node_single(
   node : @nn_ir.IrNode,
   ctx : EvalContext,
   use_simd : Bool,
+  cache : CpuWeightCache?,
 ) -> @tensor.Tensor raise RuntimeError {
   let n = node.name
   let ins = node.inputs
@@ -212,8 +346,13 @@ fn eval_cpu_node(
       @nn_ir.MatMul => {
         let a = ctx.require_tensor(n, ins, 0)
         if use_simd && a.rank() >= 2 && ins.length() >= 2 {
-          match ctx.packed_weights.get(ins[1]) {
-            Some(pb) => return @ops.matmul_prepacked_f32(a, pb, pool=out_pool)
+          match cache {
+            Some(c) =>
+              match c.packed_weights.get(ins[1]) {
+                Some(pb) =>
+                  return @ops.matmul_prepacked_f32(a, pb, pool=out_pool)
+                None => ()
+              }
             None => ()
           }
         }
@@ -225,17 +364,21 @@ fn eval_cpu_node(
         let c = ctx.optional_tensor(n, ins, 2)
         if use_simd && ins.length() >= 2 {
           let key = if trans_b { "\{ins[1]}#T" } else { ins[1] }
-          match ctx.packed_weights.get(key) {
-            Some(pb) =>
-              return @ops.gemm_prepacked_f32(
-                a,
-                pb,
-                c,
-                alpha~,
-                beta~,
-                trans_a~,
-                pool=out_pool,
-              )
+          match cache {
+            Some(cc) =>
+              match cc.packed_weights.get(key) {
+                Some(pb) =>
+                  return @ops.gemm_prepacked_f32(
+                    a,
+                    pb,
+                    c,
+                    alpha~,
+                    beta~,
+                    trans_a~,
+                    pool=out_pool,
+                  )
+                None => ()
+              }
             None => ()
           }
         }
@@ -265,20 +408,24 @@ fn eval_cpu_node(
         let b = ctx.optional_tensor(n, ins, 2)
         if use_simd && ins.length() >= 2 {
           let key = "\{ins[1]}#g\{group}"
-          match ctx.packed_conv_weights.get(key) {
-            Some(pw) =>
-              return @ops.conv2d_prepacked_f32(
-                x,
-                pw,
-                b,
-                strides,
-                pads,
-                dilations,
-                auto_pad,
-                activation~,
-                pool=out_pool,
-                scratch_pool=Some(scratch_pool),
-              )
+          match cache {
+            Some(cc) =>
+              match cc.packed_conv_weights.get(key) {
+                Some(pw) =>
+                  return @ops.conv2d_prepacked_f32(
+                    x,
+                    pw,
+                    b,
+                    strides,
+                    pads,
+                    dilations,
+                    auto_pad,
+                    activation~,
+                    pool=out_pool,
+                    scratch_pool=Some(scratch_pool),
+                  )
+                None => ()
+              }
             None => ()
           }
         }
@@ -371,19 +518,13 @@ fn eval_cpu_node(
         }
         @ops.concat_op(tensors, axis, pool=out_pool)
       }
-      @nn_ir.Split(axis~, split~, num_outputs~) => {
-        let x = ctx.require_tensor(n, ins, 0)
-        let split_t = ctx.optional_tensor(n, ins, 1)
-        let n_out = match num_outputs {
-          Some(k) => k
-          None => node.outputs.length()
-        }
-        let parts = @ops.split_op(x, axis, split, split_t, n_out, pool=out_pool)
-        if parts.length() == 0 {
-          raise TensorErr("node '\{n}' (Split) produced 0 outputs")
-        }
-        parts[0]
-      }
+      @nn_ir.Split(..)
+      | @nn_ir.Lstm(..)
+      | @nn_ir.DynamicQuantizeLinear
+      | @nn_ir.If(..) =>
+        raise TensorErr(
+          "internal error: multi-output op '\{node.op.name()}' must be dispatched via eval_cpu_node_multi",
+        )
       @nn_ir.Slice(starts~, ends~, axes~, steps~) => {
         let x = ctx.require_tensor(n, ins, 0)
         let resolved_starts : Array[Int64] = match
@@ -562,31 +703,6 @@ fn eval_cpu_node(
           pool=out_pool,
         )
       }
-      @nn_ir.Lstm(hidden_size~, direction~, layout~, clip~) => {
-        let x = ctx.require_tensor(n, ins, 0)
-        let w = ctx.require_tensor(n, ins, 1)
-        let r = ctx.require_tensor(n, ins, 2)
-        let b = ctx.optional_tensor(n, ins, 3)
-        let seq_lens = ctx.optional_tensor(n, ins, 4)
-        let init_h = ctx.optional_tensor(n, ins, 5)
-        let init_c = ctx.optional_tensor(n, ins, 6)
-        let peepholes = ctx.optional_tensor(n, ins, 7)
-        let outs = @ops.lstm_f32(
-          x,
-          w,
-          r,
-          b,
-          seq_lens,
-          init_h,
-          init_c,
-          peepholes,
-          hidden_size~,
-          direction~,
-          layout~,
-          clip~,
-        )
-        outs[0]
-      }
       @nn_ir.Equal => {
         let a = ctx.require_tensor(n, ins, 0)
         let b = ctx.require_tensor(n, ins, 1)
@@ -651,41 +767,24 @@ fn eval_cpu_node(
         let shape_t = ctx.require_tensor(n, ins, 0)
         @ops.constant_of_shape_op(shape_t, value)
       }
-      @nn_ir.If(then_branch~, else_branch~) => {
-        let cond_t = ctx.require_tensor(n, ins, 0)
-        let cond = read_scalar_bool(n, cond_t)
-        let branch = if cond { then_branch } else { else_branch }
-        let sub_sess = Session::from_graph(
-          branch,
-          backend=if use_simd { Simd } else { Scalar },
-        )
-        let outs = sub_sess.run_subgraph(ctx.env)
-        if outs.length() == 0 {
-          raise TensorErr("node '\{n}' (If) produced 0 outputs")
-        }
-        outs[0]
-      }
-      @nn_ir.DynamicQuantizeLinear => {
-        let x = ctx.require_tensor(n, ins, 0)
-        let (y, _, _) = @ops.dynamic_quantize_linear_op(x)
-        y
-      }
       @nn_ir.MatMulInteger => {
         let a = ctx.require_tensor(n, ins, 0)
         let a_zp = ctx.optional_tensor(n, ins, 2)
         let b_zp = ctx.optional_tensor(n, ins, 3)
-        if use_simd && ins.length() >= 2 {
-          match ctx.packed_i8_weights.get(ins[1]) {
-            Some(packed_b) if a.dtype() == @tensor.UInt8 =>
-              @ops.matmul_integer_prepacked_op(a, packed_b, a_zp, b_zp)
-            _ => {
-              let b = ctx.require_tensor(n, ins, 1)
-              @ops.matmul_integer_op(a, b, a_zp, b_zp, use_simd~)
+        match cache {
+          Some(c) if use_simd && ins.length() >= 2 =>
+            match c.packed_i8_weights.get(ins[1]) {
+              Some(packed_b) if a.dtype() == @tensor.UInt8 =>
+                @ops.matmul_integer_prepacked_op(a, packed_b, a_zp, b_zp)
+              _ => {
+                let b = ctx.require_tensor(n, ins, 1)
+                @ops.matmul_integer_op(a, b, a_zp, b_zp, use_simd~)
+              }
             }
+          _ => {
+            let b = ctx.require_tensor(n, ins, 1)
+            @ops.matmul_integer_op(a, b, a_zp, b_zp, use_simd~)
           }
-        } else {
-          let b = ctx.require_tensor(n, ins, 1)
-          @ops.matmul_integer_op(a, b, a_zp, b_zp, use_simd~)
         }
       }
     }
@@ -720,11 +819,13 @@ fn read_scalar_bool(
 }
 
 ///|
-/// 内置 CPU 多输出节点分派入口（针对 `Split`、`LSTM`、`If` 与 `DynamicQuantizeLinear` 返回全部输出张量，其余节点复用 `eval_cpu_node`）。
+/// 内置 CPU 统一算子分派入口：集中处理 `Split`、`LSTM`、`DynamicQuantizeLinear` 与 `If` 多输出节点，
+/// 其余单输出算子委托给 `eval_cpu_node_single`，彻底消除单/多输出重复分派代码。
 fn eval_cpu_node_multi(
   node : @nn_ir.IrNode,
   ctx : EvalContext,
   use_simd : Bool,
+  cache : CpuWeightCache?,
 ) -> Array[@tensor.Tensor] raise RuntimeError {
   match node.op {
     @nn_ir.Split(axis~, split~, num_outputs~) => {
@@ -799,8 +900,25 @@ fn eval_cpu_node_multi(
       )
       sub_sess.run_subgraph(ctx.env)
     }
-    _ => [eval_cpu_node(node, ctx, use_simd)]
+    _ => [eval_cpu_node_single(node, ctx, use_simd, cache)]
   }
+}
+
+///|
+/// 内置 CPU 单输出分派包装：复用 `eval_cpu_node_multi` 并取第 0 个输出张量。
+fn eval_cpu_node(
+  node : @nn_ir.IrNode,
+  ctx : EvalContext,
+  use_simd : Bool,
+  cache : CpuWeightCache?,
+) -> @tensor.Tensor raise RuntimeError {
+  let outs = eval_cpu_node_multi(node, ctx, use_simd, cache)
+  if outs.length() == 0 {
+    raise TensorErr(
+      "node '\{node.name}' (\{node.op.name()}) produced 0 outputs",
+    )
+  }
+  outs[0]
 }
 
 ///|
@@ -809,19 +927,12 @@ pub impl ExecutionProvider for CpuScalarProvider with fn name(_self) {
 }
 
 ///|
-pub impl ExecutionProvider for CpuScalarProvider with fn uses_prepacked_weights(
-  _self,
-) {
-  false
-}
-
-///|
 pub impl ExecutionProvider for CpuScalarProvider with fn eval_node(
   _self,
   node,
   ctx,
 ) {
-  eval_cpu_node(node, ctx, false)
+  eval_cpu_node(node, ctx, false, None)
 }
 
 ///|
@@ -830,7 +941,7 @@ pub impl ExecutionProvider for CpuScalarProvider with fn eval_node_multi(
   node,
   ctx,
 ) {
-  eval_cpu_node_multi(node, ctx, false)
+  eval_cpu_node_multi(node, ctx, false, None)
 }
 
 ///|
@@ -839,28 +950,52 @@ pub impl ExecutionProvider for CpuSimdProvider with fn name(_self) {
 }
 
 ///|
-pub impl ExecutionProvider for CpuSimdProvider with fn uses_prepacked_weights(
-  _self,
-) {
+pub impl ExecutionProvider for CpuSimdProvider with fn is_simd(_self) {
   true
 }
 
 ///|
+pub impl ExecutionProvider for CpuSimdProvider with fn prepare_graph(
+  self,
+  graph,
+) {
+  self.cache.prepare(graph)
+}
+
+///|
+pub impl ExecutionProvider for CpuSimdProvider with fn packed_weight_count(self) {
+  let mut count = 0
+  self.cache.packed_weights.each(fn(_, _) { count = count + 1 })
+  self.cache.packed_conv_weights.each(fn(_, _) { count = count + 1 })
+  self.cache.packed_i8_weights.each(fn(_, _) { count = count + 1 })
+  count
+}
+
+///|
+pub impl ExecutionProvider for CpuSimdProvider with fn packed_conv_weight_count(
+  self,
+) {
+  let mut count = 0
+  self.cache.packed_conv_weights.each(fn(_, _) { count = count + 1 })
+  count
+}
+
+///|
 pub impl ExecutionProvider for CpuSimdProvider with fn eval_node(
-  _self,
+  self,
   node,
   ctx,
 ) {
-  eval_cpu_node(node, ctx, true)
+  eval_cpu_node(node, ctx, true, Some(self.cache))
 }
 
 ///|
 pub impl ExecutionProvider for CpuSimdProvider with fn eval_node_multi(
-  _self,
+  self,
   node,
   ctx,
 ) {
-  eval_cpu_node_multi(node, ctx, true)
+  eval_cpu_node_multi(node, ctx, true, Some(self.cache))
 }
 
 ///|

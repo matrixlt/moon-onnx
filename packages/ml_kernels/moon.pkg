@@ -2,4 +2,6 @@ import {
   "matrixlt/ml_kernels/gemm",
   "matrixlt/ml_kernels/vecmath",
   "matrixlt/ml_kernels/conv",
+  "matrixlt/ml_kernels/quant",
+  "matrixlt/ml_kernels/nn",
 }

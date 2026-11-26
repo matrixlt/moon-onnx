@@ -105,11 +105,11 @@ test "bench GEMM 256x256x256 [simd-v128 4x8 tiled]" (it : @bench.T) {
 
 ///|
 test "bench E2E MNIST MLP [scalar]" (it : @bench.T) {
-  let sess = @session.Session::from_file(
+  let sess = @onnx_fs.session_from_file(
     "../tests/fixtures/mnist_mlp.onnx",
     backend=@session.Scalar,
   )
-  let input = @session.load_f32_file("../tests/fixtures/mnist_mlp_input.f32", [
+  let input = @onnx_fs.load_f32_file("../tests/fixtures/mnist_mlp_input.f32", [
     1, 1, 28, 28,
   ])
   it.bench(fn() {
@@ -120,11 +120,11 @@ test "bench E2E MNIST MLP [scalar]" (it : @bench.T) {
 
 ///|
 test "bench E2E MNIST MLP [simd-v128]" (it : @bench.T) {
-  let sess = @session.Session::from_file(
+  let sess = @onnx_fs.session_from_file(
     "../tests/fixtures/mnist_mlp.onnx",
     backend=@session.Simd,
   )
-  let input = @session.load_f32_file("../tests/fixtures/mnist_mlp_input.f32", [
+  let input = @onnx_fs.load_f32_file("../tests/fixtures/mnist_mlp_input.f32", [
     1, 1, 28, 28,
   ])
   it.bench(fn() {
@@ -135,12 +135,12 @@ test "bench E2E MNIST MLP [simd-v128]" (it : @bench.T) {
 
 ///|
 test "bench E2E MNIST CNN [scalar, optimized]" (it : @bench.T) {
-  let sess = @session.Session::from_file(
+  let sess = @onnx_fs.session_from_file(
     "../tests/fixtures/mnist_cnn.onnx",
     backend=@session.Scalar,
     optimize=true,
   )
-  let input = @session.load_f32_file("../tests/fixtures/mnist_cnn_input.f32", [
+  let input = @onnx_fs.load_f32_file("../tests/fixtures/mnist_cnn_input.f32", [
     1, 1, 28, 28,
   ])
   it.bench(fn() {
@@ -151,12 +151,12 @@ test "bench E2E MNIST CNN [scalar, optimized]" (it : @bench.T) {
 
 ///|
 test "bench E2E MNIST CNN [simd-v128, optimized]" (it : @bench.T) {
-  let sess = @session.Session::from_file(
+  let sess = @onnx_fs.session_from_file(
     "../tests/fixtures/mnist_cnn.onnx",
     backend=@session.Simd,
     optimize=true,
   )
-  let input = @session.load_f32_file("../tests/fixtures/mnist_cnn_input.f32", [
+  let input = @onnx_fs.load_f32_file("../tests/fixtures/mnist_cnn_input.f32", [
     1, 1, 28, 28,
   ])
   it.bench(fn() {

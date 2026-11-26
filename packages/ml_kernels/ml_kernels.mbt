@@ -204,3 +204,87 @@ pub fn depthwise_conv2d_f32(
     epilogue~,
   )
 }
+
+///|
+pub type PackedInt8MatrixB = @quant.PackedInt8MatrixB
+
+///|
+/// 离线打包 2D 有符号 `Int8` 权重矩阵为 `PackedInt8MatrixB`（预转置 + 列和）。
+pub fn pack_int8_matrix_b(
+  b : FixedArray[Byte],
+  k : Int32,
+  n : Int32,
+) -> PackedInt8MatrixB {
+  @quant.pack_int8_matrix_b(b, k, n)
+}
+
+///|
+/// 动态线性量化 `Float32 -> UInt8` 便捷入口。
+pub fn dynamic_quantize_linear_u8(
+  src : FixedArray[Float],
+  src_off : Int32,
+  dst : FixedArray[Byte],
+  dst_off : Int32,
+  n : Int32,
+) -> (Float, Byte) {
+  @quant.dynamic_quantize_linear_u8(src, src_off, dst, dst_off, n)
+}
+
+///|
+/// 4 列展开 `V128` 硬件点积 `MatMulInteger(A_u8, B_i8) -> Int32` 便捷入口。
+pub fn matmul_integer_u8_i8_prepacked_v128(
+  a : FixedArray[Byte],
+  a_off : Int32,
+  a_zp : Byte,
+  packed_b : PackedInt8MatrixB,
+  b_zp : FixedArray[Byte]?,
+  out : FixedArray[Int32],
+  out_off : Int32,
+  m : Int32,
+) -> Unit {
+  @quant.matmul_integer_u8_i8_prepacked_v128(
+    a, a_off, a_zp, packed_b, b_zp, out, out_off, m,
+  )
+}
+
+///|
+/// 零分配高斯误差函数 Erf 便捷入口。
+pub fn erf_f32(
+  x : FixedArray[Float],
+  x_off : Int32,
+  y : FixedArray[Float],
+  y_off : Int32,
+  n : Int32,
+) -> Unit {
+  @nn.erf_f32(x, x_off, y, y_off, n)
+}
+
+///|
+/// 零分配数值稳定 Softmax 便捷入口。
+pub fn softmax_f32(
+  x : FixedArray[Float],
+  x_off : Int32,
+  y : FixedArray[Float],
+  y_off : Int32,
+  outer : Int32,
+  axis_dim : Int32,
+  inner : Int32,
+) -> Unit {
+  @nn.softmax_f32(x, x_off, y, y_off, outer, axis_dim, inner)
+}
+
+///|
+/// 零分配双精度累加 LayerNormalization 便捷入口。
+pub fn layernorm_f32(
+  x : FixedArray[Float],
+  x_off : Int32,
+  scale : FixedArray[Float],
+  bias : FixedArray[Float]?,
+  y : FixedArray[Float],
+  y_off : Int32,
+  outer : Int32,
+  norm_sz : Int32,
+  eps : Float,
+) -> Unit {
+  @nn.layernorm_f32(x, x_off, scale, bias, y, y_off, outer, norm_sz, eps)
+}

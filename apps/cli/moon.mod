@@ -14,4 +14,5 @@ import {
   "moonbitlang/x@0.5.9",
   "matrixlt/tensor@0.2.0",
   "matrixlt/onnx@0.2.0",
+  "matrixlt/onnx_aot@0.2.0",
 }

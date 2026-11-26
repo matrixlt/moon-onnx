@@ -22,8 +22,8 @@ test "plan_static_arenas reuses dead intervals safely across chains, residuals, 
     ("c", [100]),
     ("d", [50]),
   ])
-  let dt_chain = @codegen.infer_static_dtypes(g_chain, Map([]))
-  let (f32_plan, _) = @codegen.plan_static_arenas(g_chain, sh_chain, dt_chain)
+  let dt_chain = @onnx_aot.infer_static_dtypes(g_chain, Map([]))
+  let (f32_plan, _) = @onnx_aot.plan_static_arenas(g_chain, sh_chain, dt_chain)
   assert_eq(f32_plan.naive_elems, 330)
   assert_true(f32_plan.peak_elems <= 184)
   assert_true(f32_plan.savings_pct() > 40.0)
@@ -74,8 +74,8 @@ test "plan_static_arenas reuses dead intervals safely across chains, residuals, 
     ("h1", [16]),
     ("y", [16]),
   ])
-  let dt_res = @codegen.infer_static_dtypes(g_res, Map([]))
-  let (res_plan, _) = @codegen.plan_static_arenas(g_res, sh_res, dt_res)
+  let dt_res = @onnx_aot.infer_static_dtypes(g_res, Map([]))
+  let (res_plan, _) = @onnx_aot.plan_static_arenas(g_res, sh_res, dt_res)
   let r_h0 = res_plan.allocs.get("h0").unwrap()
   let r_alias = res_plan.allocs.get("h0_alias").unwrap()
   let r_h1 = res_plan.allocs.get("h1").unwrap()

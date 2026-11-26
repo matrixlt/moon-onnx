@@ -4,6 +4,7 @@ members = [
   "./packages/onnx_proto",
   "./packages/nn_ir",
   "./packages/onnx",
+  "./packages/onnx_aot",
   "./apps/cli",
   "./apps/wasm_bench",
   "./benchmarks",

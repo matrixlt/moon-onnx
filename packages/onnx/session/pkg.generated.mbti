@@ -2,10 +2,7 @@
 package "matrixlt/onnx/session"
 
 import {
-  "matrixlt/ml_kernels/gemm",
-  "matrixlt/ml_kernels/quant",
   "matrixlt/nn_ir",
-  "matrixlt/onnx/ops",
   "matrixlt/onnx_proto",
   "matrixlt/tensor",
   "moonbitlang/core/debug",
@@ -13,8 +10,6 @@ import {
 
 // Values
 pub fn default_provider_for_backend(BackendKind) -> &ExecutionProvider
-
-pub fn load_f32_file(String, Array[Int32]) -> @tensor.Tensor raise RuntimeError
 
 pub fn max_abs_diff_f32(@tensor.Tensor, @tensor.Tensor) -> Float raise RuntimeError
 
@@ -43,15 +38,13 @@ pub fn CpuScalarProvider::new() -> Self
 pub impl ExecutionProvider for CpuScalarProvider
 
 pub struct CpuSimdProvider {
+  // private fields
 }
 pub fn CpuSimdProvider::new() -> Self
 pub impl ExecutionProvider for CpuSimdProvider
 
 pub struct EvalContext {
   env : Map[String, @tensor.Tensor]
-  packed_weights : Map[String, @gemm.PackedMatrixB]
-  packed_conv_weights : Map[String, @ops.PackedConvWeight]
-  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   scratch_pool : @tensor.BufferPool
   out_pool : @tensor.BufferPool?
 }
@@ -76,9 +69,6 @@ pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
   provider : &ExecutionProvider
-  packed_weights : Map[String, @gemm.PackedMatrixB]
-  packed_conv_weights : Map[String, @ops.PackedConvWeight]
-  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   release_plan : Array[Array[String]]
   pinned_outputs : Array[Bool]
   pool : @tensor.BufferPool
@@ -87,7 +77,6 @@ pub struct Session {
 pub fn Session::backend(Self) -> BackendKind
 pub fn Session::clear_pool(Self) -> Unit
 pub fn Session::from_bytes(Bytes, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
-pub fn Session::from_file(String, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::from_graph(@nn_ir.IrGraph, backend? : BackendKind) -> Self
 pub fn Session::from_model(@onnx_proto.OnnxModel, backend? : BackendKind, optimize? : Bool) -> Self raise RuntimeError
 pub fn Session::graph(Self) -> @nn_ir.IrGraph
@@ -106,7 +95,10 @@ pub fn Session::with_provider(@nn_ir.IrGraph, &ExecutionProvider) -> Self
 // Traits
 pub(open) trait ExecutionProvider {
   fn name(Self) -> String
-  fn uses_prepacked_weights(Self) -> Bool
+  fn is_simd(Self) -> Bool = _
+  fn prepare_graph(Self, @nn_ir.IrGraph) -> Unit = _
+  fn packed_weight_count(Self) -> Int32 = _
+  fn packed_conv_weight_count(Self) -> Int32 = _
   fn eval_node(Self, @nn_ir.IrNode, EvalContext) -> @tensor.Tensor raise RuntimeError
   fn eval_node_multi(Self, @nn_ir.IrNode, EvalContext) -> Array[@tensor.Tensor] raise RuntimeError = _
 }

@@ -2,17 +2,18 @@
 
 使用纯 MoonBit 开发的 ONNX 模型解析、跨端推理引擎与 **AOT 静态模型编译器（`onnx2mbt`）**，单一代码库原生支持 `native` / `wasm` / `wasm-gc` / `js` 四端，内置 MoonBit `V128` SIMD（`f32x4` 与 INT8 `i32x4.dot_i16x8_s`）加速，**零 C/C++ FFI 依赖**。
 
-仓库采用 MoonBit 官方 `moon.work` 多模块工作区组织，拆分为 **5 个严格分层、无循环依赖、可独立发布至 `mooncakes.io` 的开源库**：
+仓库采用 MoonBit 官方 `moon.work` 多模块工作区组织，拆分为 **6 个严格分层、无循环依赖、可独立发布至 `mooncakes.io` 的开源库**：
 
-## 模块总览（v0.2.0）
+## 模块总览
 
 | 模块 | 路径 | 外部依赖 | 职责定位 |
 | :--- | :--- | :--- | :--- |
-| **`matrixlt/tensor`** | `packages/tensor` | **零依赖** | 多维张量底座（`Float32`/`Float64`/`Int64`/`Int32`/`Bool`/`UInt8`/`Int8`、零拷贝视图、多向广播、`BufferPool`） |
-| **`matrixlt/ml_kernels`** | `packages/ml_kernels` | **零依赖** | 纯 MoonBit 原生 `V128` SIMD 数值内核（BLIS 8 列连续微面板 `4×8` GEMM、零 `im2col` Depthwise Conv2D、`vecmath`、4 列展开 INT8 `i32x4.dot` `MatMulInteger` / `QLinearMatMul` 与 `DynamicQuantizeLinear`） |
-| **`matrixlt/onnx_proto`** | `packages/onnx_proto` | `protobuf`, `tensor` | 官方 `onnx.proto` 绑定、纯内存模型解析与权重解码（支持 `FLOAT32`/`FLOAT16`/`INT8`/`UINT8`/`INT64` 等，文件 I/O 隔离在 `/fs`） |
-| **`matrixlt/nn_ir`** | `packages/nn_ir` | `tensor` | 强类型计算图 IR（61 算子）、Kahn 拓扑排序与图优化管线（常量提升 / PyTorch 9 节点 `LayerNorm` 融合 / `Conv+BN`（含 1D/2D）/ `Conv+Bias` / `Conv+Relu` / `Conv+Clip(ReLU6)` / `Gemm` 预转置 / DCE） |
-| **`matrixlt/onnx`** | `packages/onnx` | 上述 4 库 | 跨端 ONNX 推理引擎（`frontend`、`ops`、可插拔 `ExecutionProvider` `Session` 与 `codegen` AOT 编译器 `onnx2mbt`） |
+| **`matrixlt/tensor`** | `packages/tensor` | **零依赖** | 多维张量底座（`Float32`/`Float64`/`Int64`/`Int32`/`Bool`/`UInt8`/`Int8`、`SymDim`、零拷贝视图、多向广播、`BufferPool`） |
+| **`matrixlt/ml_kernels`** | `packages/ml_kernels` | **零依赖** | 纯 MoonBit 原生 `V128` SIMD 与零分配内核集合（`/gemm` BLIS 8 列微面板、`/conv` 零 `im2col` Depthwise、`/vecmath`、`/quant` 4 列 `i32x4.dot`、`/nn` 零分配 Pool/Erf/GELU/Softmax/LayerNorm） |
+| **`matrixlt/onnx_proto`** | `packages/onnx_proto` | `protobuf`, `tensor` | 官方 `onnx.proto` 绑定、纯内存模型解析与权重解码（文件 I/O 严格隔离在 `/fs`） |
+| **`matrixlt/nn_ir`** | `packages/nn_ir` | `tensor` | 强类型计算图 IR（61 算子）、Kahn 拓扑排序、分级图优化 Pass（`/opt`）与静态形状/类型推断单一真相源（`/analysis`） |
+| **`matrixlt/onnx`** | `packages/onnx` | 上述 4 库 | 纯内存跨端动态推理引擎（`/frontend`、`/ops`、纯内存四端通用 `/session` + 私有权重缓存 `ExecutionProvider`，文件 I/O 严格隔离在 `/fs`） |
+| **`matrixlt/onnx_aot`** | `packages/onnx_aot` | `tensor`, `onnx_proto`, `nn_ir`, `onnx` | 独立 AOT 静态编译器（`onnx2mbt` v2，纯内存四端通用）：图特化、Static Arena 区间规划与零堆分配 Wasm/Native 代码生成 |
 
 工作区应用与基准：
 - `apps/cli`：Native 命令行工具（`inspect`、`run`、`profile`、`compile`）

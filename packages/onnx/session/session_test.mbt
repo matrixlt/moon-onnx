@@ -194,10 +194,30 @@ impl @session.ExecutionProvider for CountingProvider with fn name(_self) {
 }
 
 ///|
-impl @session.ExecutionProvider for CountingProvider with fn uses_prepacked_weights(
-  _self,
-) {
+impl @session.ExecutionProvider for CountingProvider with fn is_simd(_self) {
   true
+}
+
+///|
+impl @session.ExecutionProvider for CountingProvider with fn prepare_graph(
+  self,
+  graph,
+) {
+  @session.ExecutionProvider::prepare_graph(self.inner, graph)
+}
+
+///|
+impl @session.ExecutionProvider for CountingProvider with fn packed_weight_count(
+  self,
+) {
+  @session.ExecutionProvider::packed_weight_count(self.inner)
+}
+
+///|
+impl @session.ExecutionProvider for CountingProvider with fn packed_conv_weight_count(
+  self,
+) {
+  @session.ExecutionProvider::packed_conv_weight_count(self.inner)
 }
 
 ///|

@@ -113,14 +113,14 @@ test "compile_graph_to_mbt Arena mode emits zero-allocation, zero-Tensor code wi
   let input_shapes : Map[String, Array[Int32]] = Map([("x", [1, 2, 6, 6])])
 
   // 1. TargetWasm + Arena + embed_weights
-  let art_wasm = @codegen.compile_graph_to_mbt(graph, input_shapes, config={
-    ..@codegen.CodegenConfig::default(),
+  let art_wasm = @onnx_aot.compile_graph_to_mbt(graph, input_shapes, config={
+    ..@onnx_aot.CodegenConfig::default(),
     struct_name: "TinyVisionWasm",
-    target: @codegen.TargetWasm,
-    mode: @codegen.Arena,
+    target: @onnx_aot.TargetWasm,
+    mode: @onnx_aot.Arena,
     embed_weights: true,
   })
-  assert_eq(art_wasm.mode_used, @codegen.Arena)
+  assert_eq(art_wasm.mode_used, @onnx_aot.Arena)
   assert_eq(art_wasm.node_count, 5)
   assert_eq(art_wasm.weights.length(), 4)
   assert_eq(art_wasm.weights_bin.length(), 91 * 4)
@@ -140,27 +140,27 @@ test "compile_graph_to_mbt Arena mode emits zero-allocation, zero-Tensor code wi
   assert_true(!art_wasm.mbt_source.contains("Map["))
 
   // 2. TargetWasmGc 自动切至原生 Float 数组路径，避开 GC 字节数组 v128_load 退化
-  let art_gc = @codegen.compile_graph_to_mbt(graph, input_shapes, config={
-    ..@codegen.CodegenConfig::default(),
+  let art_gc = @onnx_aot.compile_graph_to_mbt(graph, input_shapes, config={
+    ..@onnx_aot.CodegenConfig::default(),
     struct_name: "TinyVisionGc",
-    target: @codegen.TargetWasmGc,
-    mode: @codegen.Arena,
+    target: @onnx_aot.TargetWasmGc,
+    mode: @onnx_aot.Arena,
     embed_weights: false,
   })
-  assert_eq(art_gc.mode_used, @codegen.Arena)
-  assert_true(art_gc.mbt_source.contains("conv_nchw_scalar_f32"))
+  assert_eq(art_gc.mode_used, @onnx_aot.Arena)
+  assert_true(art_gc.mbt_source.contains("@nn.conv_nchw_scalar_f32"))
   assert_true(art_gc.mbt_source.contains("@gemm.matmul_2d_scalar_f32"))
   assert_true(!art_gc.mbt_source.contains("PackedMatrixB"))
 
   // 3. Tensor 兼容模式仍正常工作
-  let art_tensor = @codegen.compile_graph_to_mbt(graph, input_shapes, config={
-    ..@codegen.CodegenConfig::default(),
+  let art_tensor = @onnx_aot.compile_graph_to_mbt(graph, input_shapes, config={
+    ..@onnx_aot.CodegenConfig::default(),
     struct_name: "TinyVisionTensor",
-    target: @codegen.TargetWasm,
-    mode: @codegen.Tensor,
+    target: @onnx_aot.TargetWasm,
+    mode: @onnx_aot.Tensor,
     embed_weights: false,
   })
-  assert_eq(art_tensor.mode_used, @codegen.Tensor)
+  assert_eq(art_tensor.mode_used, @onnx_aot.Tensor)
   assert_true(art_tensor.mbt_source.contains("@ops.conv2d_prepacked_f32"))
 }
 
@@ -214,14 +214,14 @@ test "compile_graph_to_mbt compiles INT8 quantized QLinearMatMul graph in Arena 
     ],
   }
 
-  let art = @codegen.compile_graph_to_mbt(q_graph, Map([("x", [2, 16])]), config={
-    ..@codegen.CodegenConfig::default(),
+  let art = @onnx_aot.compile_graph_to_mbt(q_graph, Map([("x", [2, 16])]), config={
+    ..@onnx_aot.CodegenConfig::default(),
     struct_name: "Int8Mlp",
-    target: @codegen.TargetWasm,
-    mode: @codegen.Arena,
+    target: @onnx_aot.TargetWasm,
+    mode: @onnx_aot.Arena,
     embed_weights: true,
   })
-  assert_eq(art.mode_used, @codegen.Arena)
+  assert_eq(art.mode_used, @onnx_aot.Arena)
   // 权重仅 64 字节（1 byte/element，相对 Float32 的 256 字节实现 4x 压缩）
   assert_eq(art.weights_bin.length(), 64)
   assert_true(art.arena_byte_elems >= 40)
@@ -335,14 +335,14 @@ test "compile_graph_to_mbt compiles 3D Conv1D audio classifier in zero-allocatio
     ],
   }
 
-  let art = @codegen.compile_graph_to_mbt(g, Map([("audio", [1, 1, 32])]), config={
-    ..@codegen.CodegenConfig::default(),
+  let art = @onnx_aot.compile_graph_to_mbt(g, Map([("audio", [1, 1, 32])]), config={
+    ..@onnx_aot.CodegenConfig::default(),
     struct_name: "AudioKws",
-    target: @codegen.TargetWasm,
-    mode: @codegen.Arena,
+    target: @onnx_aot.TargetWasm,
+    mode: @onnx_aot.Arena,
     embed_weights: true,
   })
-  assert_eq(art.mode_used, @codegen.Arena)
+  assert_eq(art.mode_used, @onnx_aot.Arena)
   assert_eq(art.node_count, 6) // Conv1D+BN+Relu 折叠为 1 个节点
   assert_eq(art.output_shapes, [("probs", [1, 2])])
   assert_true(art.mbt_source.contains("@conv.depthwise_conv2d_f32"))
@@ -416,8 +416,8 @@ test "specialize_graph folds MobileNetV2 Shape-Gather-Unsqueeze-Concat chain int
     ],
   }
 
-  let art = @codegen.compile_graph_to_mbt(g, Map([("feat", [1, 2, 4, 4])]))
-  assert_eq(art.mode_used, @codegen.Arena)
+  let art = @onnx_aot.compile_graph_to_mbt(g, Map([("feat", [1, 2, 4, 4])]))
+  assert_eq(art.mode_used, @onnx_aot.Arena)
   // Shape/Gather/Unsqueeze/Concat 全部被编译期常量折叠消除，仅剩 GAP + Reshape(alias) + Gemm
   assert_eq(art.node_count, 3)
   assert_eq(art.output_shapes, [("logits", [1, 4])])
@@ -528,11 +528,11 @@ test "compile_graph_to_mbt specializes If branch and emits multi-IO Arena code" 
     ],
   }
 
-  let art = @codegen.compile_graph_to_mbt(
+  let art = @onnx_aot.compile_graph_to_mbt(
     top,
     Map([("audio", [1, 4]), ("state", [1, 2])]),
     config={
-      ..@codegen.CodegenConfig::default(),
+      ..@onnx_aot.CodegenConfig::default(),
       struct_name: "MiniVad16k",
       frozen_inputs: Map([
         (
@@ -542,10 +542,10 @@ test "compile_graph_to_mbt specializes If branch and emits multi-IO Arena code" 
       ]),
     },
   )
-  assert_eq(art.mode_used, @codegen.Arena)
+  assert_eq(art.mode_used, @onnx_aot.Arena)
   assert_eq(art.input_shapes, [("audio", [1, 4]), ("state", [1, 2])])
   assert_eq(art.output_shapes, [("prob", [1, 1]), ("stateN", [1, 4])])
-  assert_true(art.mbt_source.contains("fn reflect_idx("))
+  assert_true(art.mbt_source.contains("@nn.reflect_idx("))
   assert_true(art.mbt_source.contains("v * v"))
   assert_true(art.mbt_source.contains("pub fn MiniVad16k::forward_into("))
   assert_true(art.mbt_source.contains("in_1 : FixedArray[Float]"))
@@ -714,20 +714,20 @@ test "Transformer encoder block compiles to zero-allocation Arena mode with Int6
     ],
   }
 
-  let art = @codegen.compile_graph_to_mbt(
+  let art = @onnx_aot.compile_graph_to_mbt(
     g,
     Map([("input_ids", [1, 4]), ("attention_mask", [1, 4])]),
     config={
-      ..@codegen.CodegenConfig::default(),
+      ..@onnx_aot.CodegenConfig::default(),
       struct_name: "MiniBertL1",
-      target: @codegen.TargetWasm,
+      target: @onnx_aot.TargetWasm,
       input_dtypes: Map([
         ("input_ids", @tensor.Int64),
         ("attention_mask", @tensor.Int64),
       ]),
     },
   )
-  assert_eq(art.mode_used, @codegen.Arena)
+  assert_eq(art.mode_used, @onnx_aot.Arena)
   assert_eq(art.input_shapes, [
     ("input_ids", [1, 4]),
     ("attention_mask", [1, 4]),
@@ -736,9 +736,9 @@ test "Transformer encoder block compiles to zero-allocation Arena mode with Int6
   assert_true(art.arena_f32_elems < art.arena_f32_naive_elems)
   assert_true(art.mbt_source.contains("in_0 : FixedArray[Int64]"))
   assert_true(art.mbt_source.contains("in_1 : FixedArray[Int64]"))
-  assert_true(art.mbt_source.contains("fn erf_f32("))
-  assert_true(art.mbt_source.contains("fn layernorm_f32("))
-  assert_true(art.mbt_source.contains("fn softmax_f32("))
+  assert_true(art.mbt_source.contains("@nn.erf_f32("))
+  assert_true(art.mbt_source.contains("@nn.layernorm_f32("))
+  assert_true(art.mbt_source.contains("@nn.softmax_f32("))
   assert_true(!art.pkg_config.contains("matrixlt/tensor"))
 }
 
@@ -818,13 +818,13 @@ test "Quantized INT8 Transformer block compiles to zero-allocation Arena mode" {
     ],
   }
 
-  let art = @codegen.compile_graph_to_mbt(g, Map([("input_ids", [1, 4])]), config={
-    ..@codegen.CodegenConfig::default(),
+  let art = @onnx_aot.compile_graph_to_mbt(g, Map([("input_ids", [1, 4])]), config={
+    ..@onnx_aot.CodegenConfig::default(),
     struct_name: "MiniBertQ8",
-    target: @codegen.TargetWasm,
+    target: @onnx_aot.TargetWasm,
     input_dtypes: Map([("input_ids", @tensor.Int64)]),
   })
-  assert_eq(art.mode_used, @codegen.Arena)
+  assert_eq(art.mode_used, @onnx_aot.Arena)
   assert_true(art.arena_byte_elems > 0)
   assert_true(art.mbt_source.contains("@quant.PackedInt8MatrixB"))
   assert_true(art.mbt_source.contains("@quant.dynamic_quantize_linear_u8"))

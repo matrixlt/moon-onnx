@@ -1,0 +1,23 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "matrixlt/onnx/fs"
+
+import {
+  "matrixlt/onnx/session",
+  "matrixlt/onnx_proto",
+  "matrixlt/tensor",
+}
+
+// Values
+pub fn load_f32_file(String, Array[Int32]) -> @tensor.Tensor raise @session.RuntimeError
+
+pub fn load_model_from_file(String) -> @onnx_proto.OnnxModel raise @onnx_proto.ModelError
+
+pub fn session_from_file(String, backend? : @session.BackendKind, optimize? : Bool) -> @session.Session raise @session.RuntimeError
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

@@ -6,4 +6,5 @@ import {
   "matrixlt/nn_ir",
   "matrixlt/onnx/ops",
   "matrixlt/onnx/session",
+  "matrixlt/onnx/fs" @onnx_fs,
 } for "test"

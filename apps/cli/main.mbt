@@ -76,8 +76,8 @@ fn handle_run(args : Array[String]) -> Unit {
   let in_dims = parse_shape_csv(shape_spec)
 
   try {
-    let session = @onnx.session_from_file(model_path, backend~)
-    let input = @onnx.load_f32_file(input_path, in_dims)
+    let session = @onnx_fs.session_from_file(model_path, backend~)
+    let input = @onnx_fs.load_f32_file(input_path, in_dims)
     let output = session.run_single(input)
     let (pred_cls, pred_val) = output.argmax_f32() catch {
       e => {
@@ -94,7 +94,7 @@ fn handle_run(args : Array[String]) -> Unit {
 
     match golden_path {
       Some(gp) => {
-        let golden = @onnx.load_f32_file(gp, output.shape())
+        let golden = @onnx_fs.load_f32_file(gp, output.shape())
         let max_diff = @onnx.max_abs_diff_f32(output, golden)
         let (ort_cls, _) = golden.argmax_f32() catch {
           _ => (-1, (0.0 : Float))
@@ -138,8 +138,8 @@ fn handle_profile(args : Array[String]) -> Unit {
   let in_dims = parse_shape_csv(shape_spec)
 
   try {
-    let session = @onnx.session_from_file(model_path, backend~)
-    let input = @onnx.load_f32_file(input_path, in_dims)
+    let session = @onnx_fs.session_from_file(model_path, backend~)
+    let input = @onnx_fs.load_f32_file(input_path, in_dims)
     // 先预热 1 次消除冷启动抖动
     session.run_single(input) |> ignore
     let (_, profile) = session.run_single_profiled(input)
@@ -232,20 +232,20 @@ fn handle_compile(args : Array[String]) -> Unit {
     Some("scalar") => false
     _ => true
   }
-  let target : @codegen.CodegenTarget = match
+  let target : @onnx_aot.CodegenTarget = match
     find_flag_value(args, "--target=") {
-    Some("wasm-gc") => @codegen.TargetWasmGc
-    Some("native") => @codegen.TargetNative
-    _ => @codegen.TargetWasm
+    Some("wasm-gc") => @onnx_aot.TargetWasmGc
+    Some("native") => @onnx_aot.TargetNative
+    _ => @onnx_aot.TargetWasm
   }
-  let mode : @codegen.CodegenMode = match find_flag_value(args, "--mode=") {
-    Some("tensor") => @codegen.Tensor
-    _ => @codegen.Arena
+  let mode : @onnx_aot.CodegenMode = match find_flag_value(args, "--mode=") {
+    Some("tensor") => @onnx_aot.Tensor
+    _ => @onnx_aot.Arena
   }
   let embed_weights = has_flag(args, "--embed-weights")
 
   try {
-    let m = @onnx.load_model_from_file(model_path)
+    let m = @onnx_fs.load_model_from_file(model_path)
     if m.inputs.length() == 0 {
       println("Error: model has no graph inputs")
       @env.exit(1)
@@ -327,7 +327,7 @@ fn handle_compile(args : Array[String]) -> Unit {
       None => ()
     }
 
-    let cfg : @codegen.CodegenConfig = {
+    let cfg : @onnx_aot.CodegenConfig = {
       struct_name,
       use_simd,
       optimize: true,
@@ -337,7 +337,7 @@ fn handle_compile(args : Array[String]) -> Unit {
       frozen_inputs,
       input_dtypes: Map([]),
     }
-    let art = @onnx.compile_model_to_mbt(m, input_shapes, config=cfg)
+    let art = @onnx_aot.compile_model_to_mbt(m, input_shapes, config=cfg)
 
     if !@fs.path_exists(out_dir) {
       @fs.create_dir(out_dir) catch {
@@ -379,7 +379,7 @@ fn handle_compile(args : Array[String]) -> Unit {
       "  Codegen Mode : \{art.mode_used} | Target: \{target} | SIMD: \{use_simd}",
     )
     println("  Fused Nodes  : \{art.node_count}")
-    if art.mode_used == @codegen.Arena {
+    if art.mode_used == @onnx_aot.Arena {
       let peak_b = art.arena_f32_elems * 4
       let naive_b = art.arena_f32_naive_elems * 4
       let scratch_b = art.scratch_f32_elems * 4
@@ -422,7 +422,7 @@ fn main {
       }
       let path = args[2]
       try {
-        let m = @onnx.load_model_from_file(path)
+        let m = @onnx_fs.load_model_from_file(path)
         println(m.format_summary())
       } catch {
         err => {

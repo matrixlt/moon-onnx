@@ -3,8 +3,9 @@ import {
   "moonbitlang/x/fs",
   "matrixlt/tensor",
   "matrixlt/onnx",
-  "matrixlt/onnx/codegen",
+  "matrixlt/onnx/fs" @onnx_fs,
   "matrixlt/onnx/session",
+  "matrixlt/onnx_aot",
 }
 
 pkgtype(kind: "executable")

@@ -21,11 +21,11 @@ test "end-to-end MNIST MLP and CNN match ORT on Scalar and V128 SIMD backends" {
   for i = 0; i < backends.length(); i = i + 1 {
     let backend = backends[i]
 
-    let mlp = @session.Session::from_file("fixtures/mnist_mlp.onnx", backend~)
-    let mlp_in = @session.load_f32_file("fixtures/mnist_mlp_input.f32", [
+    let mlp = @onnx_fs.session_from_file("fixtures/mnist_mlp.onnx", backend~)
+    let mlp_in = @onnx_fs.load_f32_file("fixtures/mnist_mlp_input.f32", [
       1, 1, 28, 28,
     ])
-    let mlp_gold = @session.load_f32_file("fixtures/mnist_mlp_golden.f32", [
+    let mlp_gold = @onnx_fs.load_f32_file("fixtures/mnist_mlp_golden.f32", [
       1, 10,
     ])
     let mlp_out = mlp.run_single(mlp_in)
@@ -36,11 +36,11 @@ test "end-to-end MNIST MLP and CNN match ORT on Scalar and V128 SIMD backends" {
     let (mlp_ort, _) = mlp_gold.argmax_f32()
     assert_eq(mlp_pred, mlp_ort)
 
-    let cnn = @session.Session::from_file("fixtures/mnist_cnn.onnx", backend~)
-    let cnn_in = @session.load_f32_file("fixtures/mnist_cnn_input.f32", [
+    let cnn = @onnx_fs.session_from_file("fixtures/mnist_cnn.onnx", backend~)
+    let cnn_in = @onnx_fs.load_f32_file("fixtures/mnist_cnn_input.f32", [
       1, 1, 28, 28,
     ])
-    let cnn_gold = @session.load_f32_file("fixtures/mnist_cnn_golden.f32", [
+    let cnn_gold = @onnx_fs.load_f32_file("fixtures/mnist_cnn_golden.f32", [
       1, 10,
     ])
     let cnn_out = cnn.run_single(cnn_in)
@@ -56,24 +56,24 @@ test "end-to-end MNIST MLP and CNN match ORT on Scalar and V128 SIMD backends" {
 ///|
 /// 验证真实 MNIST 模型下静态权重预打包数量、逐算子剖析与 100% BufferPool 内存复用。
 test "real MNIST fixtures prepack static weights and achieve 100% BufferPool reuse" {
-  let mlp_simd = @session.Session::from_file(
+  let mlp_simd = @onnx_fs.session_from_file(
     "fixtures/mnist_mlp.onnx",
     backend=@session.Simd,
   )
   assert_eq(mlp_simd.packed_weight_count(), 3)
   assert_eq(mlp_simd.packed_conv_weight_count(), 0)
 
-  let cnn_simd = @session.Session::from_file(
+  let cnn_simd = @onnx_fs.session_from_file(
     "fixtures/mnist_cnn.onnx",
     backend=@session.Simd,
   )
   assert_eq(cnn_simd.packed_weight_count(), 3)
   assert_eq(cnn_simd.packed_conv_weight_count(), 2)
 
-  let cnn_in = @session.load_f32_file("fixtures/mnist_cnn_input.f32", [
+  let cnn_in = @onnx_fs.load_f32_file("fixtures/mnist_cnn_input.f32", [
     1, 1, 28, 28,
   ])
-  let cnn_gold = @session.load_f32_file("fixtures/mnist_cnn_golden.f32", [1, 10])
+  let cnn_gold = @onnx_fs.load_f32_file("fixtures/mnist_cnn_golden.f32", [1, 10])
 
   let (out1, profile) = cnn_simd.run_single_profiled(cnn_in)
   assert_eq(out1.shape(), [1, 10])

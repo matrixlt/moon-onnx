@@ -83,20 +83,14 @@ pub fn RunProfile::format_table(self : RunProfile) -> String {
 }
 
 ///|
-/// ONNX 推理会话（Session）：
-/// 持有已完成 Lowering、可选图优化与拓扑排序的计算图、可插拔 `ExecutionProvider` 执行后端、
-/// SIMD 静态权重预打包缓存（覆盖 MatMul / Gemm / Conv）以及基于静态生命周期分析的 `BufferPool` 复用池。
+/// ONNX 推理会话（Session，100% 纯内存、四端通用）：
+/// 持有已完成 Lowering、可选图优化与拓扑排序的计算图、可插拔 `ExecutionProvider` 执行后端
+/// 以及基于静态生命周期分析的 `BufferPool` 复用池。
 pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
   /// 可插拔执行后端（默认根据 `backend` 构造 `CpuScalarProvider` 或 `CpuSimdProvider`）
   provider : &ExecutionProvider
-  /// 静态 2D Float32 权重的预打包缓存（键为权重名或 `name#T`，运行期直接走零打包 SIMD GEMM）
-  packed_weights : Map[String, @gemm.PackedMatrixB]
-  /// 静态 4D Float32 卷积权重的预打包缓存（键为 `name#g{group}`，每分组预打包为 `W_g^T[K, C_out_g]`）
-  packed_conv_weights : Map[String, @ops.PackedConvWeight]
-  /// 静态 2D Int8 量化权重的预打包缓存（`MatMulInteger` 预转置 + 列和，运行期走零减法 V128 `i32x4.dot`）
-  packed_i8_weights : Map[String, @quant.PackedInt8MatrixB]
   /// 静态生命周期回收计划：`release_plan[i]` 为第 i 个节点执行完后可安全归还至 `BufferPool` 的源张量名
   release_plan : Array[Array[String]]
   /// 标记每个节点的输出是否被图输入/输出/常量锁定（锁定输出不从池分配，避免跨推理结果被覆盖）
@@ -104,112 +98,8 @@ pub struct Session {
   /// 会话级缓冲区复用池（跨推理复用 `im2col` 工作区与中间激活张量缓冲）
   pool : @tensor.BufferPool
   /// 预构建的 `If` 控制流分支子会话缓存（键为节点名，值为 `(then_session, else_session)`），
-  /// 使子图在初始化期同样完成 V128 权重预打包与生命周期分析，推理热路径零重复构建开销
+  /// 使子图在初始化期同样完成后端准备与生命周期分析，推理热路径零重复构建开销
   sub_sessions : Map[String, (Session, Session)]
-}
-
-///|
-/// 在会话初始化期扫描计算图，将所有静态 2D 权重（`MatMul` / `Gemm` / `MatMulInteger`）
-/// 与静态 4D 卷积权重（`Conv`）一次性预打包为 SIMD 友好结构，彻底消除推理热路径上的重复打包开销。
-fn build_packed_weight_caches(
-  graph : @nn_ir.IrGraph,
-  enable_packing : Bool,
-) -> (
-  Map[String, @gemm.PackedMatrixB],
-  Map[String, @ops.PackedConvWeight],
-  Map[String, @quant.PackedInt8MatrixB],
-) {
-  let mat_cache : Map[String, @gemm.PackedMatrixB] = Map([])
-  let conv_cache : Map[String, @ops.PackedConvWeight] = Map([])
-  let i8_cache : Map[String, @quant.PackedInt8MatrixB] = Map([])
-  if !enable_packing {
-    return (mat_cache, conv_cache, i8_cache)
-  }
-  for i = 0; i < graph.nodes.length(); i = i + 1 {
-    let node = graph.nodes[i]
-    if node.inputs.length() < 2 {
-      continue
-    }
-    let w_name = node.inputs[1]
-    match node.op {
-      @nn_ir.MatMul =>
-        if !mat_cache.contains(w_name) {
-          match graph.initializers.get(w_name) {
-            Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Float32 => {
-              let ws = w_t.shape()
-              try {
-                let w_buf = w_t.to_f32_buffer()
-                mat_cache[w_name] = @gemm.pack_matrix_b_f32(
-                  w_buf,
-                  0,
-                  ws[0],
-                  ws[1],
-                )
-              } catch {
-                _ => ()
-              }
-            }
-            _ => ()
-          }
-        }
-      @nn_ir.Gemm(trans_b~, ..) => {
-        let key = if trans_b { "\{w_name}#T" } else { w_name }
-        if !mat_cache.contains(key) {
-          match graph.initializers.get(w_name) {
-            Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Float32 => {
-              let ws = w_t.shape()
-              try {
-                let w_buf = w_t.to_f32_buffer()
-                mat_cache[key] = if trans_b {
-                  @gemm.pack_matrix_b_transposed_f32(w_buf, 0, ws[0], ws[1])
-                } else {
-                  @gemm.pack_matrix_b_f32(w_buf, 0, ws[0], ws[1])
-                }
-              } catch {
-                _ => ()
-              }
-            }
-            _ => ()
-          }
-        }
-      }
-      @nn_ir.Conv(group~, ..) => {
-        let key = "\{w_name}#g\{group}"
-        if !conv_cache.contains(key) {
-          match graph.initializers.get(w_name) {
-            Some(w_t) if (w_t.rank() == 4 || w_t.rank() == 3) &&
-              w_t.dtype() == @tensor.Float32 =>
-              try {
-                conv_cache[key] = @ops.pack_conv2d_weight_f32(w_t, group)
-              } catch {
-                _ => ()
-              }
-            _ => ()
-          }
-        }
-      }
-      @nn_ir.MatMulInteger =>
-        if !i8_cache.contains(w_name) {
-          match graph.initializers.get(w_name) {
-            Some(w_t) if w_t.rank() == 2 && w_t.dtype() == @tensor.Int8 => {
-              let ws = w_t.shape()
-              try {
-                i8_cache[w_name] = @quant.pack_int8_matrix_b(
-                  w_t.to_i8_buffer(),
-                  ws[0],
-                  ws[1],
-                )
-              } catch {
-                _ => ()
-              }
-            }
-            _ => ()
-          }
-        }
-      _ => ()
-    }
-  }
-  (mat_cache, conv_cache, i8_cache)
 }
 
 ///|
@@ -372,11 +262,8 @@ pub fn Session::with_provider(
   graph : @nn_ir.IrGraph,
   provider : &ExecutionProvider,
 ) -> Session {
-  let enable_packing = provider.uses_prepacked_weights()
-  let backend = if enable_packing { Simd } else { Scalar }
-  let (packed_weights, packed_conv_weights, packed_i8_weights) = build_packed_weight_caches(
-    graph, enable_packing,
-  )
+  let backend = if provider.is_simd() { Simd } else { Scalar }
+  provider.prepare_graph(graph)
   let (release_plan, pinned_outputs) = build_release_plan(graph)
   let sub_sessions : Map[String, (Session, Session)] = Map([])
   for i = 0; i < graph.nodes.length(); i = i + 1 {
@@ -394,9 +281,6 @@ pub fn Session::with_provider(
     graph,
     backend,
     provider,
-    packed_weights,
-    packed_conv_weights,
-    packed_i8_weights,
     release_plan,
     pinned_outputs,
     pool: @tensor.BufferPool::new(),
@@ -437,19 +321,6 @@ pub fn Session::from_bytes(
 }
 
 ///|
-/// 从本地 `.onnx` 文件路径构建推理会话（Native 入口）。
-pub fn Session::from_file(
-  path : String,
-  backend~ : BackendKind = Scalar,
-  optimize~ : Bool = true,
-) -> Session raise RuntimeError {
-  let m = @onnx_fs.load_model_from_file(path) catch {
-    e => raise ModelErr("\{e}")
-  }
-  Session::from_model(m, backend~, optimize~)
-}
-
-///|
 /// 从已构建的 IrGraph 直接创建推理会话。
 pub fn Session::from_graph(
   graph : @nn_ir.IrGraph,
@@ -477,31 +348,15 @@ pub fn Session::provider_name(self : Session) -> String {
 }
 
 ///|
-/// 返回当前会话中已完成预打包的静态权重总数量（含 MatMul / Gemm / Conv 及 `If` 分支子会话权重）。
+/// 返回当前会话后端已完成预打包的静态权重总数量（含 MatMul / Gemm / Conv / MatMulInteger 及 `If` 分支子图权重）。
 pub fn Session::packed_weight_count(self : Session) -> Int32 {
-  let mut count = 0
-  self.packed_weights.each(fn(_, _) { count = count + 1 })
-  self.packed_conv_weights.each(fn(_, _) { count = count + 1 })
-  self.packed_i8_weights.each(fn(_, _) { count = count + 1 })
-  self.sub_sessions.each(fn(_, pair) {
-    let (ts, es) = pair
-    count = count + ts.packed_weight_count() + es.packed_weight_count()
-  })
-  count
+  self.provider.packed_weight_count()
 }
 
 ///|
-/// 返回当前会话中已完成预打包的静态卷积权重数量（含 `If` 分支子会话）。
+/// 返回当前会话后端已完成预打包的静态卷积权重数量（含 `If` 分支子图）。
 pub fn Session::packed_conv_weight_count(self : Session) -> Int32 {
-  let mut count = 0
-  self.packed_conv_weights.each(fn(_, _) { count = count + 1 })
-  self.sub_sessions.each(fn(_, pair) {
-    let (ts, es) = pair
-    count = count +
-      ts.packed_conv_weight_count() +
-      es.packed_conv_weight_count()
-  })
-  count
+  self.provider.packed_conv_weight_count()
 }
 
 ///|
@@ -559,6 +414,82 @@ fn Session::eval_step(
 }
 
 ///|
+/// 统一节点执行主循环（由 `run`、`run_profiled` 与 `run_subgraph` 共享）：
+/// 当 `timings` 为 `None` 时走零计时开销热路径；为 `Some(arr)` 时记录每个算子的精确微秒耗时。
+fn Session::exec_nodes(
+  self : Session,
+  env : Map[String, @tensor.Tensor],
+  timings : Array[OpTiming]?,
+) -> Unit raise RuntimeError {
+  for i = 0; i < self.graph.nodes.length(); i = i + 1 {
+    let node = self.graph.nodes[i]
+    let out_pool : @tensor.BufferPool? = if self.pinned_outputs[i] {
+      None
+    } else {
+      Some(self.pool)
+    }
+    let ctx : EvalContext = { env, scratch_pool: self.pool, out_pool, }
+    let out_tensors = match timings {
+      Some(arr) => {
+        let t0 = @bench.monotonic_clock_start()
+        let outs = self.eval_step(node, ctx)
+        let elapsed_us = @bench.monotonic_clock_end(t0)
+        let out_shape = if outs.length() > 0 { outs[0].shape() } else { [] }
+        arr.push({
+          node_name: node.name,
+          op_type: node.op.name(),
+          output_shape: out_shape,
+          elapsed_us,
+        })
+        outs
+      }
+      None => self.eval_step(node, ctx)
+    }
+    for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
+      if node.outputs[k] != "" {
+        env[node.outputs[k]] = out_tensors[k]
+      }
+    }
+    release_dead_buffers(self.release_plan[i], env, self.pool)
+  }
+}
+
+///|
+/// 根据图初始化器与用户 `feeds` 构建执行环境字典。
+fn Session::init_env(
+  self : Session,
+  feeds : Map[String, @tensor.Tensor],
+) -> Map[String, @tensor.Tensor] raise RuntimeError {
+  let env : Map[String, @tensor.Tensor] = Map([])
+  self.graph.initializers.each(fn(k, v) { env[k] = v })
+  for i = 0; i < self.graph.inputs.length(); i = i + 1 {
+    let in_name = self.graph.inputs[i]
+    match feeds.get(in_name) {
+      Some(t) => env[in_name] = t
+      None => raise MissingTensor("missing required graph input '\{in_name}'")
+    }
+  }
+  env
+}
+
+///|
+/// 从执行环境中收集全部图输出张量。
+fn Session::collect_outputs(
+  self : Session,
+  env : Map[String, @tensor.Tensor],
+) -> Map[String, @tensor.Tensor] raise RuntimeError {
+  let results : Map[String, @tensor.Tensor] = Map([])
+  for i = 0; i < self.graph.outputs.length(); i = i + 1 {
+    let out_name = self.graph.outputs[i]
+    match env.get(out_name) {
+      Some(t) => results[out_name] = t
+      None => raise MissingTensor("graph output '\{out_name}' was not produced")
+    }
+  }
+  results
+}
+
+///|
 /// 在外层词法环境 `outer_env` 上执行当前子会话（供 `If` 分支调用），返回按子图 `outputs` 顺序排列的结果张量。
 fn Session::run_subgraph(
   self : Session,
@@ -567,31 +498,7 @@ fn Session::run_subgraph(
   let env : Map[String, @tensor.Tensor] = Map([])
   outer_env.each(fn(k, v) { env[k] = v })
   self.graph.initializers.each(fn(k, v) { env[k] = v })
-
-  for i = 0; i < self.graph.nodes.length(); i = i + 1 {
-    let node = self.graph.nodes[i]
-    let out_pool : @tensor.BufferPool? = if self.pinned_outputs[i] {
-      None
-    } else {
-      Some(self.pool)
-    }
-    let ctx : EvalContext = {
-      env,
-      packed_weights: self.packed_weights,
-      packed_conv_weights: self.packed_conv_weights,
-      packed_i8_weights: self.packed_i8_weights,
-      scratch_pool: self.pool,
-      out_pool,
-    }
-    let out_tensors = self.eval_step(node, ctx)
-    for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
-      if node.outputs[k] != "" {
-        env[node.outputs[k]] = out_tensors[k]
-      }
-    }
-    release_dead_buffers(self.release_plan[i], env, self.pool)
-  }
-
+  self.exec_nodes(env, None)
   let results : Array[@tensor.Tensor] = []
   for i = 0; i < self.graph.outputs.length(); i = i + 1 {
     let out_name = self.graph.outputs[i]
@@ -610,50 +517,9 @@ pub fn Session::run(
   self : Session,
   feeds : Map[String, @tensor.Tensor],
 ) -> Map[String, @tensor.Tensor] raise RuntimeError {
-  let env : Map[String, @tensor.Tensor] = Map([])
-  self.graph.initializers.each(fn(k, v) { env[k] = v })
-
-  for i = 0; i < self.graph.inputs.length(); i = i + 1 {
-    let in_name = self.graph.inputs[i]
-    match feeds.get(in_name) {
-      Some(t) => env[in_name] = t
-      None => raise MissingTensor("missing required graph input '\{in_name}'")
-    }
-  }
-
-  for i = 0; i < self.graph.nodes.length(); i = i + 1 {
-    let node = self.graph.nodes[i]
-    let out_pool : @tensor.BufferPool? = if self.pinned_outputs[i] {
-      None
-    } else {
-      Some(self.pool)
-    }
-    let ctx : EvalContext = {
-      env,
-      packed_weights: self.packed_weights,
-      packed_conv_weights: self.packed_conv_weights,
-      packed_i8_weights: self.packed_i8_weights,
-      scratch_pool: self.pool,
-      out_pool,
-    }
-    let out_tensors = self.eval_step(node, ctx)
-    for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
-      if node.outputs[k] != "" {
-        env[node.outputs[k]] = out_tensors[k]
-      }
-    }
-    release_dead_buffers(self.release_plan[i], env, self.pool)
-  }
-
-  let results : Map[String, @tensor.Tensor] = Map([])
-  for i = 0; i < self.graph.outputs.length(); i = i + 1 {
-    let out_name = self.graph.outputs[i]
-    match env.get(out_name) {
-      Some(t) => results[out_name] = t
-      None => raise MissingTensor("graph output '\{out_name}' was not produced")
-    }
-  }
-  results
+  let env = self.init_env(feeds)
+  self.exec_nodes(env, None)
+  self.collect_outputs(env)
 }
 
 ///|
@@ -663,63 +529,10 @@ pub fn Session::run_profiled(
   feeds : Map[String, @tensor.Tensor],
 ) -> (Map[String, @tensor.Tensor], RunProfile) raise RuntimeError {
   let t_total = @bench.monotonic_clock_start()
-  let env : Map[String, @tensor.Tensor] = Map([])
-  self.graph.initializers.each(fn(k, v) { env[k] = v })
-
-  for i = 0; i < self.graph.inputs.length(); i = i + 1 {
-    let in_name = self.graph.inputs[i]
-    match feeds.get(in_name) {
-      Some(t) => env[in_name] = t
-      None => raise MissingTensor("missing required graph input '\{in_name}'")
-    }
-  }
-
+  let env = self.init_env(feeds)
   let timings : Array[OpTiming] = []
-  for i = 0; i < self.graph.nodes.length(); i = i + 1 {
-    let node = self.graph.nodes[i]
-    let out_pool : @tensor.BufferPool? = if self.pinned_outputs[i] {
-      None
-    } else {
-      Some(self.pool)
-    }
-    let ctx : EvalContext = {
-      env,
-      packed_weights: self.packed_weights,
-      packed_conv_weights: self.packed_conv_weights,
-      packed_i8_weights: self.packed_i8_weights,
-      scratch_pool: self.pool,
-      out_pool,
-    }
-    let t0 = @bench.monotonic_clock_start()
-    let out_tensors = self.eval_step(node, ctx)
-    let elapsed_us = @bench.monotonic_clock_end(t0)
-    let out_shape = if out_tensors.length() > 0 {
-      out_tensors[0].shape()
-    } else {
-      []
-    }
-    timings.push({
-      node_name: node.name,
-      op_type: node.op.name(),
-      output_shape: out_shape,
-      elapsed_us,
-    })
-    for k = 0; k < out_tensors.length() && k < node.outputs.length(); k = k + 1 {
-      if node.outputs[k] != "" {
-        env[node.outputs[k]] = out_tensors[k]
-      }
-    }
-    release_dead_buffers(self.release_plan[i], env, self.pool)
-  }
-
-  let results : Map[String, @tensor.Tensor] = Map([])
-  for i = 0; i < self.graph.outputs.length(); i = i + 1 {
-    let out_name = self.graph.outputs[i]
-    match env.get(out_name) {
-      Some(t) => results[out_name] = t
-      None => raise MissingTensor("graph output '\{out_name}' was not produced")
-    }
-  }
+  self.exec_nodes(env, Some(timings))
+  let results = self.collect_outputs(env)
   let total_us = @bench.monotonic_clock_end(t_total)
   (results, { backend: self.backend, total_us, ops: timings, })
 }
@@ -761,20 +574,6 @@ pub fn Session::run_single_profiled(
   match outputs.get(self.graph.outputs[0]) {
     Some(t) => (t, profile)
     None => raise MissingTensor("output tensor missing")
-  }
-}
-
-///|
-/// 从原始小端序 float32 二进制文件（`.f32`）加载张量。
-pub fn load_f32_file(
-  path : String,
-  shape : Array[Int32],
-) -> @tensor.Tensor raise RuntimeError {
-  let bytes = @fs.read_file_to_bytes(path) catch {
-    @fs.IOError(msg) => raise ModelErr("failed to read '\{path}': \{msg}")
-  }
-  @tensor.Tensor::from_f32_bytes_le(shape, bytes) catch {
-    e => raise TensorErr("file '\{path}': \{e}")
   }
 }
 
