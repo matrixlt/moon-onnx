@@ -11,17 +11,22 @@ moon add matrixlt/nn_ir
 ## 子包结构
 
 - `matrixlt/nn_ir`（根包）：
-  - 覆盖 45 种强类型算子代数数据类型 `Op`（含 1D/2D `Conv`、`Resize`、`LSTM`、`LayerNormalization`、`Gelu`、`QuantizeLinear` / `DequantizeLinear` / `QLinearMatMul` 等）、`ActivationKind`、`AutoPad`、`IrNode`、`IrGraph`、`IrError`
+  - 覆盖 69 种强类型算子代数数据类型 `Op`（含 Q4 `MatMulNBits`、`RMSNormalization`/`SkipRmsNormalization`、`RotaryEmbedding`、`GroupQueryAttention`、1D/2D `Conv`、`Resize`、`NonMaxSuppression`、`LSTM`、`If` 控制流、`LayerNormalization`、`Gelu`/`GeluExact`/`Silu`、静态与动态 INT8 量化族等）、`FusedActivation`、`AutoPad`、`IrNode`、`IrGraph`、`IrError`
   - 稳定 Kahn 拓扑排序与依赖/环路校验（`topo_sort_nodes`）
+- `matrixlt/nn_ir/analysis`：
+  - 全项目唯一的编译期静态形状与数据类型推断真相源（`infer_static_shapes` / `infer_static_dtypes`）
 - `matrixlt/nn_ir/opt`：
   - 分级图优化管线 `optimize_graph`：
     1. `Constant` 节点提升为静态初始化器
     2. `Identity` 别名消除
     3. `Conv (1D/2D) + BatchNormalization` 静态参数折叠
     4. `Conv + 通道偏置 Add` 融合
-    5. `Conv + Relu / Clip(ReLU6)` 激活融合
-    6. 静态 `Gemm(transB=1)` 权重预转置
-    7. 死代码消除（DCE）
+    5. `Mul(x, Sigmoid(x))` -> `Silu` 融合
+    6. `Conv + Relu / Clip(ReLU6) / SiLU` 激活融合（支持并行分支非紧邻拓扑）
+    7. 9 节点 PyTorch 分解 `LayerNormalization` 模式融合
+    8. 5 节点精确 Erf `GeluExact` 模式融合（Whisper / BERT / ViT）
+    9. 静态 `Gemm(transB=1)` 权重预转置
+    10. 死代码消除（DCE）与 `If` 子图递归优化
 
 ## 快速示例
 

@@ -438,6 +438,19 @@ pub fn gelu_f32(
 }
 
 ///|
+/// ONNX 精确 GELU 算子：`0.5 * x * (1 + erf(x / sqrt(2)))`（复用 `ml_kernels/nn` 单遍融合内核）。
+pub fn gelu_exact_f32(
+  x : @tensor.Tensor,
+  pool~ : @tensor.BufferPool? = None,
+) -> @tensor.Tensor raise @tensor.TensorError {
+  let src = x.to_f32_buffer()
+  let n = src.length()
+  let out = alloc_f32(pool, n)
+  @nn.gelu_exact_f32(src, 0, out, 0, n)
+  @tensor.Tensor::from_f32(x.shape(), out)
+}
+
+///|
 /// ONNX HardSwish 算子：`x * clamp(x / 6 + 0.5, 0, 1)`（MobileNetV3 高频激活）。
 pub fn hard_swish_f32(
   x : @tensor.Tensor,

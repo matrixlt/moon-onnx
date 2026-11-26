@@ -205,6 +205,7 @@ pub fn infer_node_output_shapes(
     | @nn_ir.Sigmoid
     | @nn_ir.Tanh
     | @nn_ir.Gelu
+    | @nn_ir.GeluExact
     | @nn_ir.Erf
     | @nn_ir.Not
     | @nn_ir.HardSwish

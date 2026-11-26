@@ -68,6 +68,8 @@ pub(all) enum Op {
   Sigmoid
   Tanh
   Gelu
+  /// 精确高斯误差函数 GELU：`0.5 * x * (1 + erf(x / sqrt(2)))`（Whisper / BERT / ViT 融合目标）
+  GeluExact
   HardSwish
   LeakyRelu(alpha~ : Float)
   Identity
@@ -225,6 +227,7 @@ pub fn Op::name(self : Op) -> String {
     Sigmoid => "Sigmoid"
     Tanh => "Tanh"
     Gelu => "Gelu"
+    GeluExact => "GeluExact"
     HardSwish => "HardSwish"
     LeakyRelu(..) => "LeakyRelu"
     Identity => "Identity"

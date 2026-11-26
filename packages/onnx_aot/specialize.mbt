@@ -119,6 +119,76 @@ fn try_eval_const_node(
           }
           None => None
         }
+      @nn_ir.Add =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.add_f32(a, b))
+          _ => None
+        }
+      @nn_ir.Sub =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.sub_f32(a, b))
+          _ => None
+        }
+      @nn_ir.Mul =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.mul_f32(a, b))
+          _ => None
+        }
+      @nn_ir.Div =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.div_f32(a, b))
+          _ => None
+        }
+      @nn_ir.Less =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.less_op(a, b))
+          _ => None
+        }
+      @nn_ir.Greater =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.greater_op(a, b))
+          _ => None
+        }
+      @nn_ir.LessOrEqual =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.less_or_equal_op(a, b))
+          _ => None
+        }
+      @nn_ir.GreaterOrEqual =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.greater_or_equal_op(a, b))
+          _ => None
+        }
+      @nn_ir.Not =>
+        match consts.get(ins[0]) {
+          Some(x) => Some(@ops.not_op(x))
+          None => None
+        }
+      @nn_ir.And =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(a), Some(b)) => Some(@ops.and_op(a, b))
+          _ => None
+        }
+      @nn_ir.Where =>
+        match (consts.get(ins[0]), consts.get(ins[1]), consts.get(ins[2])) {
+          (Some(c), Some(x), Some(y)) => Some(@ops.where_op(c, x, y))
+          _ => None
+        }
+      @nn_ir.Range =>
+        match (consts.get(ins[0]), consts.get(ins[1]), consts.get(ins[2])) {
+          (Some(s), Some(l), Some(d)) => Some(@ops.range_op(s, l, d))
+          _ => None
+        }
+      @nn_ir.Expand =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(x), Some(sh)) => Some(@ops.expand_op(x, sh))
+          _ => None
+        }
+      @nn_ir.Tile =>
+        match (consts.get(ins[0]), consts.get(ins[1])) {
+          (Some(x), Some(reps)) => Some(@ops.tile_op(x, reps))
+          _ => None
+        }
       @nn_ir.DequantizeLinear(axis~) =>
         match (consts.get(ins[0]), consts.get(ins[1])) {
           (Some(x), Some(sc)) => {

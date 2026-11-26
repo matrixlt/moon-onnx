@@ -313,6 +313,12 @@ fn emit_tensor_model(
           "  let \{out_var} = @ops.gelu_f32(\{x}, use_simd=\{simd_str}, pool=\{pool_expr})\n",
         )
       }
+      @nn_ir.GeluExact => {
+        let x = resolve_expr(ins[0])
+        body.write_string(
+          "  let \{out_var} = @ops.gelu_exact_f32(\{x}, pool=\{pool_expr})\n",
+        )
+      }
       @nn_ir.HardSwish => {
         let x = resolve_expr(ins[0])
         body.write_string(

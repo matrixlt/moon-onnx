@@ -982,3 +982,95 @@ test "onnx_aot Arena mode compiles YOLOv8 Conv + SiLU + Resize + Concat" {
   assert_true(art.pkg_config.contains("matrixlt/ml_kernels/nn"))
   assert_true(!art.pkg_config.contains("matrixlt/tensor"))
 }
+
+///|
+/// 验证 `onnx_aot` Arena 模式支持 Whisper 编码器核心链路：
+/// `Conv1D -> 5 节点精确 GELU 融合 -> Shape/Gather/Mul/Concat 静态形状折叠 -> Reshape`，
+/// 发射 `@nn.gelu_exact_f32` 且无任何动态 `matrixlt/tensor` 依赖。
+test "onnx_aot Arena mode compiles Whisper Conv1D + GeluExact + shape arithmetic folding" {
+  let w_c1 = @tensor.Tensor::full_f32([8, 4, 3], (0.1 : Float))
+  let c_s2 = @tensor.Tensor::from_f32_array([], [1.4142135])
+  let c_1 = @tensor.Tensor::from_f32_array([], [1.0])
+  let c_h = @tensor.Tensor::from_f32_array([], [0.5])
+  let idx0 = @tensor.Tensor::from_i64([], [0])
+  let mul2 = @tensor.Tensor::from_i64([], [2])
+  let ax0 = @tensor.Tensor::from_i64([1], [0])
+  let tail = @tensor.Tensor::from_i64([1], [-1])
+
+  let g : @nn_ir.IrGraph = {
+    name: "mini_whisper_enc",
+    inputs: ["mel"],
+    outputs: ["out"],
+    initializers: Map([
+      ("w_c1", w_c1),
+      ("s2", c_s2),
+      ("one", c_1),
+      ("half", c_h),
+      ("idx0", idx0),
+      ("mul2", mul2),
+      ("ax0", ax0),
+      ("tail", tail),
+    ]),
+    nodes: [
+      {
+        name: "conv1",
+        op: @nn_ir.Conv(
+          kernel_shape=Some([3]),
+          strides=[2],
+          pads=[1, 1],
+          dilations=[1],
+          group=1,
+          auto_pad=@nn_ir.NotSet,
+          activation=@nn_ir.NoAct,
+        ),
+        inputs: ["mel", "w_c1"],
+        outputs: ["c1"],
+      },
+      { name: "d1", op: @nn_ir.Div, inputs: ["c1", "s2"], outputs: ["td"], },
+      { name: "e1", op: @nn_ir.Erf, inputs: ["td"], outputs: ["te"], },
+      { name: "a1", op: @nn_ir.Add, inputs: ["te", "one"], outputs: ["ta"], },
+      { name: "m1", op: @nn_ir.Mul, inputs: ["c1", "ta"], outputs: ["tm"], },
+      { name: "m2", op: @nn_ir.Mul, inputs: ["tm", "half"], outputs: ["g1"], },
+      {
+        name: "sh",
+        op: @nn_ir.Shape(start=None, end=None),
+        inputs: ["g1"],
+        outputs: ["s_vec"],
+      },
+      {
+        name: "g_b",
+        op: @nn_ir.Gather(axis=0),
+        inputs: ["s_vec", "idx0"],
+        outputs: ["b0"],
+      },
+      { name: "bm", op: @nn_ir.Mul, inputs: ["b0", "mul2"], outputs: ["b2"], },
+      {
+        name: "bu",
+        op: @nn_ir.Unsqueeze(axes=None),
+        inputs: ["b2", "ax0"],
+        outputs: ["b2_1d"],
+      },
+      {
+        name: "cat_sh",
+        op: @nn_ir.Concat(axis=0),
+        inputs: ["b2_1d", "tail"],
+        outputs: ["new_sh"],
+      },
+      {
+        name: "rs",
+        op: @nn_ir.Reshape(allowzero=false),
+        inputs: ["g1", "new_sh"],
+        outputs: ["out"],
+      },
+    ],
+  }
+  let art = @onnx_aot.compile_graph_to_mbt(g, Map([("mel", [1, 4, 16])]), config={
+    ..@onnx_aot.CodegenConfig::default(),
+    struct_name: "MiniWhisperEnc",
+    target: @onnx_aot.TargetWasm,
+  })
+  assert_eq(art.mode_used, @onnx_aot.Arena)
+  assert_true(art.mbt_source.contains("@nn.gelu_exact_f32("))
+  assert_true(!art.mbt_source.contains("@nn.erf_f32("))
+  assert_true(!art.pkg_config.contains("matrixlt/tensor"))
+}

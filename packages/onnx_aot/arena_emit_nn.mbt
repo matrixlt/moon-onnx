@@ -510,6 +510,14 @@ fn ArenaEmitter::emit_nn_op(
         "  @nn.gelu_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{out_numel})\n",
       )
     }
+    @nn_ir.GeluExact => {
+      self.need_nn = true
+      let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
+      let (y_buf, y_off) = self.resolve_f32_loc(out_n)
+      self.body.write_string(
+        "  @nn.gelu_exact_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{out_numel})\n",
+      )
+    }
     @nn_ir.Erf => {
       self.need_nn = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])

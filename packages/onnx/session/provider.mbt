@@ -306,6 +306,10 @@ fn eval_cpu_node_single(
         let x = ctx.require_tensor(n, ins, 0)
         @ops.gelu_f32(x, use_simd~, pool=out_pool)
       }
+      @nn_ir.GeluExact => {
+        let x = ctx.require_tensor(n, ins, 0)
+        @ops.gelu_exact_f32(x, pool=out_pool)
+      }
       @nn_ir.HardSwish => {
         let x = ctx.require_tensor(n, ins, 0)
         @ops.hard_swish_f32(x, use_simd~, pool=out_pool)

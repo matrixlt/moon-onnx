@@ -69,6 +69,7 @@ pub(all) enum Op {
   Sigmoid
   Tanh
   Gelu
+  GeluExact
   HardSwish
   LeakyRelu(alpha~ : Float)
   Identity

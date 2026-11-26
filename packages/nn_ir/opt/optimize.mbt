@@ -9,6 +9,7 @@ pub(all) struct OptStats {
   folded_conv_activation : Int32
   folded_layernorm : Int32
   folded_silu : Int32
+  folded_gelu : Int32
   pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }
@@ -851,6 +852,243 @@ fn pass_fold_silu(
 }
 
 ///|
+/// 读取单元素标量 Float32 初始化常量值，用于精确匹配 GELU 中的 `sqrt(2)`、`1.0` 与 `0.5`。
+fn read_scalar_f32_init(
+  initializers : Map[String, @tensor.Tensor],
+  name : String,
+) -> Double? {
+  match initializers.get(name) {
+    Some(t) if t.numel() == 1 && t.dtype() == @tensor.Float32 => {
+      let v = t.get_f32_flat(0) catch { _ => return None }
+      Some(v.to_double())
+    }
+    _ => None
+  }
+}
+
+///|
+/// 精确 GELU 模式融合 Pass：将 PyTorch / HuggingFace 导出的 5 节点精确 Erf-GELU 子图：
+/// - 模式 A（Whisper / Optimum）：`Div(x, sqrt(2)) -> Erf -> Add(1.0) -> Mul(x, _) -> Mul(_, 0.5)`
+/// - 模式 B（BERT / MiniLM / ViT）：`Div(x, sqrt(2)) -> Erf -> Add(1.0)` 与 `Mul(x, 0.5)` 相乘
+/// 折叠为单节点 `@nn_ir.GeluExact(x)`，消除 4 个中间激活张量及 4 趟整图访存。
+fn pass_fold_gelu(
+  nodes : Array[@nn_ir.IrNode],
+  initializers : Map[String, @tensor.Tensor],
+  graph_outputs : Array[String],
+) -> (Array[@nn_ir.IrNode], Int32) {
+  let uses = count_tensor_uses(nodes, graph_outputs)
+  let producer : Map[String, Int32] = Map([])
+  for i = 0; i < nodes.length(); i = i + 1 {
+    let nd = nodes[i]
+    if nd.outputs.length() == 1 && nd.outputs[0] != "" {
+      producer[nd.outputs[0]] = i
+    }
+  }
+
+  fn is_approx(v : Double, target : Double) -> Bool {
+    let d = v - target
+    (if d < 0.0 { -d } else { d }) < 1.0e-4
+  }
+
+  // 检查 `add_name` 是否为 `Add(Erf(Div(x, sqrt2)), 1.0)`，若是则返回 `(x, div_idx, erf_idx, add_idx)`
+  fn match_one_plus_erf(add_name : String) -> (String, Int32, Int32, Int32)? {
+    if uses.get(add_name) != Some(1) {
+      return None
+    }
+    let add_idx = match producer.get(add_name) {
+      Some(idx) => idx
+      None => return None
+    }
+    let add_nd = nodes[add_idx]
+    match add_nd.op {
+      @nn_ir.Add if add_nd.inputs.length() == 2 => {
+        let a0 = add_nd.inputs[0]
+        let a1 = add_nd.inputs[1]
+        let erf_out : String? = match read_scalar_f32_init(initializers, a1) {
+          Some(v) if is_approx(v, 1.0) => Some(a0)
+          _ =>
+            match read_scalar_f32_init(initializers, a0) {
+              Some(v) if is_approx(v, 1.0) => Some(a1)
+              _ => None
+            }
+        }
+        let erf_name = match erf_out {
+          Some(s) if uses.get(s) == Some(1) => s
+          _ => return None
+        }
+        let erf_idx = match producer.get(erf_name) {
+          Some(idx) => idx
+          None => return None
+        }
+        let erf_nd = nodes[erf_idx]
+        match erf_nd.op {
+          @nn_ir.Erf if erf_nd.inputs.length() == 1 => {
+            let div_name = erf_nd.inputs[0]
+            if uses.get(div_name) != Some(1) {
+              return None
+            }
+            let div_idx = match producer.get(div_name) {
+              Some(idx) => idx
+              None => return None
+            }
+            let div_nd = nodes[div_idx]
+            match div_nd.op {
+              @nn_ir.Div if div_nd.inputs.length() == 2 =>
+                match read_scalar_f32_init(initializers, div_nd.inputs[1]) {
+                  Some(v) if is_approx(v, 1.4142135623730951) =>
+                    Some((div_nd.inputs[0], div_idx, erf_idx, add_idx))
+                  _ => None
+                }
+              _ => None
+            }
+          }
+          _ => None
+        }
+      }
+      _ => None
+    }
+  }
+
+  let skip = Array::make(nodes.length(), false)
+  let replaced : Map[Int32, @nn_ir.IrNode] = Map([])
+  let mut folded = 0
+
+  for i = 0; i < nodes.length(); i = i + 1 {
+    if skip[i] {
+      continue
+    }
+    let nd = nodes[i]
+    match nd.op {
+      @nn_ir.Mul if nd.inputs.length() == 2 && nd.outputs.length() == 1 => {
+        let m0 = nd.inputs[0]
+        let m1 = nd.inputs[1]
+        // 模式 A：`Mul(Mul(x, 1 + erf(x/sqrt2)), 0.5)`
+        let half_other : String? = match
+          read_scalar_f32_init(initializers, m1) {
+          Some(v) if is_approx(v, 0.5) => Some(m0)
+          _ =>
+            match read_scalar_f32_init(initializers, m0) {
+              Some(v) if is_approx(v, 0.5) => Some(m1)
+              _ => None
+            }
+        }
+        let mut matched_a = false
+        match half_other {
+          Some(prev_name) if uses.get(prev_name) == Some(1) =>
+            match producer.get(prev_name) {
+              Some(p_idx) if !skip[p_idx] => {
+                let p_nd = nodes[p_idx]
+                match p_nd.op {
+                  @nn_ir.Mul if p_nd.inputs.length() == 2 => {
+                    let pa = p_nd.inputs[0]
+                    let pb = p_nd.inputs[1]
+                    let hit : (String, Int32, Int32, Int32)? = match
+                      match_one_plus_erf(pb) {
+                      Some((x, di, ei, ai)) if x == pa => Some((x, di, ei, ai))
+                      _ =>
+                        match match_one_plus_erf(pa) {
+                          Some((x, di, ei, ai)) if x == pb =>
+                            Some((x, di, ei, ai))
+                          _ => None
+                        }
+                    }
+                    match hit {
+                      Some((x, di, ei, ai)) => {
+                        skip[di] = true
+                        skip[ei] = true
+                        skip[ai] = true
+                        skip[p_idx] = true
+                        replaced[i] = {
+                          name: nd.name,
+                          op: @nn_ir.GeluExact,
+                          inputs: [x],
+                          outputs: nd.outputs.copy(),
+                        }
+                        folded = folded + 1
+                        matched_a = true
+                      }
+                      None => ()
+                    }
+                  }
+                  _ => ()
+                }
+              }
+              _ => ()
+            }
+          _ => ()
+        }
+        if matched_a {
+          continue
+        }
+
+        // 模式 B：`Mul(Mul(x, 0.5), 1 + erf(x/sqrt2))`
+        let hit_b : (String, String, Int32, Int32, Int32)? = match
+          match_one_plus_erf(m1) {
+          Some((x, di, ei, ai)) => Some((m0, x, di, ei, ai))
+          None =>
+            match match_one_plus_erf(m0) {
+              Some((x, di, ei, ai)) => Some((m1, x, di, ei, ai))
+              None => None
+            }
+        }
+        match hit_b {
+          Some((xh_name, x, di, ei, ai)) if uses.get(xh_name) == Some(1) =>
+            match producer.get(xh_name) {
+              Some(xh_idx) if !skip[xh_idx] => {
+                let xh_nd = nodes[xh_idx]
+                match xh_nd.op {
+                  @nn_ir.Mul if xh_nd.inputs.length() == 2 => {
+                    let xa = xh_nd.inputs[0]
+                    let xb = xh_nd.inputs[1]
+                    let half_b = match read_scalar_f32_init(initializers, xb) {
+                      Some(v) => is_approx(v, 0.5)
+                      None => false
+                    }
+                    let half_a = match read_scalar_f32_init(initializers, xa) {
+                      Some(v) => is_approx(v, 0.5)
+                      None => false
+                    }
+                    let ok = (xa == x && half_b) || (xb == x && half_a)
+                    if ok {
+                      skip[di] = true
+                      skip[ei] = true
+                      skip[ai] = true
+                      skip[xh_idx] = true
+                      replaced[i] = {
+                        name: nd.name,
+                        op: @nn_ir.GeluExact,
+                        inputs: [x],
+                        outputs: nd.outputs.copy(),
+                      }
+                      folded = folded + 1
+                    }
+                  }
+                  _ => ()
+                }
+              }
+              _ => ()
+            }
+          _ => ()
+        }
+      }
+      _ => ()
+    }
+  }
+
+  let out : Array[@nn_ir.IrNode] = []
+  for i = 0; i < nodes.length(); i = i + 1 {
+    if skip[i] {
+      continue
+    }
+    match replaced.get(i) {
+      Some(r) => out.push(r)
+      None => out.push(nodes[i])
+    }
+  }
+  (out, folded)
+}
+
+///|
 /// 递归优化 `If` 控制流节点内部的 `then_branch` 与 `else_branch` 子图，累加统计信息。
 fn pass_optimize_subgraphs(
   nodes : Array[@nn_ir.IrNode],
@@ -863,6 +1101,7 @@ fn pass_optimize_subgraphs(
   let mut conv_act = 0
   let mut ln_fold = 0
   let mut silu_fold = 0
+  let mut gelu_fold = 0
   let mut gemm_pt = 0
   let mut dead = 0
 
@@ -881,6 +1120,7 @@ fn pass_optimize_subgraphs(
           s2.folded_conv_activation
         ln_fold = ln_fold + s1.folded_layernorm + s2.folded_layernorm
         silu_fold = silu_fold + s1.folded_silu + s2.folded_silu
+        gelu_fold = gelu_fold + s1.folded_gelu + s2.folded_gelu
         gemm_pt = gemm_pt +
           s1.pretransposed_gemm_weights +
           s2.pretransposed_gemm_weights
@@ -905,6 +1145,7 @@ fn pass_optimize_subgraphs(
       folded_conv_activation: conv_act,
       folded_layernorm: ln_fold,
       folded_silu: silu_fold,
+      folded_gelu: gelu_fold,
       pretransposed_gemm_weights: gemm_pt,
       eliminated_dead_nodes: dead,
     },
@@ -939,8 +1180,9 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     initializers,
     graph.outputs,
   )
+  let (n6b, folded_gelu) = pass_fold_gelu(n6, initializers, graph.outputs)
   let (n7, pretransposed_gemm_weights) = pass_pretranspose_gemm_weights(
-    n6, initializers,
+    n6b, initializers,
   )
   let (n8, eliminated_dead_nodes) = pass_dce(n7, graph.outputs)
 
@@ -961,6 +1203,7 @@ pub fn optimize_graph(graph : @nn_ir.IrGraph) -> (@nn_ir.IrGraph, OptStats) {
     sub_stats.folded_conv_activation,
     folded_layernorm: folded_layernorm + sub_stats.folded_layernorm,
     folded_silu: folded_silu + sub_stats.folded_silu,
+    folded_gelu: folded_gelu + sub_stats.folded_gelu,
     pretransposed_gemm_weights: pretransposed_gemm_weights +
     sub_stats.pretransposed_gemm_weights,
     eliminated_dead_nodes: eliminated_dead_nodes +

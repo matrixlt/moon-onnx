@@ -9,9 +9,9 @@
 | 模块 | 路径 | 外部依赖 | 职责定位 |
 | :--- | :--- | :--- | :--- |
 | **`matrixlt/tensor`** | `packages/tensor` | **零依赖** | 多维张量底座（`Float32`/`Float64`/`Int64`/`Int32`/`Bool`/`UInt8`/`Int8`、`SymDim`、零拷贝视图、多向广播、`BufferPool`） |
-| **`matrixlt/ml_kernels`** | `packages/ml_kernels` | **零依赖** | 纯 MoonBit 原生 `V128` SIMD 与零分配内核集合（`/gemm` BLIS 8 列微面板、`/conv` 零 `im2col` Depthwise、`/vecmath`、`/quant` 4 列 `i32x4.dot`、`/nn` 零分配 Pool/Erf/GELU/Softmax/LayerNorm） |
+| **`matrixlt/ml_kernels`** | `packages/ml_kernels` | **零依赖** | 纯 MoonBit 原生 `V128` SIMD 与零分配内核集合（`/gemm` BLIS 8 列微面板 + Relu/Clip/SiLU 融合、`/conv` 16×16 分块 1×1 与零 `im2col` Depthwise、`/vecmath`、`/quant` INT8 `i32x4.dot` + 4-bit `MatMulNBits`、`/nn` 零分配 LLM/视觉/语音内核） |
 | **`matrixlt/onnx_proto`** | `packages/onnx_proto` | `protobuf`, `tensor` | 官方 `onnx.proto` 绑定、纯内存模型解析与权重解码（文件 I/O 严格隔离在 `/fs`） |
-| **`matrixlt/nn_ir`** | `packages/nn_ir` | `tensor` | 强类型计算图 IR（61 算子）、Kahn 拓扑排序、分级图优化 Pass（`/opt`）与静态形状/类型推断单一真相源（`/analysis`） |
+| **`matrixlt/nn_ir`** | `packages/nn_ir` | `tensor` | 强类型计算图 IR（69 算子）、Kahn 拓扑排序、分级图优化 Pass（`/opt`）与静态形状/类型推断单一真相源（`/analysis`） |
 | **`matrixlt/onnx`** | `packages/onnx` | 上述 4 库 | 纯内存跨端动态推理引擎（`/frontend`、`/ops`、纯内存四端通用 `/session` + 私有权重缓存 `ExecutionProvider`，文件 I/O 严格隔离在 `/fs`） |
 | **`matrixlt/onnx_aot`** | `packages/onnx_aot` | `tensor`, `onnx_proto`, `nn_ir`, `onnx` | 独立 AOT 静态编译器（`onnx2mbt` v2，纯内存四端通用）：图特化、Static Arena 区间规划与零堆分配 Wasm/Native 代码生成 |
 
@@ -19,23 +19,29 @@
 - `apps/cli`：Native 命令行工具（`inspect`、`run`、`profile`、`compile`）
 - `apps/wasm_bench` & `scripts/bench_wasm.mjs`：纯内存 Wasm / Wasm-GC `V128` SIMD 算子基准
 - `scripts/bench_aot_wasm.mjs`：真实 MNIST CNN 的 `onnx2mbt` AOT 5 模式端到端 Wasm 体积与性能基准
-- `scripts/bench_real_models.mjs`：真实开源生产模型（Silero VAD v5 + MobileNetV2-12 + all-MiniLM-L6-v2 FP32/INT8）的 `onnx2mbt` 零分配 Wasm AOT 精度对齐（vs ORT）与性能基准
+- `scripts/bench_real_models.mjs`：真实开源生产模型（Silero VAD v5 + MobileNetV2-12 + YOLOv8n 640×640 + all-MiniLM-L6-v2 FP32/INT8）的 `onnx2mbt` 零分配 Wasm AOT 精度对齐（vs ORT）与性能基准
+- `scripts/bench_whisper.mjs`：真实 OpenAI Whisper-tiny（Encoder FP32 + Decoder INT8 Prefill + Decoder INT8 KV-Cache Step）全链路零分配 Wasm AOT 精度对齐（vs ORT）与性能基准
 - `benchmarks`：Native Release 微基准与 MNIST 端到端基准
 
 ## 核心亮点与实测数据
 
-- **67 个高频 ONNX 算子（含现代生成式 Q4 LLM 套件、`If` 控制流与动态 INT8 量化）**：覆盖生成式 LLM（`MatMulNBits` 4-bit 奇偶拆分 V128 内核、`RMSNormalization`/`SkipSimplifiedLayerNormalization`、`RotaryEmbedding`、`GroupQueryAttention` 含流式在线 Softmax 与 KV-Cache、`Silu` 自动融合）、视觉（`Conv1D`/`Conv2D`/Depthwise、`MaxPool`/`AveragePool`/`GlobalAveragePool`、`Resize`、`BatchNormalization`）、语音/时序（多输出 `LSTM`、`If` 条件分支子图）、Transformer/NLP（`LayerNormalization` + 9 节点自动融合、`Erf`/`Gelu`/`HardSwish`、N-D 预打包与零拷贝转置 `MatMul`/`Gemm`、`Softmax`、`Where`/`Range`/`Expand`/`Tile`、完整比较与逻辑族）与静态/动态量化（`QuantizeLinear`/`DequantizeLinear`/`QLinearMatMul`/`DynamicQuantizeLinear`/`MatMulInteger`）。
+- **69 个高频 ONNX 算子（覆盖生成式 Q4 LLM、视觉检测 YOLOv8、端侧语音 Whisper 与控制流/动态量化）**：
+  - **生成式 Q4 LLM 套件**：`MatMulNBits`（4-bit 奇偶拆分 4 列展开 V128 内核）、`RMSNormalization` / `SkipSimplifiedLayerNormalization`、`RotaryEmbedding`、`GroupQueryAttention`（流式在线 Softmax + KV-Cache）、`Silu` 自动融合与零拷贝 `A @ B^T` `lm_head`；
+  - **视觉检测与分类**：`Conv1D`/`Conv2D`/Depthwise（含 `16×16` 分块 `1×1` im2col 与寄存器级 `Conv+Relu/Clip/SiLU` 融合）、`MaxPool`/`AveragePool`/`GlobalAveragePool`、`Resize`（支持 Arena AOT）、`NonMaxSuppression`、`BatchNormalization`；
+  - **语音 ASR / 流式 VAD 与 Transformer**：多输出 `LSTM`、`If` 条件分支子图、`LayerNormalization`（9 节点自动融合）、`GeluExact`（5 节点 Erf-GELU 自动融合）、`Erf`/`Gelu`/`HardSwish`、静态/动态 INT8 量化族（`QuantizeLinear`/`DequantizeLinear`/`QLinearMatMul`/`DynamicQuantizeLinear`/`MatMulInteger`）与完整逻辑/索引算子。
 - **真实开源生产模型端到端打通 + 实测数据（MoonBit 1.0 RC1，对比官方 ONNX Runtime 1.32.0）**：
 
 | 真实开源模型 | 运行模式 / 目标 | 产物体积（raw / gzip） | 静态 Arena RAM | 误差（vs ORT） | 实测速度 |
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **SmolLM2-135M-Instruct Q4** (30 层, 174 MB) | Native V128 `Session` (Q4 + KV-Cache) | 纯 MoonBit 零 FFI | 零拷贝 `lm_head` | **`5.44e-5`**（Token 100% 一致） | **107.0 ms/tok（9.4 tok/s）** |
-| **Silero VAD v5** (16kHz 流式) | `wasm-gc` Arena | **7.9 KB / 3.8 KB** | **13.8 KB** | `1.17e-7` | **1.07 ms/帧（29.8× 实时）** |
-| **Silero VAD v5** (16kHz 流式) | `wasm` V128 Arena | 25.9 KB / 13.3 KB | **13.8 KB** | `1.17e-7` | **0.93 ms/帧（34.6× 实时）** |
-| **MobileNetV2-12** (3.49M, 224²) | `wasm-gc` Arena | **12.1 KB / 4.6 KB** | 7.64 MB（省 78%） | `1.17e-5`（Top-1 一致） | **530.7 ms**（Native 114 ms） |
-| **MobileNetV2-12** (3.49M, 224²) | `wasm` V128 Arena | 31.8 KB / 15.8 KB | 7.64 MB（省 78%） | `1.06e-5`（Top-1 一致） | 654.1 ms（Native 114 ms） |
-| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm-gc` Arena | **21.5 KB / 7.4 KB** | **312.1 KB（省 95.7%）** | `3.78e-6` | 323.6 ms（Native `seq=8/16`: 94/121 ms） |
-| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm` V128 Arena | 50.1 KB / 25.4 KB | **312.1 KB（省 95.7%）** | `3.95e-6` | **200.5 ms（5.0 emb/s）** |
+| **YOLOv8n COCO 80-class** (640×640, 12.2 MB) | `wasm-gc` Arena (`Conv+SiLU` 融合) | **19.9 KB / 7.3 KB** | 28.1 MB（Arena 省 92.7%） | **`box 1.9e-3px / cls 2.8e-7`** | 7932 ms（Native 1498 ms） |
+| **YOLOv8n COCO 80-class** (640×640, 12.2 MB) | `wasm` V128 Arena (`Conv+SiLU` 融合) | 46.8 KB / 23.0 KB | 28.1 MB（Arena 省 92.7%） | **`box 1.9e-3px / cls 2.5e-7`** | **5876 ms**（Native 1498 ms） |
+| **Whisper-tiny Encoder FP32** (30s 音频, 32 MB) | `wasm-gc` / `wasm` V128 Arena | **14.8 KB / 5.7 KB** (`40.0 KB`) | 114.0 MB（省 85%） | **`1.87e-3`**（576K 输出） | **25.6 s（1.17× 实时）** |
+| **Whisper-tiny Decoder INT8 Prefill** (Cross+Self Attn) | `wasm` V128 Arena | 81.5 KB / 40.6 KB | 20.5 MB（省 73%） | `tok1=542`（与 ORT 一致） | **812.4 ms** |
+| **Whisper-tiny Decoder INT8 KV-Cache Step** | `wasm-gc` / `wasm` V128 Arena | **30.0 KB / 10.3 KB** (`71.2 KB`) | **2.29 MB（省 76.5%）** | `tok2=33`（与 ORT 一致） | **111.2 ms/tok（9.0 tok/s）** |
+| **Silero VAD v5** (16kHz 流式) | `wasm-gc` / `wasm` V128 Arena | **7.9 KB / 3.8 KB** (`25.9 KB`) | **13.8 KB** | `1.17e-7` | **0.93 ms/帧（34.6× 实时）** |
+| **MobileNetV2-12** (3.49M, 224²) | `wasm-gc` / `wasm` V128 Arena | **12.1 KB / 4.6 KB** (`31.8 KB`) | 7.64 MB（省 78%） | `1.06e-5`（Top-1 一致） | **530.7 ms**（Native 114 ms） |
+| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm-gc` / `wasm` V128 Arena | **21.5 KB / 7.4 KB** (`50.1 KB`) | **312.1 KB（省 95.7%）** | `3.78e-6` | **200.5 ms（5.0 emb/s）** |
 | **all-MiniLM-L6-v2 INT8** (**21.5 MB**, 4× 压缩) | `wasm` V128 `i32x4.dot` | **79.1 KB / 39.4 KB** | **336.1 KB（省 96.4%）** | **`1.07e-6`** | **85.3 ms（11.7 emb/s）** |
 | **MNIST CNN** (外置 / 单文件内嵌) | `wasm-gc` Arena | **3.2 KB / 1.8 KB**（内嵌 26.8 KB） | 12.9 KB | `8.34e-7` | **651–654 FPS** |
 

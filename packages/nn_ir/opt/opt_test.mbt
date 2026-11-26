@@ -364,3 +364,48 @@ test "pass_fold_conv_activation fuses Conv + SiLU across parallel branches" {
   assert_eq(opt_g.nodes[0].outputs, ["y1"])
   assert_eq(opt_g.nodes[1].outputs, ["y2"])
 }
+
+///|
+/// 验证精确 Erf-GELU 融合 Pass：同时支持 Whisper（`Mul(Mul(x, 1+erf), 0.5)`）与 BERT（`Mul(Mul(x, 0.5), 1+erf)`）两种导出拓扑。
+test "pass_fold_gelu fuses Whisper and BERT 5-node exact Erf-GELU subgraphs" {
+  let c_s2 = @tensor.Tensor::from_f32_array([], [1.4142135])
+  let c_1 = @tensor.Tensor::from_f32_array([], [1.0])
+  let c_h = @tensor.Tensor::from_f32_array([], [0.5])
+  let g : @nn_ir.IrGraph = {
+    name: "gelu_exact_fusion",
+    inputs: ["x"],
+    outputs: ["y"],
+    initializers: Map([("s2", c_s2), ("one", c_1), ("half", c_h)]),
+    nodes: [
+      // Pattern A (Whisper): Div -> Erf -> Add(1) -> Mul(x, _) -> Mul(_, 0.5)
+      { name: "d1", op: @nn_ir.Div, inputs: ["x", "s2"], outputs: ["t_d1"], },
+      { name: "e1", op: @nn_ir.Erf, inputs: ["t_d1"], outputs: ["t_e1"], },
+      {
+        name: "a1",
+        op: @nn_ir.Add,
+        inputs: ["t_e1", "one"],
+        outputs: ["t_a1"],
+      },
+      { name: "m1", op: @nn_ir.Mul, inputs: ["x", "t_a1"], outputs: ["t_m1"], },
+      { name: "m2", op: @nn_ir.Mul, inputs: ["t_m1", "half"], outputs: ["h1"], },
+      // Pattern B (BERT): Mul(h1, 0.5) * Add(Erf(Div(h1, s2)), 1.0)
+      { name: "xh", op: @nn_ir.Mul, inputs: ["h1", "half"], outputs: ["t_xh"], },
+      { name: "d2", op: @nn_ir.Div, inputs: ["h1", "s2"], outputs: ["t_d2"], },
+      { name: "e2", op: @nn_ir.Erf, inputs: ["t_d2"], outputs: ["t_e2"], },
+      {
+        name: "a2",
+        op: @nn_ir.Add,
+        inputs: ["one", "t_e2"],
+        outputs: ["t_a2"],
+      },
+      { name: "m3", op: @nn_ir.Mul, inputs: ["t_xh", "t_a2"], outputs: ["y"], },
+    ],
+  }
+  let (opt_g, stats) = @opt.optimize_graph(g)
+  assert_eq(stats.folded_gelu, 2)
+  assert_eq(opt_g.nodes.length(), 2)
+  assert_eq(opt_g.nodes[0].op.name(), "GeluExact")
+  assert_eq(opt_g.nodes[1].op.name(), "GeluExact")
+  assert_eq(opt_g.nodes[0].inputs, ["x"])
+  assert_eq(opt_g.nodes[1].inputs, ["h1"])
+}

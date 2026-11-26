@@ -241,6 +241,7 @@ fn can_emit_arena(
       | @nn_ir.Sigmoid
       | @nn_ir.Tanh
       | @nn_ir.Gelu
+      | @nn_ir.GeluExact
       | @nn_ir.Silu
       | @nn_ir.Erf
       | @nn_ir.HardSwish

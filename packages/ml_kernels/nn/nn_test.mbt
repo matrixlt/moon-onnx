@@ -199,4 +199,12 @@ test "ml_kernels/nn resize_2d_f32 and nms_f32 kernels" {
   )
   assert_eq(csel.length(), 1)
   assert_eq(csel[0], (0, 0, 0))
+
+  // 5. gelu_exact_f32: gelu(0)=0, gelu(1)≈0.8413447, gelu(-1)≈-0.1586553
+  let gx : FixedArray[Float] = [0.0, 1.0, -1.0]
+  let gy = FixedArray::make(3, (0.0 : Float))
+  @nn.gelu_exact_f32(gx, 0, gy, 0, 3)
+  assert_true(gy[0].abs() < (1.0e-6 : Float))
+  assert_true((gy[1] - (0.8413447 : Float)).abs() < (1.0e-5 : Float))
+  assert_true((gy[2] - (-0.1586553 : Float)).abs() < (1.0e-5 : Float))
 }

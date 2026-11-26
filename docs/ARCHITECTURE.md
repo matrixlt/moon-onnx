@@ -8,20 +8,21 @@
 Layer 0 (零外部依赖，可被整个 MoonBit 社区独立复用):
   matrixlt/tensor        N 维张量、多 DType、SymDim 符号维度、零拷贝视图、多向广播、BufferPool
   matrixlt/ml_kernels    原生 V128 SIMD 内核集合：
-                         /gemm (BLIS 4×8 微内核 + PackedMatrixB)、/vecmath、/conv (im2col + Depthwise)、
-                         /quant (V128 i32x4.dot_i16x8_s + PackedInt8MatrixB)、
-                         /nn (零分配 MaxPool/AvgPool/GAP/Erf/GELU/Softmax/LayerNorm/Reflect/ScalarConv)
+                         /gemm (BLIS 4×8 微内核 + PackedMatrixB + 零拷贝 NT + Relu/Clip/SiLU 寄存器级融合)、
+                         /vecmath、/conv (16×16 分块 1×1 im2col + 零 im2col Depthwise)、
+                         /quant (INT8 i32x4.dot_i16x8_s + Q4 MatMulNBits 奇偶拆分 4 列展开 V128)、
+                         /nn (零分配 Pool/Erf/GELU/GeluExact/SiLU/Softmax/LayerNorm/RMSNorm/RoPE/GQA/Resize/NMS)
 
 Layer 1 (模型格式与格式无关编译中端):
   matrixlt/onnx_proto    官方 onnx.proto 绑定 + 纯内存加载器（DimSpec = @tensor.SymDim）+ /fs 可选文件读取
     └─ depends on: moonbitlang/protobuf, matrixlt/tensor
-  matrixlt/nn_ir         强类型 61 算子 IR、Kahn 拓扑排序、分级图优化 Pass (/opt)、静态形状/类型推断单一真相源 (/analysis)
+  matrixlt/nn_ir         强类型 69 算子 IR、Kahn 拓扑排序、分级图优化 Pass (/opt: Conv+BN+Bias+Relu/Clip/SiLU、LayerNorm、SiLU、GeluExact)、静态形状/类型推断单一真相源 (/analysis)
     └─ depends on: matrixlt/tensor
 
 Layer 2 (动态推理引擎运行时与独立 AOT 静态编译器):
   matrixlt/onnx          纯内存运行时核心：/frontend (ONNX->IR)、/ops、/session + 根包 @onnx 门面 + /fs 可选文件读取
     └─ depends on: tensor, ml_kernels, onnx_proto, nn_ir
-  matrixlt/onnx_aot      独立 AOT 静态编译器 (`onnx2mbt` v2)：图特化、Static Arena 规划、Arena/Tensor 代码生成
+  matrixlt/onnx_aot      独立 AOT 静态编译器 (`onnx2mbt` v2)：图特化、常量折叠、Static Arena 规划、Arena/Tensor 代码生成
     └─ depends on: tensor, onnx_proto, nn_ir (/opt, /analysis), onnx (/frontend, /ops)
 ```
 
@@ -34,5 +35,6 @@ Layer 2 (动态推理引擎运行时与独立 AOT 静态编译器):
 5. **自动生成代码隔离**：`packages/onnx_proto/schema/top.mbt` 由 `scripts/gen_proto.sh` 自动生成（`json=false`），禁止手工修改；所有业务封装位于 `packages/onnx_proto/*.mbt`。
 6. **原生 `V128` SIMD 规范**：
    - Relu 使用 `@simd.f32x4_pmax(0.0, v)` 而非 `f32x4_max`，避免 IEEE NaN 传播回退导致的性能劣化；
-   - FP32 GEMM 采用 BLIS 8 列微面板 + `4×8` 寄存器分块 `f32x4_relaxed_madd` 微内核（`PackedMatrixB`）；
-   - INT8 `MatMulInteger` 采用 4 列展开 `i32x4.dot_i16x8_s` 指令 + 预计算列和零减法公式（`PackedInt8MatrixB`）。
+   - FP32 GEMM 采用 BLIS 8 列微面板 + `4×8` 寄存器分块 `f32x4_relaxed_madd` 微内核（`PackedMatrixB`），并内置 `Relu` / `Clip` / `SiLU` 寄存器级 Epilogue 融合；
+   - INT8 `MatMulInteger` 采用 4 列展开 `i32x4.dot_i16x8_s` 指令 + 预计算列和零减法公式（`PackedInt8MatrixB`）；
+   - 4-bit `MatMulNBits` 采用 16 字节批量奇偶 nibble 拆分 + 4 列展开 `f32x4_relaxed_madd` 微内核。

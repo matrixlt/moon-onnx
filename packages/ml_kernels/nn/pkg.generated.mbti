@@ -14,6 +14,8 @@ pub fn erf_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32) -> Uni
 
 pub fn gap_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32) -> Unit
 
+pub fn gelu_exact_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32) -> Unit
+
 pub fn gelu_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, Int32) -> Unit
 
 pub fn gqa_f32(FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Int32], FixedArray[Float], Int32, FixedArray[Float], Int32, FixedArray[Float], Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Float, Int32, Float) -> Unit

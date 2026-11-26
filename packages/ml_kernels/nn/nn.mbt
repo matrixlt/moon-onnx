@@ -41,6 +41,33 @@ pub fn gelu_f32(
 }
 
 ///|
+/// 零分配精确 GELU（`0.5 * x * (1 + erf(x / sqrt(2)))`，单遍融合计算，最大误差 < 1.5e-7，供 Whisper/BERT/ViT 融合使用）。
+pub fn gelu_exact_f32(
+  x : FixedArray[Float],
+  x_off : Int32,
+  y : FixedArray[Float],
+  y_off : Int32,
+  n : Int32,
+) -> Unit {
+  let inv_sqrt2 = 0.7071067811865475
+  for i = 0; i < n; i = i + 1 {
+    let xd = x[x_off + i].to_double()
+    let v = xd * inv_sqrt2
+    let sign = if v < 0.0 { -1.0 } else { 1.0 }
+    let ax = if v < 0.0 { -v } else { v }
+    let t = 1.0 / (1.0 + 0.3275911 * ax)
+    let poly = (
+        (((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) *
+        t +
+        0.254829592
+      ) *
+      t
+    let erf_v = sign * (1.0 - poly * @math.exp(-ax * ax))
+    y[y_off + i] = Float::from_double(0.5 * xd * (1.0 + erf_v))
+  }
+}
+
+///|
 /// 零分配数值稳定 Softmax，沿 `[outer, axis_dim, inner]` 的中间轴执行归一化。
 pub fn softmax_f32(
   x : FixedArray[Float],

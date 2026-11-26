@@ -11,19 +11,24 @@ moon add matrixlt/ml_kernels
 ## 子包结构（v0.2.0）
 
 - `matrixlt/ml_kernels/gemm`：
-  - 缓存友好 `i-k-j` 标量矩阵乘法（`matmul_2d_scalar_f32`）
+  - 缓存友好 `i-k-j` 标量矩阵乘法（`matmul_2d_scalar_f32`）与零拷贝 `A @ B^T` V128 内核（`matmul_2d_nt_simd_f32`）
   - `NC = 64` 列分块 + `4×8` 寄存器分块 `V128` SIMD GEMM 微内核（`matmul_2d_simd_f32`）
   - 静态权重预打包矩阵：`PackedMatrixB`、`pack_matrix_b_f32`、`pack_matrix_b_transposed_f32`、`matmul_2d_prepacked_simd_f32`
-  - 面向卷积的 NCHW + 偏置 + 尾部激活（`Epilogue::NoEpilogue` / `Relu` / `Clip`）寄存器级融合微内核：`matmul_2d_prepacked_nchw_simd_f32`
+  - 面向卷积的 NCHW + 偏置 + 尾部激活（`Epilogue::NoEpilogue` / `Relu` / `Clip` / `Silu`）寄存器级融合微内核：`matmul_2d_prepacked_nchw_simd_f32`
 - `matrixlt/ml_kernels/conv`：
-  - `im2col_2d_f32` 与 `im2col_2d_nhwc_f32`（内置 `1×1` 点卷积与内部像素零边界检查快速路径）
-  - 零 `im2col` 专用 V128 深度可分离卷积：`depthwise_conv2d_f32`（支持融合偏置与 `Relu`/`Clip`）
+  - `im2col_2d_f32` 与 `im2col_2d_nhwc_f32`（内置 `16×16` 缓存分块 `1×1` 点卷积与内部像素零边界检查快速路径）
+  - 零 `im2col` 专用 V128 深度可分离卷积：`depthwise_conv2d_f32`（支持融合偏置与 `Relu`/`Clip`/`Silu`）
 - `matrixlt/ml_kernels/vecmath`：
   - 4-wide V128 逐元素算术与超越函数：`add` / `sub` / `mul` / `div` / `sqrt` / `relu` / `clip` / `exp` / `sigmoid` / `tanh` / `gelu` / `hard_swish`
 - `matrixlt/ml_kernels/quant`：
-  - 线性量化/反量化（`quantize_i8_per_tensor` / `quantize_u8_per_tensor` / `dequantize_*`，支持 Arena 偏移）
-  - 硬件 V128 `i32x4.dot_i16x8_s` INT8/UINT8 量化矩阵乘法（`qlinear_matmul_i8_v128` / `qlinear_matmul_u8_v128` 及零转置 `*_pretransposed_v128`）
-  - 对称 Weight-Only INT8（`quantize_weights_symmetric_i8` / `matmul_f32_w8_i8`，4× 权重压缩）
+  - 线性与动态量化/反量化（`quantize_*` / `dequantize_*` / `dynamic_quantize_linear_u8`，支持 Arena 偏移）
+  - 硬件 V128 `i32x4.dot_i16x8_s` INT8/UINT8 量化矩阵乘法（`qlinear_matmul_*` 与预打包 `matmul_integer_u8_i8_prepacked_*`）
+  - 4-bit 分块量化矩阵乘法：`matmul_nbits_q4_v128_f32`（16 字节奇偶 nibble 拆分 + 4 列展开 V128，支持 `block_size=32/64/128`）
+  - 对称 Weight-Only INT8（`quantize_weights_symmetric_i8` / `matmul_f32_w8_i8`）
+- `matrixlt/ml_kernels/nn`：
+  - 零堆分配通用算子内核：`maxpool2d_f32`、`avgpool2d_f32`、`gap_f32`、`erf_f32`、`gelu_f32`、`gelu_exact_f32`、`softmax_f32`、`layernorm_f32`
+  - 现代 LLM 内核：`silu_f32`、`rmsnorm_f32`、`skip_rmsnorm_f32`、`rotary_embedding_f32`、`gqa_f32`（在线 Softmax + KV-Cache）
+  - 视觉检测内核：`resize_2d_f32`（nearest/bilinear）与 `nms_f32`（标准 ONNX `NonMaxSuppression`）
 
 ## 实测 V128 SIMD 加速效果（Node.js V8 `--target wasm --release`）
 
