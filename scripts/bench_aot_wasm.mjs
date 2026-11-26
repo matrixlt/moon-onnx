@@ -115,19 +115,11 @@ ${importsMod}
 `
   );
 
-  const exportsList = m.embedded
-    ? `["init_model", "set_input_f32", "run_infer", "get_output_f32"]`
-    : `["set_weight_byte", "init_model", "set_input_f32", "run_infer", "get_output_f32"]`;
   const basePkg = fs.readFileSync(path.join(dir, "moon.pkg"), "utf8");
   fs.writeFileSync(
     path.join(dir, "moon.pkg"),
     `${basePkg}
-options(
-  link: {
-    "wasm": { "exports": ${exportsList} },
-    "wasm-gc": { "exports": ${exportsList} },
-  },
-)
+pkgtype(kind: "foreign_library")
 `
   );
 
@@ -137,14 +129,18 @@ let in_buf : FixedArray[Float] = FixedArray::make(784, (0.0 : Float))
 let out_buf : FixedArray[Float] = FixedArray::make(10, (0.0 : Float))
 let model_ref : Ref[MnistCnn?] = { val: None }
 
+#export_name("set_weight_byte")
 pub fn set_weight_byte(idx : Int32, val : Int32) -> Unit { w_buf[idx] = val.to_byte() }
+#export_name("set_input_f32")
 pub fn set_input_f32(idx : Int32, val : Float) -> Unit { in_buf[idx] = val }
+#export_name("init_model")
 pub fn init_model() -> Int32 {
   try {
     model_ref.val = Some(MnistCnn::load(Bytes::makei(w_buf.length(), i => w_buf[i])))
     1
   } catch { _ => -1 }
 }
+#export_name("run_infer")
 pub fn run_infer() -> Int32 {
   match model_ref.val {
     Some(m) => try {
@@ -155,6 +151,7 @@ pub fn run_infer() -> Int32 {
     None => -2
   }
 }
+#export_name("get_output_f32")
 pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
 `
     : m.embedded
@@ -162,14 +159,18 @@ pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
 let out_buf : FixedArray[Float] = FixedArray::make(10, (0.0 : Float))
 let model_ref : Ref[MnistCnn?] = { val: None }
 
+#export_name("set_input_f32")
 pub fn set_input_f32(idx : Int32, val : Float) -> Unit { in_buf[idx] = val }
+#export_name("init_model")
 pub fn init_model() -> Int32 { model_ref.val = Some(MnistCnn::new()); 1 }
+#export_name("run_infer")
 pub fn run_infer() -> Int32 {
   match model_ref.val {
     Some(m) => { m.forward_into(in_buf, out_buf); 1 }
     None => -1
   }
 }
+#export_name("get_output_f32")
 pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
 `
     : `let w_buf : FixedArray[Byte] = FixedArray::make(23976, b'\\x00')
@@ -177,18 +178,23 @@ let in_buf : FixedArray[Float] = FixedArray::make(784, (0.0 : Float))
 let out_buf : FixedArray[Float] = FixedArray::make(10, (0.0 : Float))
 let model_ref : Ref[MnistCnn?] = { val: None }
 
+#export_name("set_weight_byte")
 pub fn set_weight_byte(idx : Int32, val : Int32) -> Unit { w_buf[idx] = val.to_byte() }
+#export_name("set_input_f32")
 pub fn set_input_f32(idx : Int32, val : Float) -> Unit { in_buf[idx] = val }
+#export_name("init_model")
 pub fn init_model() -> Int32 {
   model_ref.val = Some(MnistCnn::load(Bytes::makei(w_buf.length(), i => w_buf[i])))
   1
 }
+#export_name("run_infer")
 pub fn run_infer() -> Int32 {
   match model_ref.val {
     Some(m) => { m.forward_into(in_buf, out_buf); 1 }
     None => -1
   }
 }
+#export_name("get_output_f32")
 pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
 `;
   fs.writeFileSync(path.join(dir, "entry.mbt"), entrySrc);

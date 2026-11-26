@@ -8,6 +8,7 @@ fn make_mat(rows : Int32, cols : Int32, seed : Int32) -> FixedArray[Float] {
 
 ///|
 /// 64×64×64 GEMM 标量基准（循环 `iters` 次返回累加校验值防止 DCE）。
+#export_name("bench_gemm64_scalar")
 pub fn bench_gemm64_scalar(iters : Int32) -> Float {
   let a = make_mat(64, 64, 1)
   let b = make_mat(64, 64, 2)
@@ -22,6 +23,7 @@ pub fn bench_gemm64_scalar(iters : Int32) -> Float {
 
 ///|
 /// 64×64×64 GEMM 预打包 V128 SIMD 基准。
+#export_name("bench_gemm64_simd")
 pub fn bench_gemm64_simd(iters : Int32) -> Float {
   let a = make_mat(64, 64, 1)
   let pb = @gemm.pack_matrix_b_f32(make_mat(64, 64, 2), 0, 64, 64)
@@ -36,6 +38,7 @@ pub fn bench_gemm64_simd(iters : Int32) -> Float {
 
 ///|
 /// 128×128×128 GEMM 标量基准。
+#export_name("bench_gemm128_scalar")
 pub fn bench_gemm128_scalar(iters : Int32) -> Float {
   let a = make_mat(128, 128, 3)
   let b = make_mat(128, 128, 5)
@@ -50,6 +53,7 @@ pub fn bench_gemm128_scalar(iters : Int32) -> Float {
 
 ///|
 /// 128×128×128 GEMM 预打包 V128 SIMD 基准。
+#export_name("bench_gemm128_simd")
 pub fn bench_gemm128_simd(iters : Int32) -> Float {
   let a = make_mat(128, 128, 3)
   let pb = @gemm.pack_matrix_b_f32(make_mat(128, 128, 5), 0, 128, 128)
@@ -64,6 +68,7 @@ pub fn bench_gemm128_simd(iters : Int32) -> Float {
 
 ///|
 /// Conv2D (`1×8×14×14 → 16×14×14, k=5, pad=2`) + ReLU 标量基准。
+#export_name("bench_conv2d_scalar")
 pub fn bench_conv2d_scalar(iters : Int32) -> Float {
   let x = @tensor.Tensor::from_f32([1, 8, 14, 14], make_mat(8, 196, 3)) catch {
     _ => abort("tensor init failed")
@@ -97,6 +102,7 @@ pub fn bench_conv2d_scalar(iters : Int32) -> Float {
 
 ///|
 /// Conv2D (`1×8×14×14 → 16×14×14, k=5, pad=2`) + 融合 ReLU 预打包 V128 + BufferPool 基准。
+#export_name("bench_conv2d_simd")
 pub fn bench_conv2d_simd(iters : Int32) -> Float {
   let x = @tensor.Tensor::from_f32([1, 8, 14, 14], make_mat(8, 196, 3)) catch {
     _ => abort("tensor init failed")
@@ -138,6 +144,7 @@ pub fn bench_conv2d_simd(iters : Int32) -> Float {
 
 ///|
 /// Depthwise Conv2D (`1×32×14×14, k=3, pad=1, group=32`) + ReLU6 通用标量基准。
+#export_name("bench_depthwise_scalar")
 pub fn bench_depthwise_scalar(iters : Int32) -> Float {
   let x = @tensor.Tensor::from_f32([1, 32, 14, 14], make_mat(32, 196, 2)) catch {
     _ => abort("tensor init failed")
@@ -172,6 +179,7 @@ pub fn bench_depthwise_scalar(iters : Int32) -> Float {
 
 ///|
 /// Depthwise Conv2D (`1×32×14×14, k=3, pad=1, group=32`) + ReLU6 零 im2col 专用 V128 基准。
+#export_name("bench_depthwise_simd")
 pub fn bench_depthwise_simd(iters : Int32) -> Float {
   let x_buf = make_mat(32, 196, 2)
   let w_buf = make_mat(32, 9, 4)
@@ -209,6 +217,7 @@ pub fn bench_depthwise_simd(iters : Int32) -> Float {
 
 ///|
 /// Relu (`n = 65536`) 标量基准。
+#export_name("bench_relu65k_scalar")
 pub fn bench_relu65k_scalar(iters : Int32) -> Float {
   let src = make_mat(256, 256, 11)
   let out = FixedArray::make(65536, (0.0 : Float))
@@ -226,6 +235,7 @@ pub fn bench_relu65k_scalar(iters : Int32) -> Float {
 
 ///|
 /// Relu (`n = 65536`) 零转换字节缓冲 V128 `f32x4_pmax` 基准。
+#export_name("bench_relu65k_simd_bytes")
 pub fn bench_relu65k_simd_bytes(iters : Int32) -> Float {
   let src = @vecmath.pack_f32_to_bytes(make_mat(256, 256, 11))
   let out = FixedArray::make(65536 * 4, b'\x00')
@@ -239,6 +249,7 @@ pub fn bench_relu65k_simd_bytes(iters : Int32) -> Float {
 
 ///|
 /// INT8 量化矩阵乘法（`128×128×128`）标量基准。
+#export_name("bench_qgemm128_i8_scalar")
 pub fn bench_qgemm128_i8_scalar(iters : Int32) -> Float {
   let a = FixedArray::makei(128 * 128, fn(i) { @quant.i8_to_byte(i % 127 - 63) })
   let b = FixedArray::makei(128 * 128, fn(i) {
@@ -268,6 +279,7 @@ pub fn bench_qgemm128_i8_scalar(iters : Int32) -> Float {
 
 ///|
 /// INT8 量化矩阵乘法（`128×128×128`）V128 `i32x4.dot_i16x8_s` 硬件 SIMD 基准。
+#export_name("bench_qgemm128_i8_simd")
 pub fn bench_qgemm128_i8_simd(iters : Int32) -> Float {
   let a = FixedArray::makei(128 * 128, fn(i) { @quant.i8_to_byte(i % 127 - 63) })
   let b = FixedArray::makei(128 * 128, fn(i) {

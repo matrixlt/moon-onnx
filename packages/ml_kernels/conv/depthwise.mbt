@@ -3,11 +3,11 @@
 fn apply_dw_epilogue_v128(v : V128, epilogue : @gemm.Epilogue) -> V128 {
   match epilogue {
     @gemm.NoEpilogue => v
-    @gemm.Relu => @v128.f32x4_pmax(@v128.f32x4_splat((0.0 : Float)), v)
+    @gemm.Relu => @simd.f32x4_pmax(@simd.f32x4_splat((0.0 : Float)), v)
     @gemm.Clip(min~, max~) =>
-      @v128.f32x4_pmin(
-        @v128.f32x4_splat(max),
-        @v128.f32x4_pmax(@v128.f32x4_splat(min), v),
+      @simd.f32x4_pmin(
+        @simd.f32x4_splat(max),
+        @simd.f32x4_pmax(@simd.f32x4_splat(min), v),
       )
   }
 }
@@ -64,7 +64,7 @@ pub fn depthwise_conv2d_f32(
       Some(b) => b[c]
       None => zero
     }
-    let b_vec = @v128.f32x4_splat(b_val)
+    let b_vec = @simd.f32x4_splat(b_val)
 
     for oy = 0; oy < out_h; oy = oy + 1 {
       let iy0 = oy * stride_h - pad_top
@@ -105,21 +105,21 @@ pub fn depthwise_conv2d_f32(
             let in_row = ch_in + iy * in_w + ix0
             let w_row = w_ch + ky * kw
             for kx = 0; kx < kw; kx = kx + 1 {
-              let wv = @v128.f32x4_splat(weight[w_row + kx])
-              let xv = @v128.f32x4_const(
+              let wv = @simd.f32x4_splat(weight[w_row + kx])
+              let xv = @simd.f32x4_const(
                 input[in_row + kx],
                 input[in_row + kx + 1],
                 input[in_row + kx + 2],
                 input[in_row + kx + 3],
               )
-              acc = @v128.f32x4_relaxed_madd(xv, wv, acc)
+              acc = @simd.f32x4_relaxed_madd(xv, wv, acc)
             }
           }
           acc = apply_dw_epilogue_v128(acc, epilogue)
-          out[out_row + ox] = @v128.f32x4_extract_lane(acc, 0)
-          out[out_row + ox + 1] = @v128.f32x4_extract_lane(acc, 1)
-          out[out_row + ox + 2] = @v128.f32x4_extract_lane(acc, 2)
-          out[out_row + ox + 3] = @v128.f32x4_extract_lane(acc, 3)
+          out[out_row + ox] = @simd.f32x4_extract_lane(acc, 0)
+          out[out_row + ox + 1] = @simd.f32x4_extract_lane(acc, 1)
+          out[out_row + ox + 2] = @simd.f32x4_extract_lane(acc, 2)
+          out[out_row + ox + 3] = @simd.f32x4_extract_lane(acc, 3)
           ox = ox + 4
         }
 

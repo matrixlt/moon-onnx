@@ -33,6 +33,6 @@ Layer 2 (动态推理引擎运行时与独立 AOT 静态编译器):
 4. **干净的 `ExecutionProvider` 抽象**：`EvalContext` 仅向后端暴露运行期张量环境与 `BufferPool`，不泄露后端私有权重结构；`CpuSimdProvider` 通过 `prepare_graph` 钩子私有维护 `CpuWeightCache`（覆盖 Float32 MatMul/Gemm/Conv 与 Int8 MatMulInteger 预打包缓存）。
 5. **自动生成代码隔离**：`packages/onnx_proto/schema/top.mbt` 由 `scripts/gen_proto.sh` 自动生成（`json=false`），禁止手工修改；所有业务封装位于 `packages/onnx_proto/*.mbt`。
 6. **原生 `V128` SIMD 规范**：
-   - Relu 使用 `@v128.f32x4_pmax(0.0, v)` 而非 `f32x4_max`，避免 IEEE NaN 传播回退导致的性能劣化；
+   - Relu 使用 `@simd.f32x4_pmax(0.0, v)` 而非 `f32x4_max`，避免 IEEE NaN 传播回退导致的性能劣化；
    - FP32 GEMM 采用 BLIS 8 列微面板 + `4×8` 寄存器分块 `f32x4_relaxed_madd` 微内核（`PackedMatrixB`）；
    - INT8 `MatMulInteger` 采用 4 列展开 `i32x4.dot_i16x8_s` 指令 + 预计算列和零减法公式（`PackedInt8MatrixB`）。

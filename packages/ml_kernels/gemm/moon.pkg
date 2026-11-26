@@ -1,7 +1,8 @@
 import {
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
 }
 
 options(
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
   warn_list: "-14",
 )

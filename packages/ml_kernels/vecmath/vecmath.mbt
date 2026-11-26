@@ -25,8 +25,8 @@ pub fn pack_f32_to_bytes(src : FixedArray[Float]) -> FixedArray[Byte] {
   let out = FixedArray::make(n * 4, b'\x00')
   let mut i = 0
   while i + 4 <= n {
-    let v = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
-    @v128.v128_store(out, i * 4, v)
+    let v = @simd.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    @simd.v128_store(out, i * 4, v)
     i = i + 4
   }
   while i < n {
@@ -45,11 +45,11 @@ pub fn unpack_bytes_to_f32(
   let out = FixedArray::make(count, (0.0 : Float))
   let mut i = 0
   while i + 4 <= count {
-    let v = @v128.v128_load(src, i * 4)
-    out[i] = @v128.f32x4_extract_lane(v, 0)
-    out[i + 1] = @v128.f32x4_extract_lane(v, 1)
-    out[i + 2] = @v128.f32x4_extract_lane(v, 2)
-    out[i + 3] = @v128.f32x4_extract_lane(v, 3)
+    let v = @simd.v128_load(src, i * 4)
+    out[i] = @simd.f32x4_extract_lane(v, 0)
+    out[i + 1] = @simd.f32x4_extract_lane(v, 1)
+    out[i + 2] = @simd.f32x4_extract_lane(v, 2)
+    out[i + 3] = @simd.f32x4_extract_lane(v, 3)
     i = i + 4
   }
   while i < count {
@@ -70,9 +70,9 @@ pub fn add_bytes_v128(
   let mut i = 0
   while i + 4 <= count {
     let off = i * 4
-    let va = @v128.v128_load(a, off)
-    let vb = @v128.v128_load(b, off)
-    @v128.v128_store(out, off, @v128.f32x4_add(va, vb))
+    let va = @simd.v128_load(a, off)
+    let vb = @simd.v128_load(b, off)
+    @simd.v128_store(out, off, @simd.f32x4_add(va, vb))
     i = i + 4
   }
   while i < count {
@@ -93,9 +93,9 @@ pub fn sub_bytes_v128(
   let mut i = 0
   while i + 4 <= count {
     let off = i * 4
-    let va = @v128.v128_load(a, off)
-    let vb = @v128.v128_load(b, off)
-    @v128.v128_store(out, off, @v128.f32x4_sub(va, vb))
+    let va = @simd.v128_load(a, off)
+    let vb = @simd.v128_load(b, off)
+    @simd.v128_store(out, off, @simd.f32x4_sub(va, vb))
     i = i + 4
   }
   while i < count {
@@ -116,9 +116,9 @@ pub fn mul_bytes_v128(
   let mut i = 0
   while i + 4 <= count {
     let off = i * 4
-    let va = @v128.v128_load(a, off)
-    let vb = @v128.v128_load(b, off)
-    @v128.v128_store(out, off, @v128.f32x4_mul(va, vb))
+    let va = @simd.v128_load(a, off)
+    let vb = @simd.v128_load(b, off)
+    @simd.v128_store(out, off, @simd.f32x4_mul(va, vb))
     i = i + 4
   }
   while i < count {
@@ -135,12 +135,12 @@ pub fn relu_bytes_v128(
   out : FixedArray[Byte],
   count : Int32,
 ) -> Unit {
-  let zero_vec = @v128.f32x4_splat((0.0 : Float))
+  let zero_vec = @simd.f32x4_splat((0.0 : Float))
   let mut i = 0
   while i + 4 <= count {
     let off = i * 4
-    let v = @v128.v128_load(src, off)
-    @v128.v128_store(out, off, @v128.f32x4_pmax(zero_vec, v))
+    let v = @simd.v128_load(src, off)
+    @simd.v128_store(out, off, @simd.f32x4_pmax(zero_vec, v))
     i = i + 4
   }
   let zero : Float = 0.0
@@ -162,13 +162,13 @@ pub fn add_f32_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= n {
-    let va = @v128.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @v128.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
-    let vr = @v128.f32x4_add(va, vb)
-    out[i] = @v128.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
+    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let vr = @simd.f32x4_add(va, vb)
+    out[i] = @simd.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
     i = i + 4
   }
   while i < n {
@@ -187,13 +187,13 @@ pub fn sub_f32_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= n {
-    let va = @v128.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @v128.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
-    let vr = @v128.f32x4_sub(va, vb)
-    out[i] = @v128.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
+    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let vr = @simd.f32x4_sub(va, vb)
+    out[i] = @simd.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
     i = i + 4
   }
   while i < n {
@@ -212,13 +212,13 @@ pub fn mul_f32_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= n {
-    let va = @v128.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @v128.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
-    let vr = @v128.f32x4_mul(va, vb)
-    out[i] = @v128.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
+    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let vr = @simd.f32x4_mul(va, vb)
+    out[i] = @simd.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
     i = i + 4
   }
   while i < n {
@@ -234,15 +234,15 @@ pub fn relu_f32_v128(
   out : FixedArray[Float],
   n : Int32,
 ) -> Unit {
-  let zero_vec = @v128.f32x4_splat((0.0 : Float))
+  let zero_vec = @simd.f32x4_splat((0.0 : Float))
   let mut i = 0
   while i + 4 <= n {
-    let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
-    let vr = @v128.f32x4_pmax(zero_vec, vx)
-    out[i] = @v128.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    let vx = @simd.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vr = @simd.f32x4_pmax(zero_vec, vx)
+    out[i] = @simd.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
     i = i + 4
   }
   let zero : Float = 0.0
@@ -264,9 +264,9 @@ pub fn div_bytes_v128(
   let mut i = 0
   while i + 4 <= count {
     let off = i * 4
-    let va = @v128.v128_load(a, off)
-    let vb = @v128.v128_load(b, off)
-    @v128.v128_store(out, off, @v128.f32x4_div(va, vb))
+    let va = @simd.v128_load(a, off)
+    let vb = @simd.v128_load(b, off)
+    @simd.v128_store(out, off, @simd.f32x4_div(va, vb))
     i = i + 4
   }
   while i < count {
@@ -286,14 +286,14 @@ pub fn sqrt_bytes_v128(
   let mut i = 0
   while i + 4 <= count {
     let off = i * 4
-    let v = @v128.v128_load(src, off)
-    @v128.v128_store(out, off, @v128.f32x4_sqrt(v))
+    let v = @simd.v128_load(src, off)
+    @simd.v128_store(out, off, @simd.f32x4_sqrt(v))
     i = i + 4
   }
   while i < count {
     let off = i * 4
     let x = read_f32_le(src, off)
-    let r = @v128.f32x4_extract_lane(@v128.f32x4_sqrt(@v128.f32x4_splat(x)), 0)
+    let r = @simd.f32x4_extract_lane(@simd.f32x4_sqrt(@simd.f32x4_splat(x)), 0)
     write_f32_le(out, off, r)
     i = i + 1
   }
@@ -309,13 +309,13 @@ pub fn div_f32_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= n {
-    let va = @v128.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @v128.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
-    let vr = @v128.f32x4_div(va, vb)
-    out[i] = @v128.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
+    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let vr = @simd.f32x4_div(va, vb)
+    out[i] = @simd.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
     i = i + 4
   }
   while i < n {
@@ -333,17 +333,17 @@ pub fn sqrt_f32_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= n {
-    let vx = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
-    let vr = @v128.f32x4_sqrt(vx)
-    out[i] = @v128.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @v128.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @v128.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @v128.f32x4_extract_lane(vr, 3)
+    let vx = @simd.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vr = @simd.f32x4_sqrt(vx)
+    out[i] = @simd.f32x4_extract_lane(vr, 0)
+    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
+    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
+    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
     i = i + 4
   }
   while i < n {
-    out[i] = @v128.f32x4_extract_lane(
-      @v128.f32x4_sqrt(@v128.f32x4_splat(src[i])),
+    out[i] = @simd.f32x4_extract_lane(
+      @simd.f32x4_sqrt(@simd.f32x4_splat(src[i])),
       0,
     )
     i = i + 1

@@ -138,10 +138,10 @@ pub fn transpose_bytes_kn_to_nk(
 ///|
 /// 提取 `i32x4` 向量中全部 4 个有符号 32 位车道并求水平总和。
 fn hsum_i32x4(v : V128) -> Int32 {
-  @v128.i32x4_extract_lane(v, 0).reinterpret_as_int() +
-  @v128.i32x4_extract_lane(v, 1).reinterpret_as_int() +
-  @v128.i32x4_extract_lane(v, 2).reinterpret_as_int() +
-  @v128.i32x4_extract_lane(v, 3).reinterpret_as_int()
+  @simd.i32x4_extract_lane(v, 0).reinterpret_as_int() +
+  @simd.i32x4_extract_lane(v, 1).reinterpret_as_int() +
+  @simd.i32x4_extract_lane(v, 2).reinterpret_as_int() +
+  @simd.i32x4_extract_lane(v, 3).reinterpret_as_int()
 }
 
 ///|
@@ -247,9 +247,9 @@ pub fn qlinear_matmul_i8_pretransposed_v128(
   let az = byte_to_i8(a_zp)
   let bz = byte_to_i8(b_zp)
   let yz = byte_to_i8(y_zp)
-  let v_azp = @v128.i16x8_splat((az & 0xFFFF).to_uint16())
-  let v_bzp = @v128.i16x8_splat((bz & 0xFFFF).to_uint16())
-  let v_zero = @v128.i32x4_splat(0U)
+  let v_azp = @simd.i16x8_splat((az & 0xFFFF).to_uint16())
+  let v_bzp = @simd.i16x8_splat((bz & 0xFFFF).to_uint16())
+  let v_zero = @simd.i32x4_splat(0U)
   let mul_scale = a_scale.to_double() *
     b_scale.to_double() /
     y_scale.to_double()
@@ -263,14 +263,14 @@ pub fn qlinear_matmul_i8_pretransposed_v128(
       let mut acc_v = v_zero
       let mut kk = 0
       while kk < k_vec {
-        let va = @v128.v128_load(a, a_row + kk)
-        let vb = @v128.v128_load(bt, bt_row + kk)
-        let va_lo = @v128.i16x8_sub(@v128.i16x8_extend_low_i8x16_s(va), v_azp)
-        let vb_lo = @v128.i16x8_sub(@v128.i16x8_extend_low_i8x16_s(vb), v_bzp)
-        let va_hi = @v128.i16x8_sub(@v128.i16x8_extend_high_i8x16_s(va), v_azp)
-        let vb_hi = @v128.i16x8_sub(@v128.i16x8_extend_high_i8x16_s(vb), v_bzp)
-        acc_v = @v128.i32x4_add(acc_v, @v128.i32x4_dot_i16x8_s(va_lo, vb_lo))
-        acc_v = @v128.i32x4_add(acc_v, @v128.i32x4_dot_i16x8_s(va_hi, vb_hi))
+        let va = @simd.v128_load(a, a_row + kk)
+        let vb = @simd.v128_load(bt, bt_row + kk)
+        let va_lo = @simd.i16x8_sub(@simd.i16x8_extend_low_i8x16_s(va), v_azp)
+        let vb_lo = @simd.i16x8_sub(@simd.i16x8_extend_low_i8x16_s(vb), v_bzp)
+        let va_hi = @simd.i16x8_sub(@simd.i16x8_extend_high_i8x16_s(va), v_azp)
+        let vb_hi = @simd.i16x8_sub(@simd.i16x8_extend_high_i8x16_s(vb), v_bzp)
+        acc_v = @simd.i32x4_add(acc_v, @simd.i32x4_dot_i16x8_s(va_lo, vb_lo))
+        acc_v = @simd.i32x4_add(acc_v, @simd.i32x4_dot_i16x8_s(va_hi, vb_hi))
         kk = kk + 16
       }
       let mut acc = hsum_i32x4(acc_v)
@@ -334,9 +334,9 @@ pub fn qlinear_matmul_u8_pretransposed_v128(
   let az = a_zp.to_int()
   let bz = b_zp.to_int()
   let yz = y_zp.to_int()
-  let v_azp = @v128.i16x8_splat((az & 0xFFFF).to_uint16())
-  let v_bzp = @v128.i16x8_splat((bz & 0xFFFF).to_uint16())
-  let v_zero = @v128.i32x4_splat(0U)
+  let v_azp = @simd.i16x8_splat((az & 0xFFFF).to_uint16())
+  let v_bzp = @simd.i16x8_splat((bz & 0xFFFF).to_uint16())
+  let v_zero = @simd.i32x4_splat(0U)
   let mul_scale = a_scale.to_double() *
     b_scale.to_double() /
     y_scale.to_double()
@@ -350,14 +350,14 @@ pub fn qlinear_matmul_u8_pretransposed_v128(
       let mut acc_v = v_zero
       let mut kk = 0
       while kk < k_vec {
-        let va = @v128.v128_load(a, a_row + kk)
-        let vb = @v128.v128_load(bt, bt_row + kk)
-        let va_lo = @v128.i16x8_sub(@v128.i16x8_extend_low_i8x16_u(va), v_azp)
-        let vb_lo = @v128.i16x8_sub(@v128.i16x8_extend_low_i8x16_u(vb), v_bzp)
-        let va_hi = @v128.i16x8_sub(@v128.i16x8_extend_high_i8x16_u(va), v_azp)
-        let vb_hi = @v128.i16x8_sub(@v128.i16x8_extend_high_i8x16_u(vb), v_bzp)
-        acc_v = @v128.i32x4_add(acc_v, @v128.i32x4_dot_i16x8_s(va_lo, vb_lo))
-        acc_v = @v128.i32x4_add(acc_v, @v128.i32x4_dot_i16x8_s(va_hi, vb_hi))
+        let va = @simd.v128_load(a, a_row + kk)
+        let vb = @simd.v128_load(bt, bt_row + kk)
+        let va_lo = @simd.i16x8_sub(@simd.i16x8_extend_low_i8x16_u(va), v_azp)
+        let vb_lo = @simd.i16x8_sub(@simd.i16x8_extend_low_i8x16_u(vb), v_bzp)
+        let va_hi = @simd.i16x8_sub(@simd.i16x8_extend_high_i8x16_u(va), v_azp)
+        let vb_hi = @simd.i16x8_sub(@simd.i16x8_extend_high_i8x16_u(vb), v_bzp)
+        acc_v = @simd.i32x4_add(acc_v, @simd.i32x4_dot_i16x8_s(va_lo, vb_lo))
+        acc_v = @simd.i32x4_add(acc_v, @simd.i32x4_dot_i16x8_s(va_hi, vb_hi))
         kk = kk + 16
       }
       let mut acc = hsum_i32x4(acc_v)
@@ -584,7 +584,7 @@ fn dot4_u8_i8_v128(
   b_zp : FixedArray[Byte]?,
   row_sum : Int32,
 ) -> (Int32, Int32, Int32, Int32) {
-  let v_zero = @v128.i32x4_splat(0U)
+  let v_zero = @simd.i32x4_splat(0U)
   let b0 = j * k
   let b1 = b0 + k
   let b2 = b1 + k
@@ -595,48 +595,48 @@ fn dot4_u8_i8_v128(
   let mut acc3 = v_zero
   let mut kk = 0
   while kk < k_vec {
-    let va = @v128.v128_load(a, a_row + kk)
-    let va_lo = @v128.i16x8_extend_low_i8x16_u(va)
-    let va_hi = @v128.i16x8_extend_high_i8x16_u(va)
+    let va = @simd.v128_load(a, a_row + kk)
+    let va_lo = @simd.i16x8_extend_low_i8x16_u(va)
+    let va_hi = @simd.i16x8_extend_high_i8x16_u(va)
 
-    let vb0 = @v128.v128_load(bt, b0 + kk)
-    acc0 = @v128.i32x4_add(
+    let vb0 = @simd.v128_load(bt, b0 + kk)
+    acc0 = @simd.i32x4_add(
       acc0,
-      @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb0)),
+      @simd.i32x4_dot_i16x8_s(va_lo, @simd.i16x8_extend_low_i8x16_s(vb0)),
     )
-    acc0 = @v128.i32x4_add(
+    acc0 = @simd.i32x4_add(
       acc0,
-      @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb0)),
+      @simd.i32x4_dot_i16x8_s(va_hi, @simd.i16x8_extend_high_i8x16_s(vb0)),
     )
 
-    let vb1 = @v128.v128_load(bt, b1 + kk)
-    acc1 = @v128.i32x4_add(
+    let vb1 = @simd.v128_load(bt, b1 + kk)
+    acc1 = @simd.i32x4_add(
       acc1,
-      @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb1)),
+      @simd.i32x4_dot_i16x8_s(va_lo, @simd.i16x8_extend_low_i8x16_s(vb1)),
     )
-    acc1 = @v128.i32x4_add(
+    acc1 = @simd.i32x4_add(
       acc1,
-      @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb1)),
+      @simd.i32x4_dot_i16x8_s(va_hi, @simd.i16x8_extend_high_i8x16_s(vb1)),
     )
 
-    let vb2 = @v128.v128_load(bt, b2 + kk)
-    acc2 = @v128.i32x4_add(
+    let vb2 = @simd.v128_load(bt, b2 + kk)
+    acc2 = @simd.i32x4_add(
       acc2,
-      @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb2)),
+      @simd.i32x4_dot_i16x8_s(va_lo, @simd.i16x8_extend_low_i8x16_s(vb2)),
     )
-    acc2 = @v128.i32x4_add(
+    acc2 = @simd.i32x4_add(
       acc2,
-      @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb2)),
+      @simd.i32x4_dot_i16x8_s(va_hi, @simd.i16x8_extend_high_i8x16_s(vb2)),
     )
 
-    let vb3 = @v128.v128_load(bt, b3 + kk)
-    acc3 = @v128.i32x4_add(
+    let vb3 = @simd.v128_load(bt, b3 + kk)
+    acc3 = @simd.i32x4_add(
       acc3,
-      @v128.i32x4_dot_i16x8_s(va_lo, @v128.i16x8_extend_low_i8x16_s(vb3)),
+      @simd.i32x4_dot_i16x8_s(va_lo, @simd.i16x8_extend_low_i8x16_s(vb3)),
     )
-    acc3 = @v128.i32x4_add(
+    acc3 = @simd.i32x4_add(
       acc3,
-      @v128.i32x4_dot_i16x8_s(va_hi, @v128.i16x8_extend_high_i8x16_s(vb3)),
+      @simd.i32x4_dot_i16x8_s(va_hi, @simd.i16x8_extend_high_i8x16_s(vb3)),
     )
     kk = kk + 16
   }
@@ -682,23 +682,23 @@ fn dot1_u8_i8_v128(
   row_sum : Int32,
 ) -> Int32 {
   let b0 = j * k
-  let mut acc0 = @v128.i32x4_splat(0U)
+  let mut acc0 = @simd.i32x4_splat(0U)
   let mut kk = 0
   while kk < k_vec {
-    let va = @v128.v128_load(a, a_row + kk)
-    let vb = @v128.v128_load(bt, b0 + kk)
-    acc0 = @v128.i32x4_add(
+    let va = @simd.v128_load(a, a_row + kk)
+    let vb = @simd.v128_load(bt, b0 + kk)
+    acc0 = @simd.i32x4_add(
       acc0,
-      @v128.i32x4_dot_i16x8_s(
-        @v128.i16x8_extend_low_i8x16_u(va),
-        @v128.i16x8_extend_low_i8x16_s(vb),
+      @simd.i32x4_dot_i16x8_s(
+        @simd.i16x8_extend_low_i8x16_u(va),
+        @simd.i16x8_extend_low_i8x16_s(vb),
       ),
     )
-    acc0 = @v128.i32x4_add(
+    acc0 = @simd.i32x4_add(
       acc0,
-      @v128.i32x4_dot_i16x8_s(
-        @v128.i16x8_extend_high_i8x16_u(va),
-        @v128.i16x8_extend_high_i8x16_s(vb),
+      @simd.i32x4_dot_i16x8_s(
+        @simd.i16x8_extend_high_i8x16_u(va),
+        @simd.i16x8_extend_high_i8x16_s(vb),
       ),
     )
     kk = kk + 16

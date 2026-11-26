@@ -216,26 +216,16 @@ import {
   );
 
   const basePkg = fs.readFileSync(path.join(dir, "moon.pkg"), "utf8");
-  const exportsList =
-    t.kind === "silero"
-      ? `["set_weight_u32", "init_model", "set_audio_f32", "set_state_f32", "run_infer", "get_prob_f32", "get_state_f32", "get_arena_bytes"]`
-      : t.kind === "minilm"
-        ? `["set_weight_u32", "init_model", "set_ids_i32", "set_mask_i32", "set_tok_i32", "run_infer", "get_output_f32", "get_arena_bytes"]`
-        : `["set_weight_u32", "init_model", "set_input_f32", "run_infer", "get_output_f32", "get_arena_bytes"]`;
   fs.writeFileSync(
     path.join(dir, "moon.pkg"),
     `${basePkg}
-options(
-  link: {
-    "wasm": { "exports": ${exportsList} },
-    "wasm-gc": { "exports": ${exportsList} },
-  },
-)
+pkgtype(kind: "foreign_library")
 `
   );
 
   const numWords = Math.ceil(weightBytes / 4);
   const weightLoaderSnippet = `let w_buf : FixedArray[Byte] = FixedArray::make(${weightBytes}, b'\\x00')
+#export_name("set_weight_u32")
 pub fn set_weight_u32(word_idx : Int32, val : Int32) -> Unit {
   let off = word_idx * 4
   if off < ${weightBytes} { w_buf[off] = (val & 0xFF).to_byte() }
@@ -243,6 +233,7 @@ pub fn set_weight_u32(word_idx : Int32, val : Int32) -> Unit {
   if off + 2 < ${weightBytes} { w_buf[off + 2] = ((val >> 16) & 0xFF).to_byte() }
   if off + 3 < ${weightBytes} { w_buf[off + 3] = ((val >> 24) & 0xFF).to_byte() }
 }
+#export_name("get_arena_bytes")
 pub fn get_arena_bytes() -> Int32 { ${t.struct}::arena_bytes() }
 `;
 
@@ -255,12 +246,16 @@ let prob_out : FixedArray[Float] = FixedArray::make(1, (0.0 : Float))
 let state_out : FixedArray[Float] = FixedArray::make(256, (0.0 : Float))
 let model_ref : Ref[${t.struct}?] = { val: None }
 
+#export_name("init_model")
 pub fn init_model() -> Int32 {
   model_ref.val = Some(${t.struct}::load(Bytes::makei(${weightBytes}, fn(i) { w_buf[i] })))
   1
 }
+#export_name("set_audio_f32")
 pub fn set_audio_f32(idx : Int32, val : Float) -> Unit { audio_buf[idx] = val }
+#export_name("set_state_f32")
 pub fn set_state_f32(idx : Int32, val : Float) -> Unit { state_in[idx] = val }
+#export_name("run_infer")
 pub fn run_infer() -> Int32 {
   match model_ref.val {
     Some(m) => {
@@ -270,7 +265,9 @@ pub fn run_infer() -> Int32 {
     None => -1
   }
 }
+#export_name("get_prob_f32")
 pub fn get_prob_f32() -> Float { prob_out[0] }
+#export_name("get_state_f32")
 pub fn get_state_f32(idx : Int32) -> Float { state_out[idx] }
 `
       : t.kind === "minilm"
@@ -281,13 +278,18 @@ let tok_buf : FixedArray[Int64] = FixedArray::make(16, (0 : Int64))
 let out_buf : FixedArray[Float] = FixedArray::make(6144, (0.0 : Float))
 let model_ref : Ref[${t.struct}?] = { val: None }
 
+#export_name("init_model")
 pub fn init_model() -> Int32 {
   model_ref.val = Some(${t.struct}::load(Bytes::makei(${weightBytes}, fn(i) { w_buf[i] })))
   1
 }
+#export_name("set_ids_i32")
 pub fn set_ids_i32(idx : Int32, val : Int32) -> Unit { ids_buf[idx] = val.to_int64() }
+#export_name("set_mask_i32")
 pub fn set_mask_i32(idx : Int32, val : Int32) -> Unit { mask_buf[idx] = val.to_int64() }
+#export_name("set_tok_i32")
 pub fn set_tok_i32(idx : Int32, val : Int32) -> Unit { tok_buf[idx] = val.to_int64() }
+#export_name("run_infer")
 pub fn run_infer() -> Int32 {
   match model_ref.val {
     Some(m) => {
@@ -297,6 +299,7 @@ pub fn run_infer() -> Int32 {
     None => -1
   }
 }
+#export_name("get_output_f32")
 pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
 `
         : `${weightLoaderSnippet}
@@ -304,11 +307,14 @@ let in_buf : FixedArray[Float] = FixedArray::make(150528, (0.0 : Float))
 let out_buf : FixedArray[Float] = FixedArray::make(1000, (0.0 : Float))
 let model_ref : Ref[${t.struct}?] = { val: None }
 
+#export_name("init_model")
 pub fn init_model() -> Int32 {
   model_ref.val = Some(${t.struct}::load(Bytes::makei(${weightBytes}, fn(i) { w_buf[i] })))
   1
 }
+#export_name("set_input_f32")
 pub fn set_input_f32(idx : Int32, val : Float) -> Unit { in_buf[idx] = val }
+#export_name("run_infer")
 pub fn run_infer() -> Int32 {
   match model_ref.val {
     Some(m) => {
@@ -318,6 +324,7 @@ pub fn run_infer() -> Int32 {
     None => -1
   }
 }
+#export_name("get_output_f32")
 pub fn get_output_f32(idx : Int32) -> Float { out_buf[idx] }
 `;
   fs.writeFileSync(path.join(dir, "entry.mbt"), entrySrc);

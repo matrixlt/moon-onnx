@@ -8,39 +8,4 @@ import {
   "matrixlt/onnx/ops",
 }
 
-options(
-  link: {
-    "wasm": {
-      "exports": [
-        "bench_gemm64_scalar",
-        "bench_gemm64_simd",
-        "bench_gemm128_scalar",
-        "bench_gemm128_simd",
-        "bench_qgemm128_i8_scalar",
-        "bench_qgemm128_i8_simd",
-        "bench_conv2d_scalar",
-        "bench_conv2d_simd",
-        "bench_depthwise_scalar",
-        "bench_depthwise_simd",
-        "bench_relu65k_scalar",
-        "bench_relu65k_simd_bytes",
-      ],
-    },
-    "wasm-gc": {
-      "exports": [
-        "bench_gemm64_scalar",
-        "bench_gemm64_simd",
-        "bench_gemm128_scalar",
-        "bench_gemm128_simd",
-        "bench_qgemm128_i8_scalar",
-        "bench_qgemm128_i8_simd",
-        "bench_conv2d_scalar",
-        "bench_conv2d_simd",
-        "bench_depthwise_scalar",
-        "bench_depthwise_simd",
-        "bench_relu65k_scalar",
-        "bench_relu65k_simd_bytes",
-      ],
-    },
-  },
-)
+pkgtype(kind: "foreign_library")

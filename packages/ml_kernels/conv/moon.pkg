@@ -1,8 +1,9 @@
 import {
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
   "matrixlt/ml_kernels/gemm",
 }
 
 options(
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
   warn_list: "-14",
 )

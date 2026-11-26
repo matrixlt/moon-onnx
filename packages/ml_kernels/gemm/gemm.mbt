@@ -65,10 +65,10 @@ pub fn pack_matrix_b_f32(
       for p = 0; p < k; p = p + 1 {
         let s = b_offset + p * n + col
         let d = panel_base + p * 32
-        let v0 = @v128.f32x4_const(b[s], b[s + 1], b[s + 2], b[s + 3])
-        let v1 = @v128.f32x4_const(b[s + 4], b[s + 5], b[s + 6], b[s + 7])
-        @v128.v128_store(packed, d, v0)
-        @v128.v128_store(packed, d + 16, v1)
+        let v0 = @simd.f32x4_const(b[s], b[s + 1], b[s + 2], b[s + 3])
+        let v1 = @simd.f32x4_const(b[s + 4], b[s + 5], b[s + 6], b[s + 7])
+        @simd.v128_store(packed, d, v0)
+        @simd.v128_store(packed, d + 16, v1)
       }
     } else {
       for p = 0; p < k; p = p + 1 {
@@ -82,8 +82,8 @@ pub fn pack_matrix_b_f32(
         let f5 = if col + 5 < n { b[s + 5] } else { zero }
         let f6 = if col + 6 < n { b[s + 6] } else { zero }
         let f7 = if col + 7 < n { b[s + 7] } else { zero }
-        @v128.v128_store(packed, d, @v128.f32x4_const(f0, f1, f2, f3))
-        @v128.v128_store(packed, d + 16, @v128.f32x4_const(f4, f5, f6, f7))
+        @simd.v128_store(packed, d, @simd.f32x4_const(f0, f1, f2, f3))
+        @simd.v128_store(packed, d + 16, @simd.f32x4_const(f4, f5, f6, f7))
       }
     }
   }
@@ -119,20 +119,20 @@ pub fn pack_matrix_b_transposed_f32(
       let r7 = r6 + k
       for p = 0; p < k; p = p + 1 {
         let d = panel_base + p * 32
-        let v0 = @v128.f32x4_const(
+        let v0 = @simd.f32x4_const(
           b_t[r0 + p],
           b_t[r1 + p],
           b_t[r2 + p],
           b_t[r3 + p],
         )
-        let v1 = @v128.f32x4_const(
+        let v1 = @simd.f32x4_const(
           b_t[r4 + p],
           b_t[r5 + p],
           b_t[r6 + p],
           b_t[r7 + p],
         )
-        @v128.v128_store(packed, d, v0)
-        @v128.v128_store(packed, d + 16, v1)
+        @simd.v128_store(packed, d, v0)
+        @simd.v128_store(packed, d + 16, v1)
       }
     } else {
       for p = 0; p < k; p = p + 1 {
@@ -173,8 +173,8 @@ pub fn pack_matrix_b_transposed_f32(
         } else {
           zero
         }
-        @v128.v128_store(packed, d, @v128.f32x4_const(f0, f1, f2, f3))
-        @v128.v128_store(packed, d + 16, @v128.f32x4_const(f4, f5, f6, f7))
+        @simd.v128_store(packed, d, @simd.f32x4_const(f0, f1, f2, f3))
+        @simd.v128_store(packed, d + 16, @simd.f32x4_const(f4, f5, f6, f7))
       }
     }
   }
@@ -197,19 +197,19 @@ fn store_v128_clamped(
   v : V128,
 ) -> Unit {
   if col + 4 <= n {
-    out[row_off + col] = @v128.f32x4_extract_lane(v, 0)
-    out[row_off + col + 1] = @v128.f32x4_extract_lane(v, 1)
-    out[row_off + col + 2] = @v128.f32x4_extract_lane(v, 2)
-    out[row_off + col + 3] = @v128.f32x4_extract_lane(v, 3)
+    out[row_off + col] = @simd.f32x4_extract_lane(v, 0)
+    out[row_off + col + 1] = @simd.f32x4_extract_lane(v, 1)
+    out[row_off + col + 2] = @simd.f32x4_extract_lane(v, 2)
+    out[row_off + col + 3] = @simd.f32x4_extract_lane(v, 3)
   } else {
     if col < n {
-      out[row_off + col] = @v128.f32x4_extract_lane(v, 0)
+      out[row_off + col] = @simd.f32x4_extract_lane(v, 0)
     }
     if col + 1 < n {
-      out[row_off + col + 1] = @v128.f32x4_extract_lane(v, 1)
+      out[row_off + col + 1] = @simd.f32x4_extract_lane(v, 1)
     }
     if col + 2 < n {
-      out[row_off + col + 2] = @v128.f32x4_extract_lane(v, 2)
+      out[row_off + col + 2] = @simd.f32x4_extract_lane(v, 2)
     }
   }
 }
@@ -224,16 +224,16 @@ fn load_bias_v128(
 ) -> V128 {
   let zero : Float = 0.0
   match bias {
-    None => @v128.f32x4_splat(zero)
+    None => @simd.f32x4_splat(zero)
     Some(b) =>
       if col + 4 <= n {
         let base = bias_offset + col
-        @v128.f32x4_const(b[base], b[base + 1], b[base + 2], b[base + 3])
+        @simd.f32x4_const(b[base], b[base + 1], b[base + 2], b[base + 3])
       } else {
         let f0 = if col < n { b[bias_offset + col] } else { zero }
         let f1 = if col + 1 < n { b[bias_offset + col + 1] } else { zero }
         let f2 = if col + 2 < n { b[bias_offset + col + 2] } else { zero }
-        @v128.f32x4_const(f0, f1, f2, zero)
+        @simd.f32x4_const(f0, f1, f2, zero)
       }
   }
 }
@@ -255,49 +255,49 @@ fn store_v128_4rows_nchw(
 ) -> Unit {
   if col + 4 <= n {
     let r0 = out_offset + col * m + row
-    out[r0] = @v128.f32x4_extract_lane(v0, 0)
-    out[r0 + 1] = @v128.f32x4_extract_lane(v1, 0)
-    out[r0 + 2] = @v128.f32x4_extract_lane(v2, 0)
-    out[r0 + 3] = @v128.f32x4_extract_lane(v3, 0)
+    out[r0] = @simd.f32x4_extract_lane(v0, 0)
+    out[r0 + 1] = @simd.f32x4_extract_lane(v1, 0)
+    out[r0 + 2] = @simd.f32x4_extract_lane(v2, 0)
+    out[r0 + 3] = @simd.f32x4_extract_lane(v3, 0)
 
     let r1 = r0 + m
-    out[r1] = @v128.f32x4_extract_lane(v0, 1)
-    out[r1 + 1] = @v128.f32x4_extract_lane(v1, 1)
-    out[r1 + 2] = @v128.f32x4_extract_lane(v2, 1)
-    out[r1 + 3] = @v128.f32x4_extract_lane(v3, 1)
+    out[r1] = @simd.f32x4_extract_lane(v0, 1)
+    out[r1 + 1] = @simd.f32x4_extract_lane(v1, 1)
+    out[r1 + 2] = @simd.f32x4_extract_lane(v2, 1)
+    out[r1 + 3] = @simd.f32x4_extract_lane(v3, 1)
 
     let r2 = r1 + m
-    out[r2] = @v128.f32x4_extract_lane(v0, 2)
-    out[r2 + 1] = @v128.f32x4_extract_lane(v1, 2)
-    out[r2 + 2] = @v128.f32x4_extract_lane(v2, 2)
-    out[r2 + 3] = @v128.f32x4_extract_lane(v3, 2)
+    out[r2] = @simd.f32x4_extract_lane(v0, 2)
+    out[r2 + 1] = @simd.f32x4_extract_lane(v1, 2)
+    out[r2 + 2] = @simd.f32x4_extract_lane(v2, 2)
+    out[r2 + 3] = @simd.f32x4_extract_lane(v3, 2)
 
     let r3 = r2 + m
-    out[r3] = @v128.f32x4_extract_lane(v0, 3)
-    out[r3 + 1] = @v128.f32x4_extract_lane(v1, 3)
-    out[r3 + 2] = @v128.f32x4_extract_lane(v2, 3)
-    out[r3 + 3] = @v128.f32x4_extract_lane(v3, 3)
+    out[r3] = @simd.f32x4_extract_lane(v0, 3)
+    out[r3 + 1] = @simd.f32x4_extract_lane(v1, 3)
+    out[r3 + 2] = @simd.f32x4_extract_lane(v2, 3)
+    out[r3 + 3] = @simd.f32x4_extract_lane(v3, 3)
   } else {
     if col < n {
       let r0 = out_offset + col * m + row
-      out[r0] = @v128.f32x4_extract_lane(v0, 0)
-      out[r0 + 1] = @v128.f32x4_extract_lane(v1, 0)
-      out[r0 + 2] = @v128.f32x4_extract_lane(v2, 0)
-      out[r0 + 3] = @v128.f32x4_extract_lane(v3, 0)
+      out[r0] = @simd.f32x4_extract_lane(v0, 0)
+      out[r0 + 1] = @simd.f32x4_extract_lane(v1, 0)
+      out[r0 + 2] = @simd.f32x4_extract_lane(v2, 0)
+      out[r0 + 3] = @simd.f32x4_extract_lane(v3, 0)
     }
     if col + 1 < n {
       let r1 = out_offset + (col + 1) * m + row
-      out[r1] = @v128.f32x4_extract_lane(v0, 1)
-      out[r1 + 1] = @v128.f32x4_extract_lane(v1, 1)
-      out[r1 + 2] = @v128.f32x4_extract_lane(v2, 1)
-      out[r1 + 3] = @v128.f32x4_extract_lane(v3, 1)
+      out[r1] = @simd.f32x4_extract_lane(v0, 1)
+      out[r1 + 1] = @simd.f32x4_extract_lane(v1, 1)
+      out[r1 + 2] = @simd.f32x4_extract_lane(v2, 1)
+      out[r1 + 3] = @simd.f32x4_extract_lane(v3, 1)
     }
     if col + 2 < n {
       let r2 = out_offset + (col + 2) * m + row
-      out[r2] = @v128.f32x4_extract_lane(v0, 2)
-      out[r2 + 1] = @v128.f32x4_extract_lane(v1, 2)
-      out[r2 + 2] = @v128.f32x4_extract_lane(v2, 2)
-      out[r2 + 3] = @v128.f32x4_extract_lane(v3, 2)
+      out[r2] = @simd.f32x4_extract_lane(v0, 2)
+      out[r2 + 1] = @simd.f32x4_extract_lane(v1, 2)
+      out[r2 + 2] = @simd.f32x4_extract_lane(v2, 2)
+      out[r2 + 3] = @simd.f32x4_extract_lane(v3, 2)
     }
   }
 }
@@ -314,16 +314,16 @@ fn store_v128_1row_nchw(
   v : V128,
 ) -> Unit {
   if col < n {
-    out[out_offset + col * m + row] = @v128.f32x4_extract_lane(v, 0)
+    out[out_offset + col * m + row] = @simd.f32x4_extract_lane(v, 0)
   }
   if col + 1 < n {
-    out[out_offset + (col + 1) * m + row] = @v128.f32x4_extract_lane(v, 1)
+    out[out_offset + (col + 1) * m + row] = @simd.f32x4_extract_lane(v, 1)
   }
   if col + 2 < n {
-    out[out_offset + (col + 2) * m + row] = @v128.f32x4_extract_lane(v, 2)
+    out[out_offset + (col + 2) * m + row] = @simd.f32x4_extract_lane(v, 2)
   }
   if col + 3 < n {
-    out[out_offset + (col + 3) * m + row] = @v128.f32x4_extract_lane(v, 3)
+    out[out_offset + (col + 3) * m + row] = @simd.f32x4_extract_lane(v, 3)
   }
 }
 
@@ -358,7 +358,7 @@ pub fn matmul_2d_prepacked_simd_f32(
 
   let b_packed = packed_b.data
   let panel_bytes = k * 32
-  let zero_vec = @v128.f32x4_splat((0.0 : Float))
+  let zero_vec = @simd.f32x4_splat((0.0 : Float))
 
   // 外层按 8 列连续微面板遍历：单面板仅 K*32 B 常驻 L1，A 的全部行复用该面板零跨步缓存未命中
   let mut j = 0
@@ -387,21 +387,21 @@ pub fn matmul_2d_prepacked_simd_f32(
 
       let mut b_ptr = panel_base
       for p = 0; p < k; p = p + 1 {
-        let bv0 = @v128.v128_load(b_packed, b_ptr)
-        let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
-        let av0 = @v128.f32x4_splat(a[a_r0 + p])
-        let av1 = @v128.f32x4_splat(a[a_r1 + p])
-        let av2 = @v128.f32x4_splat(a[a_r2 + p])
-        let av3 = @v128.f32x4_splat(a[a_r3 + p])
+        let bv0 = @simd.v128_load(b_packed, b_ptr)
+        let bv1 = @simd.v128_load(b_packed, b_ptr + 16)
+        let av0 = @simd.f32x4_splat(a[a_r0 + p])
+        let av1 = @simd.f32x4_splat(a[a_r1 + p])
+        let av2 = @simd.f32x4_splat(a[a_r2 + p])
+        let av3 = @simd.f32x4_splat(a[a_r3 + p])
 
-        c00 = @v128.f32x4_relaxed_madd(av0, bv0, c00)
-        c01 = @v128.f32x4_relaxed_madd(av0, bv1, c01)
-        c10 = @v128.f32x4_relaxed_madd(av1, bv0, c10)
-        c11 = @v128.f32x4_relaxed_madd(av1, bv1, c11)
-        c20 = @v128.f32x4_relaxed_madd(av2, bv0, c20)
-        c21 = @v128.f32x4_relaxed_madd(av2, bv1, c21)
-        c30 = @v128.f32x4_relaxed_madd(av3, bv0, c30)
-        c31 = @v128.f32x4_relaxed_madd(av3, bv1, c31)
+        c00 = @simd.f32x4_relaxed_madd(av0, bv0, c00)
+        c01 = @simd.f32x4_relaxed_madd(av0, bv1, c01)
+        c10 = @simd.f32x4_relaxed_madd(av1, bv0, c10)
+        c11 = @simd.f32x4_relaxed_madd(av1, bv1, c11)
+        c20 = @simd.f32x4_relaxed_madd(av2, bv0, c20)
+        c21 = @simd.f32x4_relaxed_madd(av2, bv1, c21)
+        c30 = @simd.f32x4_relaxed_madd(av3, bv0, c30)
+        c31 = @simd.f32x4_relaxed_madd(av3, bv1, c31)
         b_ptr = b_ptr + 32
       }
 
@@ -424,11 +424,11 @@ pub fn matmul_2d_prepacked_simd_f32(
       let mut c1 = zero_vec
       let mut b_ptr = panel_base
       for p = 0; p < k; p = p + 1 {
-        let av = @v128.f32x4_splat(a[a_r + p])
-        let bv0 = @v128.v128_load(b_packed, b_ptr)
-        let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
-        c0 = @v128.f32x4_relaxed_madd(av, bv0, c0)
-        c1 = @v128.f32x4_relaxed_madd(av, bv1, c1)
+        let av = @simd.f32x4_splat(a[a_r + p])
+        let bv0 = @simd.v128_load(b_packed, b_ptr)
+        let bv1 = @simd.v128_load(b_packed, b_ptr + 16)
+        c0 = @simd.f32x4_relaxed_madd(av, bv0, c0)
+        c1 = @simd.f32x4_relaxed_madd(av, bv1, c1)
         b_ptr = b_ptr + 32
       }
       store_v128_clamped(out, c_r, j, n, c0)
@@ -459,11 +459,11 @@ pub(all) enum Epilogue {
 fn apply_epilogue_v128(v : V128, epilogue : Epilogue) -> V128 {
   match epilogue {
     NoEpilogue => v
-    Relu => @v128.f32x4_pmax(@v128.f32x4_splat((0.0 : Float)), v)
+    Relu => @simd.f32x4_pmax(@simd.f32x4_splat((0.0 : Float)), v)
     Clip(min~, max~) =>
-      @v128.f32x4_pmin(
-        @v128.f32x4_splat(max),
-        @v128.f32x4_pmax(@v128.f32x4_splat(min), v),
+      @simd.f32x4_pmin(
+        @simd.f32x4_splat(max),
+        @simd.f32x4_pmax(@simd.f32x4_splat(min), v),
       )
   }
 }
@@ -553,21 +553,21 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
 
       let mut b_ptr = panel_base
       for p = 0; p < k; p = p + 1 {
-        let bv0 = @v128.v128_load(b_packed, b_ptr)
-        let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
-        let av0 = @v128.f32x4_splat(a[a_r0 + p])
-        let av1 = @v128.f32x4_splat(a[a_r1 + p])
-        let av2 = @v128.f32x4_splat(a[a_r2 + p])
-        let av3 = @v128.f32x4_splat(a[a_r3 + p])
+        let bv0 = @simd.v128_load(b_packed, b_ptr)
+        let bv1 = @simd.v128_load(b_packed, b_ptr + 16)
+        let av0 = @simd.f32x4_splat(a[a_r0 + p])
+        let av1 = @simd.f32x4_splat(a[a_r1 + p])
+        let av2 = @simd.f32x4_splat(a[a_r2 + p])
+        let av3 = @simd.f32x4_splat(a[a_r3 + p])
 
-        c00 = @v128.f32x4_relaxed_madd(av0, bv0, c00)
-        c01 = @v128.f32x4_relaxed_madd(av0, bv1, c01)
-        c10 = @v128.f32x4_relaxed_madd(av1, bv0, c10)
-        c11 = @v128.f32x4_relaxed_madd(av1, bv1, c11)
-        c20 = @v128.f32x4_relaxed_madd(av2, bv0, c20)
-        c21 = @v128.f32x4_relaxed_madd(av2, bv1, c21)
-        c30 = @v128.f32x4_relaxed_madd(av3, bv0, c30)
-        c31 = @v128.f32x4_relaxed_madd(av3, bv1, c31)
+        c00 = @simd.f32x4_relaxed_madd(av0, bv0, c00)
+        c01 = @simd.f32x4_relaxed_madd(av0, bv1, c01)
+        c10 = @simd.f32x4_relaxed_madd(av1, bv0, c10)
+        c11 = @simd.f32x4_relaxed_madd(av1, bv1, c11)
+        c20 = @simd.f32x4_relaxed_madd(av2, bv0, c20)
+        c21 = @simd.f32x4_relaxed_madd(av2, bv1, c21)
+        c30 = @simd.f32x4_relaxed_madd(av3, bv0, c30)
+        c31 = @simd.f32x4_relaxed_madd(av3, bv1, c31)
         b_ptr = b_ptr + 32
       }
 
@@ -596,11 +596,11 @@ pub fn matmul_2d_prepacked_nchw_simd_f32(
       let mut c1 = init1
       let mut b_ptr = panel_base
       for p = 0; p < k; p = p + 1 {
-        let av = @v128.f32x4_splat(a[a_r + p])
-        let bv0 = @v128.v128_load(b_packed, b_ptr)
-        let bv1 = @v128.v128_load(b_packed, b_ptr + 16)
-        c0 = @v128.f32x4_relaxed_madd(av, bv0, c0)
-        c1 = @v128.f32x4_relaxed_madd(av, bv1, c1)
+        let av = @simd.f32x4_splat(a[a_r + p])
+        let bv0 = @simd.v128_load(b_packed, b_ptr)
+        let bv1 = @simd.v128_load(b_packed, b_ptr + 16)
+        c0 = @simd.f32x4_relaxed_madd(av, bv0, c0)
+        c1 = @simd.f32x4_relaxed_madd(av, bv1, c1)
         b_ptr = b_ptr + 32
       }
       c0 = apply_epilogue_v128(c0, epilogue)
