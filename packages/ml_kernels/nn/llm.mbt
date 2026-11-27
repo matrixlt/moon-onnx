@@ -7,10 +7,15 @@ pub fn silu_f32(
   y_off : Int32,
   n : Int32,
 ) -> Unit {
+  if n == 0 {
+    return
+  }
+  check_nn_bounds(x.length(), x_off, n, "silu_f32(x)")
+  check_nn_bounds(y.length(), y_off, n, "silu_f32(y)")
   for i = 0; i < n; i = i + 1 {
-    let v = x[x_off + i].to_double()
+    let v = x.unsafe_get(x_off + i).to_double()
     let sig = 1.0 / (1.0 + @math.exp(-v))
-    y[y_off + i] = Float::from_double(v * sig)
+    y.unsafe_set(y_off + i, Float::from_double(v * sig))
   }
 }
 
@@ -27,19 +32,32 @@ pub fn rmsnorm_f32(
   norm_sz : Int32,
   eps : Float,
 ) -> Unit {
+  let total = outer * norm_sz
+  if total == 0 {
+    return
+  }
+  check_nn_bounds(x.length(), x_off, total, "rmsnorm_f32(x)")
+  check_nn_bounds(y.length(), y_off, total, "rmsnorm_f32(y)")
+  check_nn_bounds(scale.length(), 0, norm_sz, "rmsnorm_f32(scale)")
   let inv_n = 1.0 / norm_sz.to_double()
   let eps_d = eps.to_double()
   for o = 0; o < outer; o = o + 1 {
-    let b = o * norm_sz
+    let xb = x_off + o * norm_sz
+    let yb = y_off + o * norm_sz
     let mut sq = 0.0
     for i = 0; i < norm_sz; i = i + 1 {
-      let v = x[x_off + b + i].to_double()
+      let v = x.unsafe_get(xb + i).to_double()
       sq = sq + v * v
     }
     let inv_rms = 1.0 / (sq * inv_n + eps_d).sqrt()
     for i = 0; i < norm_sz; i = i + 1 {
-      y[y_off + b + i] = Float::from_double(
-        x[x_off + b + i].to_double() * inv_rms * scale[i].to_double(),
+      y.unsafe_set(
+        yb + i,
+        Float::from_double(
+          x.unsafe_get(xb + i).to_double() *
+          inv_rms *
+          scale.unsafe_get(i).to_double(),
+        ),
       )
     }
   }

@@ -55,6 +55,19 @@ fn read_q4_zero_point_i8(
 }
 
 ///|
+/// 校验 Q4 量化矩阵乘缓冲切片区间不越界。
+fn check_q4_bounds(
+  arr_len : Int32,
+  off : Int32,
+  len : Int32,
+  label : String,
+) -> Unit {
+  if off < 0 || len < 0 || off + len > arr_len {
+    abort("ml_kernels/quant: " + label + " out of bounds")
+  }
+}
+
+///|
 /// 标量参考实现：ONNX `com.microsoft::MatMulNBits`（4-bit 分块量化矩阵乘法）。
 /// - `a`: `Float32[M, K]`（起始偏移 `a_off`）
 /// - `b_q4`: `UInt8[N, n_blocks, block_size / 2]`（每字节低 4 位为偶数位，高 4 位为奇数位）
@@ -77,9 +90,31 @@ pub fn matmul_nbits_q4_scalar_f32(
   n : Int32,
   block_size : Int32,
 ) -> Unit {
+  if m <= 0 || n <= 0 {
+    return
+  }
   let n_blocks = (k + block_size - 1) / block_size
   let blob_bytes = block_size / 2
   let col_stride = n_blocks * blob_bytes
+  check_q4_bounds(a.length(), a_off, m * k, "matmul_nbits_q4_scalar(a)")
+  check_q4_bounds(
+    b_q4.length(),
+    0,
+    n * col_stride,
+    "matmul_nbits_q4_scalar(b_q4)",
+  )
+  check_q4_bounds(
+    scales.length(),
+    0,
+    n * n_blocks,
+    "matmul_nbits_q4_scalar(scales)",
+  )
+  check_q4_bounds(out.length(), out_off, m * n, "matmul_nbits_q4_scalar(out)")
+  match bias {
+    Some(bv) =>
+      check_q4_bounds(bv.length(), 0, n, "matmul_nbits_q4_scalar(bias)")
+    None => ()
+  }
 
   for i = 0; i < m; i = i + 1 {
     let a_row = a_off + i * k
@@ -88,11 +123,11 @@ pub fn matmul_nbits_q4_scalar_f32(
       let b_col = j * col_stride
       let s_col = j * n_blocks
       let mut acc : Float = match bias {
-        Some(bv) => bv[j]
+        Some(bv) => bv.unsafe_get(j)
         None => (0.0 : Float)
       }
       for blk = 0; blk < n_blocks; blk = blk + 1 {
-        let sc = scales[s_col + blk]
+        let sc = scales.unsafe_get(s_col + blk)
         let zp = read_q4_zero_point(zp_bytes, zp_f32, j, blk, n_blocks)
         let k_base = blk * block_size
         let b_blk = b_col + blk * blob_bytes
@@ -100,19 +135,19 @@ pub fn matmul_nbits_q4_scalar_f32(
         let mut pair = 0
         let mut kk = k_base
         while kk < k && pair < blob_bytes {
-          let byte_val = b_q4[b_blk + pair].to_int()
+          let byte_val = b_q4.unsafe_get(b_blk + pair).to_int()
           let lo = Float::from_int(byte_val & 0x0F) - zp
-          blk_sum = blk_sum + a[a_row + kk] * lo
+          blk_sum = blk_sum + a.unsafe_get(a_row + kk) * lo
           if kk + 1 < k {
             let hi = Float::from_int((byte_val >> 4) & 0x0F) - zp
-            blk_sum = blk_sum + a[a_row + kk + 1] * hi
+            blk_sum = blk_sum + a.unsafe_get(a_row + kk + 1) * hi
           }
           kk = kk + 2
           pair = pair + 1
         }
         acc = acc + blk_sum * sc
       }
-      out[o_row + j] = acc
+      out.unsafe_set(o_row + j, acc)
     }
   }
 }
@@ -199,6 +234,9 @@ pub fn matmul_nbits_q4_v128_f32(
   n : Int32,
   block_size : Int32,
 ) -> Unit {
+  if m <= 0 || n <= 0 {
+    return
+  }
   // 非 32 倍数或浮点零点回退至精确标量实现
   if block_size <= 0 || block_size % 32 != 0 || k % 32 != 0 || !(zp_f32 is None) {
     matmul_nbits_q4_scalar_f32(
@@ -211,6 +249,25 @@ pub fn matmul_nbits_q4_v128_f32(
   let sub_per_blk = block_size / 32
   let blob_bytes = block_size / 2
   let col_stride = n_blocks * blob_bytes
+  check_q4_bounds(a.length(), a_off, m * k, "matmul_nbits_q4_v128(a)")
+  check_q4_bounds(
+    b_q4.length(),
+    0,
+    n * col_stride,
+    "matmul_nbits_q4_v128(b_q4)",
+  )
+  check_q4_bounds(
+    scales.length(),
+    0,
+    n * n_blocks,
+    "matmul_nbits_q4_v128(scales)",
+  )
+  check_q4_bounds(out.length(), out_off, m * n, "matmul_nbits_q4_v128(out)")
+  match bias {
+    Some(bv) => check_q4_bounds(bv.length(), 0, n, "matmul_nbits_q4_v128(bias)")
+    None => ()
+  }
+
   let half_k = k / 2
   let a_even = FixedArray::make(half_k * 4, b'\x00')
   let a_odd = FixedArray::make(half_k * 4, b'\x00')
@@ -224,8 +281,8 @@ pub fn matmul_nbits_q4_v128_f32(
     // 一次性奇偶拆分打包当前输入行 A[i, 0..K)
     for p = 0; p < half_k; p = p + 1 {
       let bo = p * 4
-      write_f32_le(a_even, bo, a[a_row + p * 2])
-      write_f32_le(a_odd, bo, a[a_row + p * 2 + 1])
+      write_f32_le(a_even, bo, a.unsafe_get(a_row + p * 2))
+      write_f32_le(a_odd, bo, a.unsafe_get(a_row + p * 2 + 1))
     }
 
     let mut j = 0
@@ -238,22 +295,20 @@ pub fn matmul_nbits_q4_v128_f32(
       let sc1 = sc0 + n_blocks
       let sc2 = sc1 + n_blocks
       let sc3 = sc2 + n_blocks
-      let mut acc0 : Float = match bias {
-        Some(bv) => bv[j]
-        None => (0.0 : Float)
+      let (b0, b1, b2, b3) = match bias {
+        Some(bv) =>
+          (
+            bv.unsafe_get(j),
+            bv.unsafe_get(j + 1),
+            bv.unsafe_get(j + 2),
+            bv.unsafe_get(j + 3),
+          )
+        None => ((0.0 : Float), (0.0 : Float), (0.0 : Float), (0.0 : Float))
       }
-      let mut acc1 : Float = match bias {
-        Some(bv) => bv[j + 1]
-        None => (0.0 : Float)
-      }
-      let mut acc2 : Float = match bias {
-        Some(bv) => bv[j + 2]
-        None => (0.0 : Float)
-      }
-      let mut acc3 : Float = match bias {
-        Some(bv) => bv[j + 3]
-        None => (0.0 : Float)
-      }
+      let mut acc0 : Float = b0
+      let mut acc1 : Float = b1
+      let mut acc2 : Float = b2
+      let mut acc3 : Float = b3
 
       for blk = 0; blk < n_blocks; blk = blk + 1 {
         let zp0 = if has_zp {
@@ -358,15 +413,15 @@ pub fn matmul_nbits_q4_v128_f32(
               ao3,
             )
         }
-        acc0 = acc0 + bsum0 * scales[sc0 + blk]
-        acc1 = acc1 + bsum1 * scales[sc1 + blk]
-        acc2 = acc2 + bsum2 * scales[sc2 + blk]
-        acc3 = acc3 + bsum3 * scales[sc3 + blk]
+        acc0 = acc0 + bsum0 * scales.unsafe_get(sc0 + blk)
+        acc1 = acc1 + bsum1 * scales.unsafe_get(sc1 + blk)
+        acc2 = acc2 + bsum2 * scales.unsafe_get(sc2 + blk)
+        acc3 = acc3 + bsum3 * scales.unsafe_get(sc3 + blk)
       }
-      out[o_row + j] = acc0
-      out[o_row + j + 1] = acc1
-      out[o_row + j + 2] = acc2
-      out[o_row + j + 3] = acc3
+      out.unsafe_set(o_row + j, acc0)
+      out.unsafe_set(o_row + j + 1, acc1)
+      out.unsafe_set(o_row + j + 2, acc2)
+      out.unsafe_set(o_row + j + 3, acc3)
       j = j + 4
     }
 
@@ -375,7 +430,7 @@ pub fn matmul_nbits_q4_v128_f32(
       let bc0 = j * col_stride
       let sc0 = j * n_blocks
       let mut acc0 : Float = match bias {
-        Some(bv) => bv[j]
+        Some(bv) => bv.unsafe_get(j)
         None => (0.0 : Float)
       }
       for blk = 0; blk < n_blocks; blk = blk + 1 {
@@ -404,9 +459,9 @@ pub fn matmul_nbits_q4_v128_f32(
               @simd.v128_load(a_odd, a_sub_off + 48),
             )
         }
-        acc0 = acc0 + bsum0 * scales[sc0 + blk]
+        acc0 = acc0 + bsum0 * scales.unsafe_get(sc0 + blk)
       }
-      out[o_row + j] = acc0
+      out.unsafe_set(o_row + j, acc0)
       j = j + 1
     }
   }

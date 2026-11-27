@@ -99,3 +99,77 @@ test "pack_matrix_b_transposed_f32 and matmul_2d_prepacked_nchw_simd_f32 match s
     }
   }
 }
+
+///|
+/// 穷举验证 6×8 / 4×8 / 1×8 分块及 K 维 2× 展开奇偶尾部组合（M=1..13, K=1..5, N=1,7,8,9,17）
+/// 与 NCHW 全部 Epilogue（Relu / Relu6 / Silu）的数值正确性。
+test "6x8 K-unroll-2 GEMM covers all M/K/N tail paths and NCHW epilogues" {
+  let ks = [1, 2, 3, 5]
+  let ns = [1, 7, 8, 9, 17]
+  for m = 1; m <= 13; m = m + 1 {
+    for ki = 0; ki < ks.length(); ki = ki + 1 {
+      let k = ks[ki]
+      for ni = 0; ni < ns.length(); ni = ni + 1 {
+        let n = ns[ni]
+        let a = FixedArray::makei(m * k, fn(i) {
+          Float::from_int(i % 11 - 5) * (0.25 : Float)
+        })
+        let b = FixedArray::makei(k * n, fn(i) {
+          Float::from_int(i % 13 - 6) * (0.125 : Float)
+        })
+        let ref_out = FixedArray::make(m * n, (0.0 : Float))
+        let simd_out = FixedArray::make(m * n, (0.0 : Float))
+        @gemm.matmul_2d_scalar_f32(a, 0, b, 0, ref_out, 0, m, k, n)
+        let pb = @gemm.pack_matrix_b_f32(b, 0, k, n)
+        @gemm.matmul_2d_prepacked_simd_f32(a, 0, pb, simd_out, 0, m)
+        for idx = 0; idx < m * n; idx = idx + 1 {
+          assert_true((ref_out[idx] - simd_out[idx]).abs() <= (1.0e-5 : Float))
+        }
+      }
+    }
+  }
+  // NCHW 全部 Epilogue 验证（涵盖 6 行主块 + 4 行尾块 + 1 行尾块：M = 6 + 4 + 1 = 11）
+  let m = 11
+  let k = 7
+  let n = 13
+  let a = FixedArray::makei(m * k, fn(i) {
+    Float::from_int(i % 15 - 7) * (0.2 : Float)
+  })
+  let w = FixedArray::makei(n * k, fn(i) {
+    Float::from_int(i % 17 - 8) * (0.15 : Float)
+  })
+  let bias = FixedArray::makei(n, fn(i) {
+    Float::from_int(i - 6) * (0.3 : Float)
+  })
+  let pb_t = @gemm.pack_matrix_b_transposed_f32(w, 0, n, k)
+  let eps = [
+    @gemm.Relu,
+    @gemm.Clip(min=(0.0 : Float), max=(6.0 : Float)),
+    @gemm.Silu,
+  ]
+  for ei = 0; ei < eps.length(); ei = ei + 1 {
+    let ep = eps[ei]
+    let out = FixedArray::make(n * m, (0.0 : Float))
+    @gemm.matmul_2d_prepacked_nchw_simd_f32(
+      a,
+      0,
+      pb_t,
+      Some(bias),
+      0,
+      out,
+      0,
+      m,
+      epilogue=ep,
+    )
+    for ch = 0; ch < n; ch = ch + 1 {
+      for s = 0; s < m; s = s + 1 {
+        let mut acc = bias[ch]
+        for p = 0; p < k; p = p + 1 {
+          acc = acc + a[s * k + p] * w[ch * k + p]
+        }
+        let expected = @gemm.apply_epilogue_scalar(acc, ep)
+        assert_true((out[ch * m + s] - expected).abs() <= (1.0e-4 : Float))
+      }
+    }
+  }
+}

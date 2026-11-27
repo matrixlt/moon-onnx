@@ -160,19 +160,35 @@ pub fn add_f32_v128(
   out : FixedArray[Float],
   n : Int32,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  if n > a.length() || n > b.length() || n > out.length() {
+    abort("ml_kernels/vecmath: add_f32_v128 out of bounds")
+  }
   let mut i = 0
   while i + 4 <= n {
-    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let va = @simd.f32x4_const(
+      a.unsafe_get(i),
+      a.unsafe_get(i + 1),
+      a.unsafe_get(i + 2),
+      a.unsafe_get(i + 3),
+    )
+    let vb = @simd.f32x4_const(
+      b.unsafe_get(i),
+      b.unsafe_get(i + 1),
+      b.unsafe_get(i + 2),
+      b.unsafe_get(i + 3),
+    )
     let vr = @simd.f32x4_add(va, vb)
-    out[i] = @simd.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
+    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
-    out[i] = a[i] + b[i]
+    out.unsafe_set(i, a.unsafe_get(i) + b.unsafe_get(i))
     i = i + 1
   }
 }
@@ -185,19 +201,35 @@ pub fn sub_f32_v128(
   out : FixedArray[Float],
   n : Int32,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  if n > a.length() || n > b.length() || n > out.length() {
+    abort("ml_kernels/vecmath: sub_f32_v128 out of bounds")
+  }
   let mut i = 0
   while i + 4 <= n {
-    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let va = @simd.f32x4_const(
+      a.unsafe_get(i),
+      a.unsafe_get(i + 1),
+      a.unsafe_get(i + 2),
+      a.unsafe_get(i + 3),
+    )
+    let vb = @simd.f32x4_const(
+      b.unsafe_get(i),
+      b.unsafe_get(i + 1),
+      b.unsafe_get(i + 2),
+      b.unsafe_get(i + 3),
+    )
     let vr = @simd.f32x4_sub(va, vb)
-    out[i] = @simd.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
+    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
-    out[i] = a[i] - b[i]
+    out.unsafe_set(i, a.unsafe_get(i) - b.unsafe_get(i))
     i = i + 1
   }
 }
@@ -210,19 +242,35 @@ pub fn mul_f32_v128(
   out : FixedArray[Float],
   n : Int32,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  if n > a.length() || n > b.length() || n > out.length() {
+    abort("ml_kernels/vecmath: mul_f32_v128 out of bounds")
+  }
   let mut i = 0
   while i + 4 <= n {
-    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let va = @simd.f32x4_const(
+      a.unsafe_get(i),
+      a.unsafe_get(i + 1),
+      a.unsafe_get(i + 2),
+      a.unsafe_get(i + 3),
+    )
+    let vb = @simd.f32x4_const(
+      b.unsafe_get(i),
+      b.unsafe_get(i + 1),
+      b.unsafe_get(i + 2),
+      b.unsafe_get(i + 3),
+    )
     let vr = @simd.f32x4_mul(va, vb)
-    out[i] = @simd.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
+    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
-    out[i] = a[i] * b[i]
+    out.unsafe_set(i, a.unsafe_get(i) * b.unsafe_get(i))
     i = i + 1
   }
 }
@@ -234,21 +282,32 @@ pub fn relu_f32_v128(
   out : FixedArray[Float],
   n : Int32,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  if n > src.length() || n > out.length() {
+    abort("ml_kernels/vecmath: relu_f32_v128 out of bounds")
+  }
   let zero_vec = @simd.f32x4_splat((0.0 : Float))
   let mut i = 0
   while i + 4 <= n {
-    let vx = @simd.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vx = @simd.f32x4_const(
+      src.unsafe_get(i),
+      src.unsafe_get(i + 1),
+      src.unsafe_get(i + 2),
+      src.unsafe_get(i + 3),
+    )
     let vr = @simd.f32x4_pmax(zero_vec, vx)
-    out[i] = @simd.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
+    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   let zero : Float = 0.0
   while i < n {
-    let v = src[i]
-    out[i] = if v > zero { v } else { zero }
+    let v = src.unsafe_get(i)
+    out.unsafe_set(i, if v > zero { v } else { zero })
     i = i + 1
   }
 }
@@ -307,19 +366,35 @@ pub fn div_f32_v128(
   out : FixedArray[Float],
   n : Int32,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  if n > a.length() || n > b.length() || n > out.length() {
+    abort("ml_kernels/vecmath: div_f32_v128 out of bounds")
+  }
   let mut i = 0
   while i + 4 <= n {
-    let va = @simd.f32x4_const(a[i], a[i + 1], a[i + 2], a[i + 3])
-    let vb = @simd.f32x4_const(b[i], b[i + 1], b[i + 2], b[i + 3])
+    let va = @simd.f32x4_const(
+      a.unsafe_get(i),
+      a.unsafe_get(i + 1),
+      a.unsafe_get(i + 2),
+      a.unsafe_get(i + 3),
+    )
+    let vb = @simd.f32x4_const(
+      b.unsafe_get(i),
+      b.unsafe_get(i + 1),
+      b.unsafe_get(i + 2),
+      b.unsafe_get(i + 3),
+    )
     let vr = @simd.f32x4_div(va, vb)
-    out[i] = @simd.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
+    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
-    out[i] = a[i] / b[i]
+    out.unsafe_set(i, a.unsafe_get(i) / b.unsafe_get(i))
     i = i + 1
   }
 }
@@ -331,20 +406,34 @@ pub fn sqrt_f32_v128(
   out : FixedArray[Float],
   n : Int32,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  if n > src.length() || n > out.length() {
+    abort("ml_kernels/vecmath: sqrt_f32_v128 out of bounds")
+  }
   let mut i = 0
   while i + 4 <= n {
-    let vx = @simd.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let vx = @simd.f32x4_const(
+      src.unsafe_get(i),
+      src.unsafe_get(i + 1),
+      src.unsafe_get(i + 2),
+      src.unsafe_get(i + 3),
+    )
     let vr = @simd.f32x4_sqrt(vx)
-    out[i] = @simd.f32x4_extract_lane(vr, 0)
-    out[i + 1] = @simd.f32x4_extract_lane(vr, 1)
-    out[i + 2] = @simd.f32x4_extract_lane(vr, 2)
-    out[i + 3] = @simd.f32x4_extract_lane(vr, 3)
+    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
-    out[i] = @simd.f32x4_extract_lane(
-      @simd.f32x4_sqrt(@simd.f32x4_splat(src[i])),
-      0,
+    out.unsafe_set(
+      i,
+      @simd.f32x4_extract_lane(
+        @simd.f32x4_sqrt(@simd.f32x4_splat(src.unsafe_get(i))),
+        0,
+      ),
     )
     i = i + 1
   }

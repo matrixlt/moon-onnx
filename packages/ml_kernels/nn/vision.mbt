@@ -78,6 +78,11 @@ pub fn resize_2d_f32(
   let nc = n * c
   let in_plane = ih * iw
   let out_plane = oh * ow
+  if nc == 0 || out_plane == 0 {
+    return
+  }
+  check_nn_bounds(x.length(), x_off, nc * in_plane, "resize_2d_f32(x)")
+  check_nn_bounds(y.length(), y_off, nc * out_plane, "resize_2d_f32(y)")
   let sc_h = if scale_h > 0.0 {
     scale_h
   } else {
@@ -108,10 +113,13 @@ pub fn resize_2d_f32(
       let ib = x_off + ch * in_plane
       let ob = y_off + ch * out_plane
       for r = 0; r < oh; r = r + 1 {
-        let src_row = ib + y_map[r] * iw
+        let src_row = ib + y_map.unsafe_get(r) * iw
         let dst_row = ob + r * ow
         for col = 0; col < ow; col = col + 1 {
-          y[dst_row + col] = x[src_row + x_map[col]]
+          y.unsafe_set(
+            dst_row + col,
+            x.unsafe_get(src_row + x_map.unsafe_get(col)),
+          )
         }
       }
     }
@@ -130,9 +138,9 @@ pub fn resize_2d_f32(
       }
       let y0 = oy.floor().to_int()
       let y1 = if y0 + 1 < ih { y0 + 1 } else { ih - 1 }
-      y0_arr[r] = y0
-      y1_arr[r] = y1
-      wy_arr[r] = oy - y0.to_double()
+      y0_arr.unsafe_set(r, y0)
+      y1_arr.unsafe_set(r, y1)
+      wy_arr.unsafe_set(r, oy - y0.to_double())
     }
     let x0_arr = FixedArray::make(ow, 0)
     let x1_arr = FixedArray::make(ow, 0)
@@ -148,28 +156,31 @@ pub fn resize_2d_f32(
       }
       let x0 = ox.floor().to_int()
       let x1 = if x0 + 1 < iw { x0 + 1 } else { iw - 1 }
-      x0_arr[col] = x0
-      x1_arr[col] = x1
-      wx_arr[col] = ox - x0.to_double()
+      x0_arr.unsafe_set(col, x0)
+      x1_arr.unsafe_set(col, x1)
+      wx_arr.unsafe_set(col, ox - x0.to_double())
     }
     for ch = 0; ch < nc; ch = ch + 1 {
       let ib = x_off + ch * in_plane
       let ob = y_off + ch * out_plane
       for r = 0; r < oh; r = r + 1 {
-        let r0 = ib + y0_arr[r] * iw
-        let r1 = ib + y1_arr[r] * iw
-        let wy = wy_arr[r]
+        let r0 = ib + y0_arr.unsafe_get(r) * iw
+        let r1 = ib + y1_arr.unsafe_get(r) * iw
+        let wy = wy_arr.unsafe_get(r)
         let one_my = 1.0 - wy
         let dst_row = ob + r * ow
         for col = 0; col < ow; col = col + 1 {
-          let x0 = x0_arr[col]
-          let x1 = x1_arr[col]
-          let wx = wx_arr[col]
-          let top = x[r0 + x0].to_double() * (1.0 - wx) +
-            x[r0 + x1].to_double() * wx
-          let bot = x[r1 + x0].to_double() * (1.0 - wx) +
-            x[r1 + x1].to_double() * wx
-          y[dst_row + col] = Float::from_double(top * one_my + bot * wy)
+          let x0 = x0_arr.unsafe_get(col)
+          let x1 = x1_arr.unsafe_get(col)
+          let wx = wx_arr.unsafe_get(col)
+          let top = x.unsafe_get(r0 + x0).to_double() * (1.0 - wx) +
+            x.unsafe_get(r0 + x1).to_double() * wx
+          let bot = x.unsafe_get(r1 + x0).to_double() * (1.0 - wx) +
+            x.unsafe_get(r1 + x1).to_double() * wx
+          y.unsafe_set(
+            dst_row + col,
+            Float::from_double(top * one_my + bot * wy),
+          )
         }
       }
     }

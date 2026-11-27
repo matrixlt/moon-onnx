@@ -1,12 +1,7 @@
 ///|
-/// 将补码存储的 `Byte` 解释为有符号 8 位整数 `[-128, 127]`。
+/// 将补码存储的 `Byte` 解释为有符号 8 位整数 `[-128, 127]`（无分支位运算实现）。
 pub fn byte_to_i8(b : Byte) -> Int32 {
-  let u = b.to_int()
-  if u >= 128 {
-    u - 256
-  } else {
-    u
-  }
+  (b.to_int() ^ 128) - 128
 }
 
 ///|
@@ -41,6 +36,19 @@ pub fn round_half_to_even(x : Double) -> Int32 {
 }
 
 ///|
+/// 校验量子化缓冲切片区间 `[off, off + len)` 不越界，供内层 `unsafe_get` / `unsafe_set` 保证内存安全。
+fn check_quant_bounds(
+  arr_len : Int32,
+  off : Int32,
+  len : Int32,
+  label : String,
+) -> Unit {
+  if off < 0 || len < 0 || off + len > arr_len {
+    abort("ml_kernels/quant: " + label + " out of bounds")
+  }
+}
+
+///|
 /// 逐元素线性量化（`Float32 -> UInt8`）：`y = saturate_u8(round_even(x / scale) + zp)`，支持 Arena 零拷贝偏移。
 pub fn quantize_u8_per_tensor(
   src : FixedArray[Float],
@@ -51,11 +59,17 @@ pub fn quantize_u8_per_tensor(
   src_off~ : Int32 = 0,
   dst_off~ : Int32 = 0,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  check_quant_bounds(src.length(), src_off, n, "quantize_u8_per_tensor(src)")
+  check_quant_bounds(dst.length(), dst_off, n, "quantize_u8_per_tensor(dst)")
   let inv_s = 1.0 / scale.to_double()
   let zp = zero_point.to_int()
   for i = 0; i < n; i = i + 1 {
-    let q = round_half_to_even(src[src_off + i].to_double() * inv_s) + zp
-    dst[dst_off + i] = u8_to_byte(q)
+    let q = round_half_to_even(src.unsafe_get(src_off + i).to_double() * inv_s) +
+      zp
+    dst.unsafe_set(dst_off + i, u8_to_byte(q))
   }
 }
 
@@ -70,11 +84,17 @@ pub fn quantize_i8_per_tensor(
   src_off~ : Int32 = 0,
   dst_off~ : Int32 = 0,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  check_quant_bounds(src.length(), src_off, n, "quantize_i8_per_tensor(src)")
+  check_quant_bounds(dst.length(), dst_off, n, "quantize_i8_per_tensor(dst)")
   let inv_s = 1.0 / scale.to_double()
   let zp = byte_to_i8(zero_point)
   for i = 0; i < n; i = i + 1 {
-    let q = round_half_to_even(src[src_off + i].to_double() * inv_s) + zp
-    dst[dst_off + i] = i8_to_byte(q)
+    let q = round_half_to_even(src.unsafe_get(src_off + i).to_double() * inv_s) +
+      zp
+    dst.unsafe_set(dst_off + i, i8_to_byte(q))
   }
 }
 
@@ -89,11 +109,19 @@ pub fn dequantize_u8_per_tensor(
   src_off~ : Int32 = 0,
   dst_off~ : Int32 = 0,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  check_quant_bounds(src.length(), src_off, n, "dequantize_u8_per_tensor(src)")
+  check_quant_bounds(dst.length(), dst_off, n, "dequantize_u8_per_tensor(dst)")
   let s = scale.to_double()
   let zp = zero_point.to_int()
   for i = 0; i < n; i = i + 1 {
-    dst[dst_off + i] = Float::from_double(
-      (src[src_off + i].to_int() - zp).to_double() * s,
+    dst.unsafe_set(
+      dst_off + i,
+      Float::from_double(
+        (src.unsafe_get(src_off + i).to_int() - zp).to_double() * s,
+      ),
     )
   }
 }
@@ -109,11 +137,19 @@ pub fn dequantize_i8_per_tensor(
   src_off~ : Int32 = 0,
   dst_off~ : Int32 = 0,
 ) -> Unit {
+  if n <= 0 {
+    return
+  }
+  check_quant_bounds(src.length(), src_off, n, "dequantize_i8_per_tensor(src)")
+  check_quant_bounds(dst.length(), dst_off, n, "dequantize_i8_per_tensor(dst)")
   let s = scale.to_double()
   let zp = byte_to_i8(zero_point)
   for i = 0; i < n; i = i + 1 {
-    dst[dst_off + i] = Float::from_double(
-      (byte_to_i8(src[src_off + i]) - zp).to_double() * s,
+    dst.unsafe_set(
+      dst_off + i,
+      Float::from_double(
+        (byte_to_i8(src.unsafe_get(src_off + i)) - zp).to_double() * s,
+      ),
     )
   }
 }
@@ -467,10 +503,25 @@ pub fn dynamic_quantize_linear_u8(
   dst_off : Int32,
   n : Int32,
 ) -> (Float, Byte) {
+  if n <= 0 {
+    return ((1.0 : Float), b'\x00')
+  }
+  check_quant_bounds(
+    src.length(),
+    src_off,
+    n,
+    "dynamic_quantize_linear_u8(src)",
+  )
+  check_quant_bounds(
+    dst.length(),
+    dst_off,
+    n,
+    "dynamic_quantize_linear_u8(dst)",
+  )
   let mut min_v = 0.0
   let mut max_v = 0.0
   for i = 0; i < n; i = i + 1 {
-    let v = src[src_off + i].to_double()
+    let v = src.unsafe_get(src_off + i).to_double()
     if v < min_v {
       min_v = v
     }
@@ -481,7 +532,7 @@ pub fn dynamic_quantize_linear_u8(
   let range = max_v - min_v
   if range <= 0.0 {
     for i = 0; i < n; i = i + 1 {
-      dst[dst_off + i] = b'\x00'
+      dst.unsafe_set(dst_off + i, b'\x00')
     }
     return ((1.0 : Float), b'\x00')
   }
@@ -492,9 +543,9 @@ pub fn dynamic_quantize_linear_u8(
   let zp_byte = zp_clamped.to_byte()
   let inv_s = 1.0 / scale.to_double()
   for i = 0; i < n; i = i + 1 {
-    let q = round_half_to_even(src[src_off + i].to_double() * inv_s) +
+    let q = round_half_to_even(src.unsafe_get(src_off + i).to_double() * inv_s) +
       zp_clamped
-    dst[dst_off + i] = u8_to_byte(q)
+    dst.unsafe_set(dst_off + i, u8_to_byte(q))
   }
   (scale, zp_byte)
 }
@@ -645,17 +696,17 @@ fn dot4_u8_i8_v128(
   let mut s2 = hsum_i32x4(acc2)
   let mut s3 = hsum_i32x4(acc3)
   while kk < k {
-    let av = a[a_row + kk].to_int()
-    s0 = s0 + av * byte_to_i8(bt[b0 + kk])
-    s1 = s1 + av * byte_to_i8(bt[b1 + kk])
-    s2 = s2 + av * byte_to_i8(bt[b2 + kk])
-    s3 = s3 + av * byte_to_i8(bt[b3 + kk])
+    let av = a.unsafe_get(a_row + kk).to_int()
+    s0 = s0 + av * byte_to_i8(bt.unsafe_get(b0 + kk))
+    s1 = s1 + av * byte_to_i8(bt.unsafe_get(b1 + kk))
+    s2 = s2 + av * byte_to_i8(bt.unsafe_get(b2 + kk))
+    s3 = s3 + av * byte_to_i8(bt.unsafe_get(b3 + kk))
     kk = kk + 1
   }
-  s0 = s0 - az * col_sums[j]
-  s1 = s1 - az * col_sums[j + 1]
-  s2 = s2 - az * col_sums[j + 2]
-  s3 = s3 - az * col_sums[j + 3]
+  s0 = s0 - az * col_sums.unsafe_get(j)
+  s1 = s1 - az * col_sums.unsafe_get(j + 1)
+  s2 = s2 - az * col_sums.unsafe_get(j + 2)
+  s3 = s3 - az * col_sums.unsafe_get(j + 3)
   if need_bzp {
     let delta = row_sum - k * az
     s0 = s0 - get_b_zp_i8(b_zp, j) * delta
@@ -705,10 +756,11 @@ fn dot1_u8_i8_v128(
   }
   let mut s0 = hsum_i32x4(acc0)
   while kk < k {
-    s0 = s0 + a[a_row + kk].to_int() * byte_to_i8(bt[b0 + kk])
+    s0 = s0 +
+      a.unsafe_get(a_row + kk).to_int() * byte_to_i8(bt.unsafe_get(b0 + kk))
     kk = kk + 1
   }
-  s0 = s0 - az * col_sums[j]
+  s0 = s0 - az * col_sums.unsafe_get(j)
   if need_bzp {
     s0 = s0 - get_b_zp_i8(b_zp, j) * (row_sum - k * az)
   }
@@ -731,8 +783,15 @@ pub fn matmul_integer_u8_i8_prepacked_v128(
 ) -> Unit {
   let k = packed_b.k
   let n = packed_b.n
+  if m <= 0 || n <= 0 {
+    return
+  }
   let bt = packed_b.bt
   let col_sums = packed_b.col_sums
+  check_quant_bounds(a.length(), a_off, m * k, "matmul_integer_v128(a)")
+  check_quant_bounds(bt.length(), 0, n * k, "matmul_integer_v128(bt)")
+  check_quant_bounds(col_sums.length(), 0, n, "matmul_integer_v128(col_sums)")
+  check_quant_bounds(out.length(), out_off, m * n, "matmul_integer_v128(out)")
   let az = a_zp.to_int()
   let need_bzp = has_nonzero_byte(b_zp)
   let k_vec = k - k % 16
@@ -743,7 +802,7 @@ pub fn matmul_integer_u8_i8_prepacked_v128(
     let mut row_sum = 0
     if need_bzp {
       for kk = 0; kk < k; kk = kk + 1 {
-        row_sum = row_sum + a[a_row + kk].to_int()
+        row_sum = row_sum + a.unsafe_get(a_row + kk).to_int()
       }
     }
     let mut j = 0
@@ -751,15 +810,18 @@ pub fn matmul_integer_u8_i8_prepacked_v128(
       let (s0, s1, s2, s3) = dot4_u8_i8_v128(
         a, a_row, bt, col_sums, j, k, k_vec, az, need_bzp, b_zp, row_sum,
       )
-      out[y_row + j] = s0
-      out[y_row + j + 1] = s1
-      out[y_row + j + 2] = s2
-      out[y_row + j + 3] = s3
+      out.unsafe_set(y_row + j, s0)
+      out.unsafe_set(y_row + j + 1, s1)
+      out.unsafe_set(y_row + j + 2, s2)
+      out.unsafe_set(y_row + j + 3, s3)
       j = j + 4
     }
     while j < n {
-      out[y_row + j] = dot1_u8_i8_v128(
-        a, a_row, bt, col_sums, j, k, k_vec, az, need_bzp, b_zp, row_sum,
+      out.unsafe_set(
+        y_row + j,
+        dot1_u8_i8_v128(
+          a, a_row, bt, col_sums, j, k, k_vec, az, need_bzp, b_zp, row_sum,
+        ),
       )
       j = j + 1
     }
@@ -780,8 +842,25 @@ pub fn matmul_integer_u8_i8_prepacked_to_f32_v128(
 ) -> Unit {
   let k = packed_b.k
   let n = packed_b.n
+  if m <= 0 || n <= 0 {
+    return
+  }
   let bt = packed_b.bt
   let col_sums = packed_b.col_sums
+  check_quant_bounds(a.length(), a_off, m * k, "matmul_integer_to_f32_v128(a)")
+  check_quant_bounds(bt.length(), 0, n * k, "matmul_integer_to_f32_v128(bt)")
+  check_quant_bounds(
+    col_sums.length(),
+    0,
+    n,
+    "matmul_integer_to_f32_v128(col_sums)",
+  )
+  check_quant_bounds(
+    out.length(),
+    out_off,
+    m * n,
+    "matmul_integer_to_f32_v128(out)",
+  )
   let az = a_zp.to_int()
   let need_bzp = has_nonzero_byte(b_zp)
   let k_vec = k - k % 16
@@ -792,7 +871,7 @@ pub fn matmul_integer_u8_i8_prepacked_to_f32_v128(
     let mut row_sum = 0
     if need_bzp {
       for kk = 0; kk < k; kk = kk + 1 {
-        row_sum = row_sum + a[a_row + kk].to_int()
+        row_sum = row_sum + a.unsafe_get(a_row + kk).to_int()
       }
     }
     let mut j = 0
@@ -800,16 +879,19 @@ pub fn matmul_integer_u8_i8_prepacked_to_f32_v128(
       let (s0, s1, s2, s3) = dot4_u8_i8_v128(
         a, a_row, bt, col_sums, j, k, k_vec, az, need_bzp, b_zp, row_sum,
       )
-      out[y_row + j] = Float::from_int(s0)
-      out[y_row + j + 1] = Float::from_int(s1)
-      out[y_row + j + 2] = Float::from_int(s2)
-      out[y_row + j + 3] = Float::from_int(s3)
+      out.unsafe_set(y_row + j, Float::from_int(s0))
+      out.unsafe_set(y_row + j + 1, Float::from_int(s1))
+      out.unsafe_set(y_row + j + 2, Float::from_int(s2))
+      out.unsafe_set(y_row + j + 3, Float::from_int(s3))
       j = j + 4
     }
     while j < n {
-      out[y_row + j] = Float::from_int(
-        dot1_u8_i8_v128(
-          a, a_row, bt, col_sums, j, k, k_vec, az, need_bzp, b_zp, row_sum,
+      out.unsafe_set(
+        y_row + j,
+        Float::from_int(
+          dot1_u8_i8_v128(
+            a, a_row, bt, col_sums, j, k, k_vec, az, need_bzp, b_zp, row_sum,
+          ),
         ),
       )
       j = j + 1
@@ -818,7 +900,8 @@ pub fn matmul_integer_u8_i8_prepacked_to_f32_v128(
 }
 
 ///|
-/// 标量快速路径 `MatMulInteger(A_u8, B_i8) -> Float32`（专为 Wasm-GC 优化：避免 GC 字节数组 `v128_load` 退化，同时复用 `col_sums`）。
+/// 4 列展开标量快速路径 `MatMulInteger(A_u8, B_i8) -> Float32`（专为 Wasm-GC 优化：
+/// 避免 GC 字节数组 `v128_load` 退化，单次加载 `a` 并发点积 4 列预打包 `BT` 并配合 `unsafe_get` / `unsafe_set`）。
 pub fn matmul_integer_u8_i8_prepacked_to_f32_scalar(
   a : FixedArray[Byte],
   a_off : Int32,
@@ -831,8 +914,30 @@ pub fn matmul_integer_u8_i8_prepacked_to_f32_scalar(
 ) -> Unit {
   let k = packed_b.k
   let n = packed_b.n
+  if m <= 0 || n <= 0 {
+    return
+  }
   let bt = packed_b.bt
   let col_sums = packed_b.col_sums
+  check_quant_bounds(
+    a.length(),
+    a_off,
+    m * k,
+    "matmul_integer_to_f32_scalar(a)",
+  )
+  check_quant_bounds(bt.length(), 0, n * k, "matmul_integer_to_f32_scalar(bt)")
+  check_quant_bounds(
+    col_sums.length(),
+    0,
+    n,
+    "matmul_integer_to_f32_scalar(col_sums)",
+  )
+  check_quant_bounds(
+    out.length(),
+    out_off,
+    m * n,
+    "matmul_integer_to_f32_scalar(out)",
+  )
   let az = a_zp.to_int()
   let need_bzp = has_nonzero_byte(b_zp)
 
@@ -842,21 +947,56 @@ pub fn matmul_integer_u8_i8_prepacked_to_f32_scalar(
     let mut row_sum = 0
     if need_bzp {
       for kk = 0; kk < k; kk = kk + 1 {
-        row_sum = row_sum + a[a_row + kk].to_int()
+        row_sum = row_sum + a.unsafe_get(a_row + kk).to_int()
       }
     }
-    for j = 0; j < n; j = j + 1 {
+    let delta = row_sum - k * az
+    let mut j = 0
+    while j + 4 <= n {
+      let b0 = j * k
+      let b1 = b0 + k
+      let b2 = b1 + k
+      let b3 = b2 + k
+      let mut s0 = 0
+      let mut s1 = 0
+      let mut s2 = 0
+      let mut s3 = 0
+      for kk = 0; kk < k; kk = kk + 1 {
+        let av = a.unsafe_get(a_row + kk).to_int()
+        s0 = s0 + av * byte_to_i8(bt.unsafe_get(b0 + kk))
+        s1 = s1 + av * byte_to_i8(bt.unsafe_get(b1 + kk))
+        s2 = s2 + av * byte_to_i8(bt.unsafe_get(b2 + kk))
+        s3 = s3 + av * byte_to_i8(bt.unsafe_get(b3 + kk))
+      }
+      s0 = s0 - az * col_sums.unsafe_get(j)
+      s1 = s1 - az * col_sums.unsafe_get(j + 1)
+      s2 = s2 - az * col_sums.unsafe_get(j + 2)
+      s3 = s3 - az * col_sums.unsafe_get(j + 3)
+      if need_bzp {
+        s0 = s0 - get_b_zp_i8(b_zp, j) * delta
+        s1 = s1 - get_b_zp_i8(b_zp, j + 1) * delta
+        s2 = s2 - get_b_zp_i8(b_zp, j + 2) * delta
+        s3 = s3 - get_b_zp_i8(b_zp, j + 3) * delta
+      }
+      out.unsafe_set(y_row + j, Float::from_int(s0))
+      out.unsafe_set(y_row + j + 1, Float::from_int(s1))
+      out.unsafe_set(y_row + j + 2, Float::from_int(s2))
+      out.unsafe_set(y_row + j + 3, Float::from_int(s3))
+      j = j + 4
+    }
+    while j < n {
       let b0 = j * k
       let mut acc = 0
       for kk = 0; kk < k; kk = kk + 1 {
-        acc = acc + a[a_row + kk].to_int() * byte_to_i8(bt[b0 + kk])
+        acc = acc +
+          a.unsafe_get(a_row + kk).to_int() * byte_to_i8(bt.unsafe_get(b0 + kk))
       }
-      acc = acc - az * col_sums[j]
+      acc = acc - az * col_sums.unsafe_get(j)
       if need_bzp {
-        let bz0 = get_b_zp_i8(b_zp, j)
-        acc = acc - bz0 * (row_sum - k * az)
+        acc = acc - get_b_zp_i8(b_zp, j) * delta
       }
-      out[y_row + j] = Float::from_int(acc)
+      out.unsafe_set(y_row + j, Float::from_int(acc))
+      j = j + 1
     }
   }
 }
