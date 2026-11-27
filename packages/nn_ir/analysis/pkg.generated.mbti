@@ -7,7 +7,11 @@ import {
 }
 
 // Values
+pub fn build_release_plan(@nn_ir.IrGraph) -> LivenessPlan
+
 pub fn clamp_slice_bound_static(Int64, Int32, Int32) -> Int32
+
+pub fn compute_spatial_out_and_pads(Int32, Int32, Int32, Int32, Int32, Int32, Bool, @nn_ir.AutoPad) -> (Int32, Int32, Int32) raise @tensor.TensorError
 
 pub fn infer_node_output_dtypes(@nn_ir.IrNode, Map[String, @tensor.DType]) -> Unit
 
@@ -19,9 +23,19 @@ pub fn infer_static_dtypes(@nn_ir.IrGraph, Map[String, @tensor.DType]) -> Map[St
 
 pub fn infer_static_shapes(@nn_ir.IrGraph, Map[String, Array[Int32]]) -> Map[String, Array[Int32]] raise @nn_ir.IrError
 
+pub fn is_view_op(@nn_ir.Op) -> Bool
+
+pub fn resolve_2d_pads(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Array[Int32], @nn_ir.AutoPad, Int32, Int32) -> (Int32, Int32, Int32, Int32)
+
 // Errors
 
 // Types and methods
+pub(all) struct LivenessPlan {
+  release_plan : Array[Array[String]]
+  pinned_outputs : Array[Bool]
+  pinned : Map[String, Bool]
+  root_of : Map[String, String]
+}
 
 // Type aliases
 

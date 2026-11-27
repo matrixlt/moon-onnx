@@ -57,7 +57,7 @@ fn ArenaEmitter::emit_nn_op(
       } else {
         pads
       }
-      let (pt, pl, _pb, _pr) = resolve_2d_pads(
+      let (pt, pl, _pb, _pr) = @analysis.resolve_2d_pads(
         ih, iw, kh, kw, sh, sw_s, dh, dw_s, pads2, auto_pad, oh, ow,
       )
       let bias_expr = if ins.length() >= 3 && ins[2] != "" {
@@ -116,7 +116,7 @@ fn ArenaEmitter::emit_nn_op(
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
       let sx = self.require_shape(ins[0])
-      let (pt, pl, _pb, _pr) = resolve_2d_pads(
+      let (pt, pl, _pb, _pr) = @analysis.resolve_2d_pads(
         sx[2],
         sx[3],
         kernel_shape[0],
@@ -146,7 +146,7 @@ fn ArenaEmitter::emit_nn_op(
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
       let sx = self.require_shape(ins[0])
-      let (pt, pl, _pb, _pr) = resolve_2d_pads(
+      let (pt, pl, _pb, _pr) = @analysis.resolve_2d_pads(
         sx[2],
         sx[3],
         kernel_shape[0],

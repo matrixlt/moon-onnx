@@ -247,28 +247,6 @@ pub fn split_op(
 }
 
 ///|
-/// 将 `Int64` 切片端点按 ONNX 规范（支持负索引与大值钳位）裁剪到合法范围。
-fn clamp_slice_bound(v : Int64, dim : Int32, step : Int32) -> Int32 {
-  let d64 = dim.to_int64()
-  let norm = if v < (0 : Int64) { v + d64 } else { v }
-  if step > 0 {
-    if norm < (0 : Int64) {
-      0
-    } else if norm > d64 {
-      dim
-    } else {
-      norm.to_int()
-    }
-  } else if norm < (-1 : Int64) {
-    -1
-  } else if norm >= d64 {
-    dim - 1
-  } else {
-    norm.to_int()
-  }
-}
-
-///|
 /// ONNX `Slice` 算子（兼容 Opset < 10 属性与 Opset >= 10 张量输入，支持负索引与负步长）。
 pub fn slice_op(
   x : @tensor.Tensor,
@@ -305,8 +283,8 @@ pub fn slice_op(
       raise @tensor.InvalidShape("slice_op: step cannot be 0")
     }
     let dim = shape[ax]
-    let s = clamp_slice_bound(starts_in[k], dim, step)
-    let e = clamp_slice_bound(ends_in[k], dim, step)
+    let s = @analysis.clamp_slice_bound_static(starts_in[k], dim, step)
+    let e = @analysis.clamp_slice_bound_static(ends_in[k], dim, step)
     let out_dim = if step > 0 {
       if e > s {
         (e - s + step - 1) / step
@@ -364,24 +342,6 @@ pub fn slice_op(
         "slice_op: unsupported dtype \{other} (supports Float32/Int64)",
       )
   }
-}
-
-///|
-/// 将越界坐标按 `reflect` 模式镜像映射回 `[0, dim - 1]` 合法区间。
-fn reflect_index(idx : Int32, dim : Int32) -> Int32 {
-  if dim <= 1 {
-    return 0
-  }
-  let mut cur = idx
-  while cur < 0 || cur >= dim {
-    if cur < 0 {
-      cur = -cur
-    }
-    if cur >= dim {
-      cur = 2 * dim - 2 - cur
-    }
-  }
-  cur
 }
 
 ///|
@@ -461,7 +421,7 @@ pub fn pad_f32(
           is_oob = true
           break
         } else if mode_id == 1 {
-          src_idx = src_idx + reflect_index(in_c, dim) * in_strides[d]
+          src_idx = src_idx + @nn.reflect_idx(in_c, dim) * in_strides[d]
         } else {
           let clamped = if in_c < 0 { 0 } else { dim - 1 }
           src_idx = src_idx + clamped * in_strides[d]

@@ -427,12 +427,7 @@ pub fn gelu_f32(
   if use_simd {
     @vecmath.gelu_f32_v128(src, out, n)
   } else {
-    let sqrt_2_over_pi = 0.7978845608028654
-    for i = 0; i < n; i = i + 1 {
-      let d = src[i].to_double()
-      let inner = sqrt_2_over_pi * (d + 0.044715 * d * d * d)
-      out[i] = Float::from_double(0.5 * d * (1.0 + @math.tanh(inner)))
-    }
+    @nn.gelu_f32(src, 0, out, 0, n)
   }
   @tensor.Tensor::from_f32(x.shape(), out)
 }
@@ -496,7 +491,7 @@ pub fn leaky_relu_f32(
 }
 
 ///|
-/// ONNX Softmax 算子（数值稳定版，支持任意正负轴与 BufferPool 复用）。
+/// ONNX Softmax 算子（数值稳定版，支持任意正负轴与 BufferPool 复用，委托 `ml_kernels/nn` 内核）。
 pub fn softmax_f32(
   x : @tensor.Tensor,
   axis : Int32,
@@ -521,51 +516,12 @@ pub fn softmax_f32(
 
   let src = x.to_f32_buffer()
   let out = alloc_f32(pool, src.length())
-
-  for o = 0; o < outer; o = o + 1 {
-    let outer_base = o * axis_dim * inner
-    for in_idx = 0; in_idx < inner; in_idx = in_idx + 1 {
-      let mut max_val = src[outer_base + in_idx]
-      for k = 1; k < axis_dim; k = k + 1 {
-        let v = src[outer_base + k * inner + in_idx]
-        if v > max_val {
-          max_val = v
-        }
-      }
-      let mut sum_exp = 0.0
-      for k = 0; k < axis_dim; k = k + 1 {
-        let idx = outer_base + k * inner + in_idx
-        let e = @math.exp((src[idx] - max_val).to_double())
-        out[idx] = Float::from_double(e)
-        sum_exp = sum_exp + e
-      }
-      let inv_sum = Float::from_double(1.0 / sum_exp)
-      for k = 0; k < axis_dim; k = k + 1 {
-        let idx = outer_base + k * inner + in_idx
-        out[idx] = out[idx] * inv_sum
-      }
-    }
-  }
+  @nn.softmax_f32(src, 0, out, 0, outer, axis_dim, inner)
   @tensor.Tensor::from_f32(shape, out)
 }
 
 ///|
-/// 双精度高斯误差函数 `erf(x)`（Abramowitz & Stegun 7.1.26，全定义域最大误差 < 1.5e-7，满足 Float32 精确 GELU 需求）。
-fn erf_double(x : Double) -> Double {
-  let sign = if x < 0.0 { -1.0 } else { 1.0 }
-  let ax = if x < 0.0 { -x } else { x }
-  let t = 1.0 / (1.0 + 0.3275911 * ax)
-  let poly = (
-      (((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) *
-      t +
-      0.254829592
-    ) *
-    t
-  sign * (1.0 - poly * @math.exp(-(ax * ax)))
-}
-
-///|
-/// ONNX `Erf` 算子：逐元素计算高斯误差函数 `erf(x)`（支持 BufferPool 复用）。
+/// ONNX `Erf` 算子：逐元素计算高斯误差函数 `erf(x)`（支持 BufferPool 复用，委托 `ml_kernels/nn` 内核）。
 pub fn erf_f32(
   x : @tensor.Tensor,
   pool~ : @tensor.BufferPool? = None,
@@ -573,8 +529,6 @@ pub fn erf_f32(
   let src = x.to_f32_buffer()
   let n = src.length()
   let out = alloc_f32(pool, n)
-  for i = 0; i < n; i = i + 1 {
-    out[i] = Float::from_double(erf_double(src[i].to_double()))
-  }
+  @nn.erf_f32(src, 0, out, 0, n)
   @tensor.Tensor::from_f32(x.shape(), out)
 }

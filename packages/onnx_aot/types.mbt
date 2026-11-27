@@ -209,6 +209,18 @@ fn fmt_activation(act : @nn_ir.FusedActivation) -> String {
 }
 
 ///|
+/// 将 `@nn_ir.FusedActivation` 格式化为 `@gemm.Epilogue` 表达式（Arena 模式不再依赖 `matrixlt/nn_ir`）。
+fn fmt_gemm_epilogue(act : @nn_ir.FusedActivation) -> String {
+  match act {
+    @nn_ir.NoAct => "@gemm.NoEpilogue"
+    @nn_ir.ReluAct => "@gemm.Relu"
+    @nn_ir.ClipAct(min~, max~) =>
+      "@gemm.Clip(min=\{fmt_float_literal(min)}, max=\{fmt_float_literal(max)})"
+    @nn_ir.SiluAct => "@gemm.Silu"
+  }
+}
+
+///|
 /// 将 `@tensor.DType` 格式化为源代码表达式。
 fn fmt_dtype(dt : @tensor.DType) -> String {
   match dt {

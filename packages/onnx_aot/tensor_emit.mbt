@@ -1,18 +1,4 @@
 ///|
-/// 判断算子是否为零拷贝视图算子（供 AOT 静态生命周期回收分析复用，防止回收别名底层缓冲）。
-fn is_aot_view_op(op : @nn_ir.Op) -> Bool {
-  match op {
-    @nn_ir.Identity
-    | @nn_ir.Flatten(..)
-    | @nn_ir.Reshape(..)
-    | @nn_ir.Transpose(..)
-    | @nn_ir.Squeeze(..)
-    | @nn_ir.Unsqueeze(..) => true
-    _ => false
-  }
-}
-
-///|
 /// 将已完成特化与形状推导的 `IrGraph` 按 v1 `Tensor` 回退模式生成 MoonBit 源码与紧凑权重包。
 fn emit_tensor_model(
   graph : @nn_ir.IrGraph,
@@ -76,80 +62,33 @@ fn emit_tensor_model(
   let mut needs_nn_ir = false
   let mut needs_gemm = false
 
-  // 2. 为每个节点分配 SSA 变量名与静态生命周期回收计划
+  // 2. 为每个节点分配 SSA 变量名并复用 `nn_ir/analysis` 统一别名感知生命周期计划
   let var_of : Map[String, String] = Map([])
   for i = 0; i < graph.inputs.length(); i = i + 1 {
     var_of[graph.inputs[i]] = "in_\{i}"
   }
-
-  let pinned : Map[String, Bool] = Map([])
-  for i = 0; i < graph.inputs.length(); i = i + 1 {
-    pinned[graph.inputs[i]] = true
-  }
-  graph.initializers.each(fn(k, _) { pinned[k] = true })
-  for i = 0; i < graph.outputs.length(); i = i + 1 {
-    pinned[graph.outputs[i]] = true
-  }
-
-  let root_of : Map[String, String] = Map([])
   for i = 0; i < graph.nodes.length(); i = i + 1 {
     let node = graph.nodes[i]
     let out_name = if node.outputs.length() > 0 { node.outputs[0] } else { "" }
-    if out_name == "" {
-      continue
-    }
-    var_of[out_name] = "v_\{i}"
-    if is_aot_view_op(node.op) {
-      let in_name = if node.inputs.length() > 0 { node.inputs[0] } else { "" }
-      let root = match root_of.get(in_name) {
-        Some(r) => r
-        None => in_name
-      }
-      root_of[out_name] = root
-      if pinned.contains(out_name) && root != "" {
-        pinned[root] = true
-      }
-    } else {
-      root_of[out_name] = out_name
+    if out_name != "" {
+      var_of[out_name] = "v_\{i}"
     }
   }
-
-  let last_use : Map[String, Int32] = Map([])
-  for i = 0; i < graph.nodes.length(); i = i + 1 {
-    let node = graph.nodes[i]
-    let out_name = if node.outputs.length() > 0 { node.outputs[0] } else { "" }
-    if out_name != "" && !is_aot_view_op(node.op) && !pinned.contains(out_name) {
-      last_use[out_name] = i
-    }
-  }
-  for i = 0; i < graph.nodes.length(); i = i + 1 {
-    let node = graph.nodes[i]
-    for j = 0; j < node.inputs.length(); j = j + 1 {
-      let in_name = node.inputs[j]
-      if in_name == "" {
-        continue
-      }
-      let root = match root_of.get(in_name) {
-        Some(r) => r
-        None => in_name
-      }
-      if last_use.contains(root) {
-        last_use[root] = i
-      }
-    }
-  }
+  let liveness = @analysis.build_release_plan(graph)
+  let pinned = liveness.pinned
+  let root_of = liveness.root_of
   let release_at : Array[Array[String]] = Array::makei(graph.nodes.length(), fn(
-    _,
+    step,
   ) {
-    []
-  })
-  last_use.each(fn(root_name, step) {
-    if !pinned.contains(root_name) {
-      match var_of.get(root_name) {
-        Some(v) => release_at[step].push(v)
+    let vars : Array[String] = []
+    let names = liveness.release_plan[step]
+    for k = 0; k < names.length(); k = k + 1 {
+      match var_of.get(names[k]) {
+        Some(v) => vars.push(v)
         None => ()
       }
     }
+    vars
   })
 
   // 辅助：解析节点输入的 MoonBit 表达式（支持图输入、上游 SSA 变量、静态 Float32 权重或内联 Int64 常量）
@@ -735,16 +674,7 @@ fn emit_tensor_model(
   pkg.write_string("}\n")
 
   // 6. 合并所有权重字节块为单个紧凑 Bytes
-  let flat_bytes = FixedArray::make(cur_byte_offset, b'\x00')
-  let mut pos = 0
-  for c = 0; c < raw_byte_chunks.length(); c = c + 1 {
-    let chunk = raw_byte_chunks[c]
-    for b = 0; b < chunk.length(); b = b + 1 {
-      flat_bytes[pos + b] = chunk[b]
-    }
-    pos = pos + chunk.length()
-  }
-  let weights_bin = Bytes::makei(cur_byte_offset, fn(i) { flat_bytes[i] })
+  let weights_bin = concat_byte_chunks(raw_byte_chunks, cur_byte_offset)
 
   if config.embed_weights {
     src.write_string("\n")

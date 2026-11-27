@@ -1,10 +1,4 @@
 ///|
-/// 对单个 V128 向量应用与 GEMM 共享的融合激活（ReLU / Clip / SiLU）。
-fn apply_dw_epilogue_v128(v : V128, epilogue : @gemm.Epilogue) -> V128 {
-  @gemm.apply_epilogue_v128(v, epilogue)
-}
-
-///|
 /// 专用 NCHW 深度可分离 2D 卷积内核（Depthwise Conv2D，`group == c_in == c_out`）：
 /// - 零 `im2col` 临时内存分配，直接在输入特征图上滑动计算；
 /// - 入口一次性边界校验 + 热循环零边界检查 `unsafe_get` / `unsafe_set`；
@@ -138,7 +132,7 @@ pub fn depthwise_conv2d_f32(
               acc = @simd.f32x4_relaxed_madd(xv, wv, acc)
             }
           }
-          acc = apply_dw_epilogue_v128(acc, epilogue)
+          acc = @gemm.apply_epilogue_v128(acc, epilogue)
           out.unsafe_set(out_row + ox, @simd.f32x4_extract_lane(acc, 0))
           out.unsafe_set(out_row + ox + 1, @simd.f32x4_extract_lane(acc, 1))
           out.unsafe_set(out_row + ox + 2, @simd.f32x4_extract_lane(acc, 2))

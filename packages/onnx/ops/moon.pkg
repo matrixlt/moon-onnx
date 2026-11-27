@@ -2,6 +2,7 @@ import {
   "moonbitlang/core/math",
   "matrixlt/tensor",
   "matrixlt/nn_ir",
+  "matrixlt/nn_ir/analysis",
   "matrixlt/ml_kernels/gemm",
   "matrixlt/ml_kernels/vecmath",
   "matrixlt/ml_kernels/conv",

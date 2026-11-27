@@ -5,6 +5,7 @@ import {
   "matrixlt/ml_kernels/quant",
   "matrixlt/onnx_proto",
   "matrixlt/nn_ir",
+  "matrixlt/nn_ir/analysis",
   "matrixlt/nn_ir/opt",
   "matrixlt/onnx/frontend",
   "matrixlt/onnx/ops",

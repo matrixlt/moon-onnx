@@ -1,56 +1,64 @@
 ///|
-/// 根据 ONNX 规范计算单个空间维度的输出尺寸与前/后填充量。
-fn compute_spatial_out_and_pads(
-  in_size : Int32,
-  kernel : Int32,
-  stride : Int32,
-  dilation : Int32,
-  explicit_pad_begin : Int32,
-  explicit_pad_end : Int32,
+/// 2D 空间参数解析结果（复用 `@analysis.compute_spatial_out_and_pads` 统一计算输出尺寸与前填充）。
+priv struct Spatial2dParams {
+  stride_h : Int32
+  stride_w : Int32
+  dil_h : Int32
+  dil_w : Int32
+  pad_top : Int32
+  pad_left : Int32
+  out_h : Int32
+  out_w : Int32
+}
+
+///|
+/// 统一解析 2D Conv / Pool 的步长、膨胀、填充与输出空间尺寸（单一真相源委托 `@analysis.compute_spatial_out_and_pads`）。
+fn resolve_spatial_2d_params(
+  in_h : Int32,
+  in_w : Int32,
+  kh : Int32,
+  kw : Int32,
+  strides : Array[Int32],
+  pads : Array[Int32],
+  dilations : Array[Int32],
   ceil_mode : Bool,
   auto_pad : @nn_ir.AutoPad,
-) -> (Int32, Int32, Int32) raise @tensor.TensorError {
-  if stride <= 0 || dilation <= 0 || kernel <= 0 {
-    raise @tensor.InvalidShape(
-      "spatial params must be positive: kernel=\{kernel}, stride=\{stride}, dilation=\{dilation}",
-    )
-  }
-  let eff_kernel = (kernel - 1) * dilation + 1
-  match auto_pad {
-    @nn_ir.Valid => {
-      let out = (in_size - eff_kernel) / stride + 1
-      if out <= 0 {
-        raise @tensor.InvalidShape(
-          "VALID padding yields non-positive output size \{out}",
+) -> Spatial2dParams raise @tensor.TensorError {
+  let stride_h = if strides.length() >= 1 { strides[0] } else { 1 }
+  let stride_w = if strides.length() >= 2 { strides[1] } else { stride_h }
+  let dil_h = if dilations.length() >= 1 { dilations[0] } else { 1 }
+  let dil_w = if dilations.length() >= 2 { dilations[1] } else { dil_h }
+  let pad_top_in = if pads.length() >= 1 { pads[0] } else { 0 }
+  let pad_left_in = if pads.length() >= 2 { pads[1] } else { 0 }
+  let pad_bottom_in = if pads.length() >= 3 { pads[2] } else { pad_top_in }
+  let pad_right_in = if pads.length() >= 4 { pads[3] } else { pad_left_in }
+  let (out_h, pad_top, _) = @analysis.compute_spatial_out_and_pads(
+    in_h, kh, stride_h, dil_h, pad_top_in, pad_bottom_in, ceil_mode, auto_pad,
+  )
+  let (out_w, pad_left, _) = @analysis.compute_spatial_out_and_pads(
+    in_w, kw, stride_w, dil_w, pad_left_in, pad_right_in, ceil_mode, auto_pad,
+  )
+  { stride_h, stride_w, dil_h, dil_w, pad_top, pad_left, out_h, out_w, }
+}
+
+///|
+/// 提取并校验可选 Conv 偏置缓冲（长度必须等于 `c_out`）。
+fn resolve_conv_bias(
+  bias : @tensor.Tensor?,
+  c_out : Int32,
+  op_name : String,
+) -> FixedArray[Float]? raise @tensor.TensorError {
+  match bias {
+    Some(b_tensor) => {
+      let b_buf = b_tensor.to_f32_buffer()
+      if b_buf.length() != c_out {
+        raise @tensor.ShapeMismatch(
+          "\{op_name} bias length \{b_buf.length()} != c_out \{c_out}",
         )
       }
-      (out, 0, 0)
+      Some(b_buf)
     }
-    @nn_ir.SameUpper | @nn_ir.SameLower => {
-      let out = (in_size + stride - 1) / stride
-      let pad_needed = (out - 1) * stride + eff_kernel - in_size
-      let total_pad = if pad_needed > 0 { pad_needed } else { 0 }
-      let pad_begin = match auto_pad {
-        @nn_ir.SameUpper => total_pad / 2
-        _ => (total_pad + 1) / 2
-      }
-      let pad_end = total_pad - pad_begin
-      (out, pad_begin, pad_end)
-    }
-    @nn_ir.NotSet => {
-      let numer = in_size + explicit_pad_begin + explicit_pad_end - eff_kernel
-      let out = if ceil_mode {
-        (numer + stride - 1) / stride + 1
-      } else {
-        numer / stride + 1
-      }
-      if out <= 0 {
-        raise @tensor.InvalidShape(
-          "computed non-positive spatial output size \{out}",
-        )
-      }
-      (out, explicit_pad_begin, explicit_pad_end)
-    }
+    None => None
   }
 }
 
@@ -235,34 +243,18 @@ pub fn conv2d_prepacked_f32(
   }
   let c_out_per_group = c_out / group
 
-  let bias_buf : FixedArray[Float]? = match bias {
-    Some(b_tensor) => {
-      let b_buf = b_tensor.to_f32_buffer()
-      if b_buf.length() != c_out {
-        raise @tensor.ShapeMismatch(
-          "conv2d_prepacked_f32 bias length \{b_buf.length()} != c_out \{c_out}",
-        )
-      }
-      Some(b_buf)
-    }
-    None => None
-  }
-
-  let stride_h = if strides.length() >= 1 { strides[0] } else { 1 }
-  let stride_w = if strides.length() >= 2 { strides[1] } else { stride_h }
-  let dil_h = if dilations.length() >= 1 { dilations[0] } else { 1 }
-  let dil_w = if dilations.length() >= 2 { dilations[1] } else { dil_h }
-  let pad_top_in = if pads.length() >= 1 { pads[0] } else { 0 }
-  let pad_left_in = if pads.length() >= 2 { pads[1] } else { 0 }
-  let pad_bottom_in = if pads.length() >= 3 { pads[2] } else { pad_top_in }
-  let pad_right_in = if pads.length() >= 4 { pads[3] } else { pad_left_in }
-
-  let (out_h, pad_top, _) = compute_spatial_out_and_pads(
-    in_h, kh, stride_h, dil_h, pad_top_in, pad_bottom_in, false, auto_pad,
+  let bias_buf = resolve_conv_bias(bias, c_out, "conv2d_prepacked_f32")
+  let sp = resolve_spatial_2d_params(
+    in_h, in_w, kh, kw, strides, pads, dilations, false, auto_pad,
   )
-  let (out_w, pad_left, _) = compute_spatial_out_and_pads(
-    in_w, kw, stride_w, dil_w, pad_left_in, pad_right_in, false, auto_pad,
-  )
+  let stride_h = sp.stride_h
+  let stride_w = sp.stride_w
+  let dil_h = sp.dil_h
+  let dil_w = sp.dil_w
+  let pad_top = sp.pad_top
+  let pad_left = sp.pad_left
+  let out_h = sp.out_h
+  let out_w = sp.out_w
 
   let x_buf = x.to_f32_buffer()
   let out_spatial = out_h * out_w
@@ -400,34 +392,18 @@ pub fn conv2d_f32(
   }
   let c_out_per_group = c_out / group
 
-  let bias_buf : FixedArray[Float]? = match bias {
-    Some(b_tensor) => {
-      let b_buf = b_tensor.to_f32_buffer()
-      if b_buf.length() != c_out {
-        raise @tensor.ShapeMismatch(
-          "conv2d_f32 bias length \{b_buf.length()} != c_out \{c_out}",
-        )
-      }
-      Some(b_buf)
-    }
-    None => None
-  }
-
-  let stride_h = if strides.length() >= 1 { strides[0] } else { 1 }
-  let stride_w = if strides.length() >= 2 { strides[1] } else { stride_h }
-  let dil_h = if dilations.length() >= 1 { dilations[0] } else { 1 }
-  let dil_w = if dilations.length() >= 2 { dilations[1] } else { dil_h }
-  let pad_top_in = if pads.length() >= 1 { pads[0] } else { 0 }
-  let pad_left_in = if pads.length() >= 2 { pads[1] } else { 0 }
-  let pad_bottom_in = if pads.length() >= 3 { pads[2] } else { pad_top_in }
-  let pad_right_in = if pads.length() >= 4 { pads[3] } else { pad_left_in }
-
-  let (out_h, pad_top, _) = compute_spatial_out_and_pads(
-    in_h, kh, stride_h, dil_h, pad_top_in, pad_bottom_in, false, auto_pad,
+  let bias_buf = resolve_conv_bias(bias, c_out, "conv2d_f32")
+  let sp = resolve_spatial_2d_params(
+    in_h, in_w, kh, kw, strides, pads, dilations, false, auto_pad,
   )
-  let (out_w, pad_left, _) = compute_spatial_out_and_pads(
-    in_w, kw, stride_w, dil_w, pad_left_in, pad_right_in, false, auto_pad,
-  )
+  let stride_h = sp.stride_h
+  let stride_w = sp.stride_w
+  let dil_h = sp.dil_h
+  let dil_w = sp.dil_w
+  let pad_top = sp.pad_top
+  let pad_left = sp.pad_left
+  let out_h = sp.out_h
+  let out_w = sp.out_w
 
   let x_buf = x.to_f32_buffer()
   let w_buf = w.to_f32_buffer()
@@ -504,7 +480,7 @@ pub fn conv2d_f32(
 }
 
 ///|
-/// ONNX 2D MaxPool 算子（支持无填充无空洞快速路径与可选 `BufferPool` 复用）。
+/// ONNX 2D MaxPool 算子（委托 `ml_kernels/nn::maxpool2d_f32`，支持可选 `BufferPool` 复用）。
 pub fn maxpool_2d_f32(
   x : @tensor.Tensor,
   kernel_shape : Array[Int32],
@@ -527,97 +503,36 @@ pub fn maxpool_2d_f32(
   let in_w = xs[3]
   let kh = kernel_shape[0]
   let kw = kernel_shape[1]
-
-  let stride_h = if strides.length() >= 1 { strides[0] } else { 1 }
-  let stride_w = if strides.length() >= 2 { strides[1] } else { stride_h }
-  let dil_h = if dilations.length() >= 1 { dilations[0] } else { 1 }
-  let dil_w = if dilations.length() >= 2 { dilations[1] } else { dil_h }
-  let pad_top_in = if pads.length() >= 1 { pads[0] } else { 0 }
-  let pad_left_in = if pads.length() >= 2 { pads[1] } else { 0 }
-  let pad_bottom_in = if pads.length() >= 3 { pads[2] } else { pad_top_in }
-  let pad_right_in = if pads.length() >= 4 { pads[3] } else { pad_left_in }
-
-  let (out_h, pad_top, _) = compute_spatial_out_and_pads(
-    in_h, kh, stride_h, dil_h, pad_top_in, pad_bottom_in, ceil_mode, auto_pad,
+  let sp = resolve_spatial_2d_params(
+    in_h, in_w, kh, kw, strides, pads, dilations, ceil_mode, auto_pad,
   )
-  let (out_w, pad_left, _) = compute_spatial_out_and_pads(
-    in_w, kw, stride_w, dil_w, pad_left_in, pad_right_in, ceil_mode, auto_pad,
-  )
-
   let src = x.to_f32_buffer()
-  let out = alloc_f32(pool, n_batch * channels * out_h * out_w)
-  let in_hw = in_h * in_w
-  let out_hw = out_h * out_w
-
-  // 快速路径：无填充且 dilation=1 且所有窗口严格位于输入范围内（消除内层边界判断分支）
-  if pad_top == 0 &&
-    pad_left == 0 &&
-    dil_h == 1 &&
-    dil_w == 1 &&
-    (out_h - 1) * stride_h + kh <= in_h &&
-    (out_w - 1) * stride_w + kw <= in_w {
-    for b = 0; b < n_batch; b = b + 1 {
-      for c = 0; c < channels; c = c + 1 {
-        let in_ch = (b * channels + c) * in_hw
-        let out_ch = (b * channels + c) * out_hw
-        for oy = 0; oy < out_h; oy = oy + 1 {
-          let iy0 = oy * stride_h
-          let out_row = out_ch + oy * out_w
-          for ox = 0; ox < out_w; ox = ox + 1 {
-            let mut row_base = in_ch + iy0 * in_w + ox * stride_w
-            let mut best = src[row_base]
-            for ky = 0; ky < kh; ky = ky + 1 {
-              for kx = 0; kx < kw; kx = kx + 1 {
-                let v = src[row_base + kx]
-                if v > best {
-                  best = v
-                }
-              }
-              row_base = row_base + in_w
-            }
-            out[out_row + ox] = best
-          }
-        }
-      }
-    }
-    return @tensor.Tensor::from_f32([n_batch, channels, out_h, out_w], out)
-  }
-
-  for b = 0; b < n_batch; b = b + 1 {
-    for c = 0; c < channels; c = c + 1 {
-      let in_ch = (b * channels + c) * in_hw
-      let out_ch = (b * channels + c) * out_hw
-      for oy = 0; oy < out_h; oy = oy + 1 {
-        for ox = 0; ox < out_w; ox = ox + 1 {
-          let mut has_val = false
-          let mut best : Float = 0.0
-          for ky = 0; ky < kh; ky = ky + 1 {
-            let iy = oy * stride_h - pad_top + ky * dil_h
-            if iy < 0 || iy >= in_h {
-              continue
-            }
-            for kx = 0; kx < kw; kx = kx + 1 {
-              let ix = ox * stride_w - pad_left + kx * dil_w
-              if ix < 0 || ix >= in_w {
-                continue
-              }
-              let v = src[in_ch + iy * in_w + ix]
-              if !has_val || v > best {
-                best = v
-                has_val = true
-              }
-            }
-          }
-          out[out_ch + oy * out_w + ox] = best
-        }
-      }
-    }
-  }
-  @tensor.Tensor::from_f32([n_batch, channels, out_h, out_w], out)
+  let out = alloc_f32(pool, n_batch * channels * sp.out_h * sp.out_w)
+  @nn.maxpool2d_f32(
+    src,
+    0,
+    out,
+    0,
+    n_batch,
+    channels,
+    in_h,
+    in_w,
+    kh,
+    kw,
+    sp.stride_h,
+    sp.stride_w,
+    sp.pad_top,
+    sp.pad_left,
+    sp.dil_h,
+    sp.dil_w,
+    sp.out_h,
+    sp.out_w,
+  )
+  @tensor.Tensor::from_f32([n_batch, channels, sp.out_h, sp.out_w], out)
 }
 
 ///|
-/// ONNX 2D AveragePool 算子（支持可选 `BufferPool` 复用）。
+/// ONNX 2D AveragePool 算子（委托 `ml_kernels/nn::avgpool2d_f32`，支持可选 `BufferPool` 复用）。
 pub fn avgpool_2d_f32(
   x : @tensor.Tensor,
   kernel_shape : Array[Int32],
@@ -640,60 +555,39 @@ pub fn avgpool_2d_f32(
   let in_w = xs[3]
   let kh = kernel_shape[0]
   let kw = kernel_shape[1]
-
-  let stride_h = if strides.length() >= 1 { strides[0] } else { 1 }
-  let stride_w = if strides.length() >= 2 { strides[1] } else { stride_h }
-  let pad_top_in = if pads.length() >= 1 { pads[0] } else { 0 }
-  let pad_left_in = if pads.length() >= 2 { pads[1] } else { 0 }
-  let pad_bottom_in = if pads.length() >= 3 { pads[2] } else { pad_top_in }
-  let pad_right_in = if pads.length() >= 4 { pads[3] } else { pad_left_in }
-
-  let (out_h, pad_top, _) = compute_spatial_out_and_pads(
-    in_h, kh, stride_h, 1, pad_top_in, pad_bottom_in, ceil_mode, auto_pad,
+  let sp = resolve_spatial_2d_params(
+    in_h,
+    in_w,
+    kh,
+    kw,
+    strides,
+    pads,
+    [1, 1],
+    ceil_mode,
+    auto_pad,
   )
-  let (out_w, pad_left, _) = compute_spatial_out_and_pads(
-    in_w, kw, stride_w, 1, pad_left_in, pad_right_in, ceil_mode, auto_pad,
-  )
-
   let src = x.to_f32_buffer()
-  let out = alloc_f32(pool, n_batch * channels * out_h * out_w)
-  let in_hw = in_h * in_w
-  let out_hw = out_h * out_w
-  let full_window = kh * kw
-
-  for b = 0; b < n_batch; b = b + 1 {
-    for c = 0; c < channels; c = c + 1 {
-      let in_ch = (b * channels + c) * in_hw
-      let out_ch = (b * channels + c) * out_hw
-      for oy = 0; oy < out_h; oy = oy + 1 {
-        for ox = 0; ox < out_w; ox = ox + 1 {
-          let mut sum : Float = 0.0
-          let mut valid_count = 0
-          for ky = 0; ky < kh; ky = ky + 1 {
-            let iy = oy * stride_h - pad_top + ky
-            if iy < 0 || iy >= in_h {
-              continue
-            }
-            for kx = 0; kx < kw; kx = kx + 1 {
-              let ix = ox * stride_w - pad_left + kx
-              if ix < 0 || ix >= in_w {
-                continue
-              }
-              sum = sum + src[in_ch + iy * in_w + ix]
-              valid_count = valid_count + 1
-            }
-          }
-          let denom = if count_include_pad { full_window } else { valid_count }
-          out[out_ch + oy * out_w + ox] = if denom > 0 {
-            sum / Float::from_int(denom)
-          } else {
-            (0.0 : Float)
-          }
-        }
-      }
-    }
-  }
-  @tensor.Tensor::from_f32([n_batch, channels, out_h, out_w], out)
+  let out = alloc_f32(pool, n_batch * channels * sp.out_h * sp.out_w)
+  @nn.avgpool2d_f32(
+    src,
+    0,
+    out,
+    0,
+    n_batch,
+    channels,
+    in_h,
+    in_w,
+    kh,
+    kw,
+    sp.stride_h,
+    sp.stride_w,
+    sp.pad_top,
+    sp.pad_left,
+    sp.out_h,
+    sp.out_w,
+    count_include_pad,
+  )
+  @tensor.Tensor::from_f32([n_batch, channels, sp.out_h, sp.out_w], out)
 }
 
 ///|

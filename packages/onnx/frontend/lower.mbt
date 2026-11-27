@@ -76,22 +76,15 @@ fn get_attr_float_opt(
 }
 
 ///|
-/// 将 ONNX `TensorProto.DataType` 整型编码解析为 `@tensor.DType`。
+/// 将 ONNX `TensorProto.DataType` 整型编码解析为 `@tensor.DType`（复用 `onnx_proto` 单一真相源）。
 fn parse_onnx_dtype(
   code : Int32,
   node_name : String,
 ) -> @tensor.DType raise @nn_ir.IrError {
-  match code {
-    1 | 10 => @tensor.Float32
-    2 => @tensor.UInt8
-    3 => @tensor.Int8
-    6 => @tensor.Int32
-    7 => @tensor.Int64
-    9 => @tensor.Bool
-    11 => @tensor.Float64
-    other =>
+  @onnx_proto.onnx_dtype_to_dtype(code) catch {
+    _ =>
       raise @nn_ir.InvalidAttribute(
-        "Cast '\{node_name}': unsupported ONNX dtype code \{other}",
+        "Cast '\{node_name}': unsupported ONNX dtype code \{code}",
       )
   }
 }

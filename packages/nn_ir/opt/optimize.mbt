@@ -858,17 +858,14 @@ fn pass_fold_silu(
 }
 
 ///|
-/// 读取单元素标量 Float32 初始化常量值，用于精确匹配 GELU 中的 `sqrt(2)`、`1.0` 与 `0.5`。
+/// 读取单元素标量 Float32 初始化常量值并提升为 Double，供精确 GELU 常量匹配复用。
 fn read_scalar_f32_init(
   initializers : Map[String, @tensor.Tensor],
   name : String,
 ) -> Double? {
-  match initializers.get(name) {
-    Some(t) if t.numel() == 1 && t.dtype() == @tensor.Float32 => {
-      let v = t.get_f32_flat(0) catch { _ => return None }
-      Some(v.to_double())
-    }
-    _ => None
+  match extract_static_scalar_f32(initializers, name) {
+    Some(v) => Some(v.to_double())
+    None => None
   }
 }
 

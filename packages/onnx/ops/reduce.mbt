@@ -30,16 +30,7 @@ pub fn global_avgpool_f32(
   let src = x.to_f32_buffer()
   let nc = n * c
   let out = alloc_f32(pool, nc)
-  let inv_spatial = 1.0 / spatial.to_double()
-
-  for idx = 0; idx < nc; idx = idx + 1 {
-    let base = idx * spatial
-    let mut sum = 0.0
-    for s = 0; s < spatial; s = s + 1 {
-      sum = sum + src[base + s].to_double()
-    }
-    out[idx] = Float::from_double(sum * inv_spatial)
-  }
+  @nn.gap_f32(src, 0, out, 0, nc, spatial)
   @tensor.Tensor::from_f32(out_shape, out)
 }
 
@@ -298,38 +289,6 @@ pub fn layer_norm_f32(
 
   let src = x.to_f32_buffer()
   let out = alloc_f32(pool, src.length())
-  let inv_n = 1.0 / norm_size.to_double()
-  let eps_d = epsilon.to_double()
-
-  for o = 0; o < outer; o = o + 1 {
-    let base = o * norm_size
-    let mut sum = 0.0
-    for i = 0; i < norm_size; i = i + 1 {
-      sum = sum + src[base + i].to_double()
-    }
-    let mean = sum * inv_n
-
-    let mut sq_sum = 0.0
-    for i = 0; i < norm_size; i = i + 1 {
-      let diff = src[base + i].to_double() - mean
-      sq_sum = sq_sum + diff * diff
-    }
-    let inv_std = 1.0 / (sq_sum * inv_n + eps_d).sqrt()
-
-    match b_buf {
-      Some(bb) =>
-        for i = 0; i < norm_size; i = i + 1 {
-          let norm = (src[base + i].to_double() - mean) * inv_std
-          out[base + i] = Float::from_double(
-            norm * s_buf[i].to_double() + bb[i].to_double(),
-          )
-        }
-      None =>
-        for i = 0; i < norm_size; i = i + 1 {
-          let norm = (src[base + i].to_double() - mean) * inv_std
-          out[base + i] = Float::from_double(norm * s_buf[i].to_double())
-        }
-    }
-  }
+  @nn.layernorm_f32(src, 0, s_buf, b_buf, out, 0, outer, norm_size, epsilon)
   @tensor.Tensor::from_f32(shape, out)
 }

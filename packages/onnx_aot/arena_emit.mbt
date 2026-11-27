@@ -372,16 +372,7 @@ fn emit_arena_model(
   }
 
   // 合并权重二进制块
-  let flat_bytes = FixedArray::make(em.cur_byte_offset, b'\x00')
-  let mut pos = 0
-  for c = 0; c < em.raw_byte_chunks.length(); c = c + 1 {
-    let chunk = em.raw_byte_chunks[c]
-    for b = 0; b < chunk.length(); b = b + 1 {
-      flat_bytes[pos + b] = chunk[b]
-    }
-    pos = pos + chunk.length()
-  }
-  let weights_bin = Bytes::makei(em.cur_byte_offset, fn(i) { flat_bytes[i] })
+  let weights_bin = concat_byte_chunks(em.raw_byte_chunks, em.cur_byte_offset)
 
   // 组装完整零分配 Arena MoonBit 源码
   let src = StringBuilder()
