@@ -90,16 +90,16 @@ pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
   /// 可插拔执行后端（默认根据 `backend` 构造 `CpuScalarProvider` 或 `CpuSimdProvider`）
-  provider : &ExecutionProvider
+  priv provider : &ExecutionProvider
   /// 静态生命周期回收计划：`release_plan[i]` 为第 i 个节点执行完后可安全归还至 `BufferPool` 的源张量名
-  release_plan : Array[Array[String]]
+  priv release_plan : Array[Array[String]]
   /// 标记每个节点的输出是否被图输入/输出/常量锁定（锁定输出不从池分配，避免跨推理结果被覆盖）
-  pinned_outputs : Array[Bool]
+  priv pinned_outputs : Array[Bool]
   /// 会话级缓冲区复用池（跨推理复用 `im2col` 工作区与中间激活张量缓冲）
-  pool : @tensor.BufferPool
+  priv pool : @tensor.BufferPool
   /// 预构建的 `If` 控制流分支子会话缓存（键为节点名，值为 `(then_session, else_session)`），
   /// 使子图在初始化期同样完成后端准备与生命周期分析，推理热路径零重复构建开销
-  sub_sessions : Map[String, (Session, Session)]
+  priv sub_sessions : Map[String, (Session, Session)]
 }
 
 ///|

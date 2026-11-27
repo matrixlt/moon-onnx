@@ -97,41 +97,44 @@ pub fn clip_bytes_v128(
 }
 
 ///|
-/// 面向 `FixedArray[Float]` 的 V128 向量 Clip。
+/// 面向 `FixedArray[Float]` 的 V128 向量 Clip（支持 Arena 零拷贝偏移）。
 pub fn clip_f32_v128(
   src : FixedArray[Float],
   out : FixedArray[Float],
   n : Int32,
   min_val : Float,
   max_val : Float,
+  src_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   if n <= 0 {
     return
   }
-  if n > src.length() || n > out.length() {
-    abort("ml_kernels/vecmath: clip_f32_v128 out of bounds")
-  }
+  check_vec_bounds(src.length(), src_off, n, "clip_f32_v128(src)")
+  check_vec_bounds(out.length(), out_off, n, "clip_f32_v128(out)")
   let vmin = @simd.f32x4_splat(min_val)
   let vmax = @simd.f32x4_splat(max_val)
   let mut i = 0
   while i + 4 <= n {
+    let si = src_off + i
+    let oi = out_off + i
     let v = @simd.f32x4_const(
-      src.unsafe_get(i),
-      src.unsafe_get(i + 1),
-      src.unsafe_get(i + 2),
-      src.unsafe_get(i + 3),
+      src.unsafe_get(si),
+      src.unsafe_get(si + 1),
+      src.unsafe_get(si + 2),
+      src.unsafe_get(si + 3),
     )
     let r = @simd.f32x4_pmax(vmin, @simd.f32x4_pmin(vmax, v))
-    out.unsafe_set(i, @simd.f32x4_extract_lane(r, 0))
-    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(r, 1))
-    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(r, 2))
-    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(r, 3))
+    out.unsafe_set(oi, @simd.f32x4_extract_lane(r, 0))
+    out.unsafe_set(oi + 1, @simd.f32x4_extract_lane(r, 1))
+    out.unsafe_set(oi + 2, @simd.f32x4_extract_lane(r, 2))
+    out.unsafe_set(oi + 3, @simd.f32x4_extract_lane(r, 3))
     i = i + 4
   }
   while i < n {
-    let x = src.unsafe_get(i)
+    let x = src.unsafe_get(src_off + i)
     out.unsafe_set(
-      i,
+      out_off + i,
       if x < min_val {
         min_val
       } else if x > max_val {
@@ -269,38 +272,41 @@ pub fn gelu_bytes_v128(
 }
 
 ///|
-/// 面向 `FixedArray[Float]` 的 V128 向量 `exp(x)`。
+/// 面向 `FixedArray[Float]` 的 V128 向量 `exp(x)`（支持 Arena 零拷贝偏移）。
 pub fn exp_f32_v128(
   src : FixedArray[Float],
   out : FixedArray[Float],
   n : Int32,
+  src_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   if n <= 0 {
     return
   }
-  if n > src.length() || n > out.length() {
-    abort("ml_kernels/vecmath: exp_f32_v128 out of bounds")
-  }
+  check_vec_bounds(src.length(), src_off, n, "exp_f32_v128(src)")
+  check_vec_bounds(out.length(), out_off, n, "exp_f32_v128(out)")
   let mut i = 0
   while i + 4 <= n {
+    let si = src_off + i
+    let oi = out_off + i
     let vx = @simd.f32x4_const(
-      src.unsafe_get(i),
-      src.unsafe_get(i + 1),
-      src.unsafe_get(i + 2),
-      src.unsafe_get(i + 3),
+      src.unsafe_get(si),
+      src.unsafe_get(si + 1),
+      src.unsafe_get(si + 2),
+      src.unsafe_get(si + 3),
     )
     let vr = exp_f32x4(vx)
-    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
-    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
-    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
-    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
+    out.unsafe_set(oi, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(oi + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(oi + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(oi + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
     out.unsafe_set(
-      i,
+      out_off + i,
       @simd.f32x4_extract_lane(
-        exp_f32x4(@simd.f32x4_splat(src.unsafe_get(i))),
+        exp_f32x4(@simd.f32x4_splat(src.unsafe_get(src_off + i))),
         0,
       ),
     )
@@ -309,38 +315,41 @@ pub fn exp_f32_v128(
 }
 
 ///|
-/// 面向 `FixedArray[Float]` 的 V128 向量 `sigmoid(x)`。
+/// 面向 `FixedArray[Float]` 的 V128 向量 `sigmoid(x)`（支持 Arena 零拷贝偏移）。
 pub fn sigmoid_f32_v128(
   src : FixedArray[Float],
   out : FixedArray[Float],
   n : Int32,
+  src_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   if n <= 0 {
     return
   }
-  if n > src.length() || n > out.length() {
-    abort("ml_kernels/vecmath: sigmoid_f32_v128 out of bounds")
-  }
+  check_vec_bounds(src.length(), src_off, n, "sigmoid_f32_v128(src)")
+  check_vec_bounds(out.length(), out_off, n, "sigmoid_f32_v128(out)")
   let mut i = 0
   while i + 4 <= n {
+    let si = src_off + i
+    let oi = out_off + i
     let vx = @simd.f32x4_const(
-      src.unsafe_get(i),
-      src.unsafe_get(i + 1),
-      src.unsafe_get(i + 2),
-      src.unsafe_get(i + 3),
+      src.unsafe_get(si),
+      src.unsafe_get(si + 1),
+      src.unsafe_get(si + 2),
+      src.unsafe_get(si + 3),
     )
     let vr = sigmoid_f32x4(vx)
-    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
-    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
-    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
-    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
+    out.unsafe_set(oi, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(oi + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(oi + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(oi + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
     out.unsafe_set(
-      i,
+      out_off + i,
       @simd.f32x4_extract_lane(
-        sigmoid_f32x4(@simd.f32x4_splat(src.unsafe_get(i))),
+        sigmoid_f32x4(@simd.f32x4_splat(src.unsafe_get(src_off + i))),
         0,
       ),
     )
@@ -349,38 +358,41 @@ pub fn sigmoid_f32_v128(
 }
 
 ///|
-/// 面向 `FixedArray[Float]` 的 V128 向量 `tanh(x)`。
+/// 面向 `FixedArray[Float]` 的 V128 向量 `tanh(x)`（支持 Arena 零拷贝偏移）。
 pub fn tanh_f32_v128(
   src : FixedArray[Float],
   out : FixedArray[Float],
   n : Int32,
+  src_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   if n <= 0 {
     return
   }
-  if n > src.length() || n > out.length() {
-    abort("ml_kernels/vecmath: tanh_f32_v128 out of bounds")
-  }
+  check_vec_bounds(src.length(), src_off, n, "tanh_f32_v128(src)")
+  check_vec_bounds(out.length(), out_off, n, "tanh_f32_v128(out)")
   let mut i = 0
   while i + 4 <= n {
+    let si = src_off + i
+    let oi = out_off + i
     let vx = @simd.f32x4_const(
-      src.unsafe_get(i),
-      src.unsafe_get(i + 1),
-      src.unsafe_get(i + 2),
-      src.unsafe_get(i + 3),
+      src.unsafe_get(si),
+      src.unsafe_get(si + 1),
+      src.unsafe_get(si + 2),
+      src.unsafe_get(si + 3),
     )
     let vr = tanh_f32x4(vx)
-    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
-    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
-    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
-    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
+    out.unsafe_set(oi, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(oi + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(oi + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(oi + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
     out.unsafe_set(
-      i,
+      out_off + i,
       @simd.f32x4_extract_lane(
-        tanh_f32x4(@simd.f32x4_splat(src.unsafe_get(i))),
+        tanh_f32x4(@simd.f32x4_splat(src.unsafe_get(src_off + i))),
         0,
       ),
     )
@@ -389,38 +401,41 @@ pub fn tanh_f32_v128(
 }
 
 ///|
-/// 面向 `FixedArray[Float]` 的 V128 向量 `gelu(x)`（tanh 近似）。
+/// 面向 `FixedArray[Float]` 的 V128 向量 `gelu(x)`（tanh 近似，支持 Arena 零拷贝偏移）。
 pub fn gelu_f32_v128(
   src : FixedArray[Float],
   out : FixedArray[Float],
   n : Int32,
+  src_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   if n <= 0 {
     return
   }
-  if n > src.length() || n > out.length() {
-    abort("ml_kernels/vecmath: gelu_f32_v128 out of bounds")
-  }
+  check_vec_bounds(src.length(), src_off, n, "gelu_f32_v128(src)")
+  check_vec_bounds(out.length(), out_off, n, "gelu_f32_v128(out)")
   let mut i = 0
   while i + 4 <= n {
+    let si = src_off + i
+    let oi = out_off + i
     let vx = @simd.f32x4_const(
-      src.unsafe_get(i),
-      src.unsafe_get(i + 1),
-      src.unsafe_get(i + 2),
-      src.unsafe_get(i + 3),
+      src.unsafe_get(si),
+      src.unsafe_get(si + 1),
+      src.unsafe_get(si + 2),
+      src.unsafe_get(si + 3),
     )
     let vr = gelu_f32x4(vx)
-    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
-    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
-    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
-    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
+    out.unsafe_set(oi, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(oi + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(oi + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(oi + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
     out.unsafe_set(
-      i,
+      out_off + i,
       @simd.f32x4_extract_lane(
-        gelu_f32x4(@simd.f32x4_splat(src.unsafe_get(i))),
+        gelu_f32x4(@simd.f32x4_splat(src.unsafe_get(src_off + i))),
         0,
       ),
     )
@@ -429,38 +444,41 @@ pub fn gelu_f32_v128(
 }
 
 ///|
-/// 面向 `FixedArray[Float]` 的 V128 向量 `hard_swish(x)`。
+/// 面向 `FixedArray[Float]` 的 V128 向量 `hard_swish(x)`（支持 Arena 零拷贝偏移）。
 pub fn hard_swish_f32_v128(
   src : FixedArray[Float],
   out : FixedArray[Float],
   n : Int32,
+  src_off~ : Int32 = 0,
+  out_off~ : Int32 = 0,
 ) -> Unit {
   if n <= 0 {
     return
   }
-  if n > src.length() || n > out.length() {
-    abort("ml_kernels/vecmath: hard_swish_f32_v128 out of bounds")
-  }
+  check_vec_bounds(src.length(), src_off, n, "hard_swish_f32_v128(src)")
+  check_vec_bounds(out.length(), out_off, n, "hard_swish_f32_v128(out)")
   let mut i = 0
   while i + 4 <= n {
+    let si = src_off + i
+    let oi = out_off + i
     let vx = @simd.f32x4_const(
-      src.unsafe_get(i),
-      src.unsafe_get(i + 1),
-      src.unsafe_get(i + 2),
-      src.unsafe_get(i + 3),
+      src.unsafe_get(si),
+      src.unsafe_get(si + 1),
+      src.unsafe_get(si + 2),
+      src.unsafe_get(si + 3),
     )
     let vr = hard_swish_f32x4(vx)
-    out.unsafe_set(i, @simd.f32x4_extract_lane(vr, 0))
-    out.unsafe_set(i + 1, @simd.f32x4_extract_lane(vr, 1))
-    out.unsafe_set(i + 2, @simd.f32x4_extract_lane(vr, 2))
-    out.unsafe_set(i + 3, @simd.f32x4_extract_lane(vr, 3))
+    out.unsafe_set(oi, @simd.f32x4_extract_lane(vr, 0))
+    out.unsafe_set(oi + 1, @simd.f32x4_extract_lane(vr, 1))
+    out.unsafe_set(oi + 2, @simd.f32x4_extract_lane(vr, 2))
+    out.unsafe_set(oi + 3, @simd.f32x4_extract_lane(vr, 3))
     i = i + 4
   }
   while i < n {
     out.unsafe_set(
-      i,
+      out_off + i,
       @simd.f32x4_extract_lane(
-        hard_swish_f32x4(@simd.f32x4_splat(src.unsafe_get(i))),
+        hard_swish_f32x4(@simd.f32x4_splat(src.unsafe_get(src_off + i))),
         0,
       ),
     )

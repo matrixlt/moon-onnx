@@ -35,14 +35,14 @@
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **SmolLM2-135M-Instruct Q4** (30 层, 174 MB) | Native V128 `Session` (Q4 + KV-Cache) | 纯 MoonBit 零 FFI | 零拷贝 `lm_head` | **`5.44e-5`**（Token 100% 一致） | **107.0 ms/tok（9.4 tok/s）** |
 | **YOLOv8n COCO 80-class** (640×640, 12.2 MB) | `wasm-gc` Arena (`Conv+SiLU` 融合) | **25.6 KB / 9.8 KB** | 28.1 MB（Arena 省 92.7%） | **`box 1.9e-3px / cls 2.8e-7`** | 5590.9 ms（Native 1498 ms） |
-| **YOLOv8n COCO 80-class** (640×640, 12.2 MB) | `wasm` V128 Arena (`6×8` GEMM + `Conv+SiLU`) | 55.5 KB / 27.1 KB | 28.1 MB（Arena 省 92.7%） | **`box 1.9e-3px / cls 2.5e-7`** | **1276.7 ms（0.78 FPS，4.6× 提速）** |
-| **Whisper-tiny Encoder FP32** (30s 音频, 32 MB) | `wasm-gc` / `wasm` V128 Arena | **21.2 KB / 8.5 KB** (`52.4 KB`) | 114.0 MB（省 85%） | **`1.87e-3`**（576K 输出） | **7.80 s（3.85× 实时，3.3× 提速）** |
-| **Whisper-tiny Decoder INT8 Prefill** (Cross+Self Attn) | `wasm` V128 Arena | 91.0 KB / 45.0 KB | 20.5 MB（省 73%） | `tok1=542`（与 ORT 一致） | **712.0 ms** |
-| **Whisper-tiny Decoder INT8 KV-Cache Step** | `wasm-gc` / `wasm` V128 Arena | **36.3 KB / 13.2 KB** (`80.7 KB`) | **2.29 MB（省 76.5%）** | `tok2=33`（与 ORT 一致） | **72.0–72.6 ms/tok（13.9 tok/s）** |
-| **Silero VAD v5** (16kHz 流式) | `wasm-gc` / `wasm` V128 Arena | **13.6 KB / 6.3 KB** (`38.4 KB`) | **13.8 KB** | `1.17e-7` | **0.40 ms/帧（80.9× 实时）** |
-| **MobileNetV2-12** (3.49M, 224²) | `wasm-gc` / `wasm` V128 Arena | **20.0 KB / 8.4 KB** (`45.6 KB`) | 7.64 MB（省 78%） | `1.06e-5`（Top-1 一致） | **147.7 ms（6.8 FPS，4.4× 提速）** |
-| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm-gc` / `wasm` V128 Arena | **24.4 KB / 9.2 KB** (`53.7 KB`) | **216.1 KB（省 97.0%）** | `4.05e-6` | **45.7 ms（21.9 emb/s，4.4× 提速）** |
-| **all-MiniLM-L6-v2 INT8** (**21.5 MB**, 4× 压缩) | `wasm-gc` / `wasm` V128 `i32x4.dot` | **37.5 KB / 13.4 KB** (`83.1 KB`) | **246.1 KB（省 97.4%）** | **`1.07e-6`** | **69.4 ms（14.4 emb/s）** |
+| **YOLOv8n COCO 80-class** (640×640, 12.2 MB) | `wasm` V128 Arena (`6×8` GEMM + `Conv+SiLU` + `@vecmath`) | 55.8 KB / 27.0 KB | 28.1 MB（Arena 省 92.7%） | **`box 1.9e-3px / cls 2.5e-7`** | **1085.1 ms（0.92 FPS，5.4× 提速）** |
+| **Whisper-tiny Encoder FP32** (30s 音频, 32 MB) | `wasm-gc` / `wasm` V128 Arena | **21.2 KB / 8.5 KB** (`52.0 KB`) | 114.0 MB（省 85%） | **`1.87e-3`**（576K 输出） | **7.80–8.42 s（~3.6–3.8× 实时）** |
+| **Whisper-tiny Decoder INT8 Prefill** (Cross+Self Attn) | `wasm` V128 Arena | 84.4 KB / 41.6 KB | 20.5 MB（省 73%） | `tok1=542`（与 ORT 一致） | **659.2 ms** |
+| **Whisper-tiny Decoder INT8 KV-Cache Step** | `wasm-gc` / `wasm` V128 Arena | **36.3 KB / 13.2 KB** (`75.4 KB`) | **2.29 MB（省 76.5%）** | `tok2=33`（与 ORT 一致） | **67.5–69.0 ms/tok（14.8 tok/s）** |
+| **Silero VAD v5** (16kHz 流式) | `wasm-gc` / `wasm` V128 Arena | **13.6 KB / 6.3 KB** (`38.0 KB`) | **13.8 KB** | `1.17e-7` | **0.40–0.55 ms/帧（58–81× 实时）** |
+| **MobileNetV2-12** (3.49M, 224²) | `wasm-gc` / `wasm` V128 Arena | **20.0 KB / 8.4 KB** (`45.0 KB`) | 7.64 MB（省 78%） | `1.06e-5`（Top-1 一致） | **138.8 ms（7.2 FPS，4.7× 提速）** |
+| **all-MiniLM-L6-v2 FP32** (89.5 MB) | `wasm-gc` / `wasm` V128 Arena | **24.4 KB / 9.2 KB** (`52.5 KB`) | **216.1 KB（省 97.0%）** | `4.05e-6` | **43.1 ms（23.2 emb/s，4.7× 提速）** |
+| **all-MiniLM-L6-v2 INT8** (**21.5 MB**, 4× 压缩) | `wasm-gc` / `wasm` V128 `i32x4.dot` | **37.5 KB / 13.4 KB** (`81.8 KB`) | **246.1 KB（省 97.4%）** | **`1.07e-6`** | **60.2 ms（16.6 emb/s）** |
 | **MNIST CNN** (外置 / 单文件内嵌) | `wasm-gc` Arena | **3.2 KB / 1.8 KB**（内嵌 26.8 KB） | 12.9 KB | `8.34e-7` | **651–654 FPS** |
 
 - **Node.js V8 Wasm `V128` 微基准实测（`6×8` K-unroll-2 + O(1) 边界校验零检查热路径）**：`GEMM 64³` **47.1 µs**、`GEMM 128³` **390.8 µs**（含在线 Pack，约 10.7 GFLOP/s）、`INT8 QLinearMatMul 128³ (i32x4.dot)` **1295.8 µs (22.7×)**、`Conv2D + Relu` **213.6 µs**、`Relu 65K` **28.4 µs (36.6×)**。

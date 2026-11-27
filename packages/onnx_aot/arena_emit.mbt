@@ -19,6 +19,7 @@ priv struct ArenaEmitter {
   mut need_conv : Bool
   mut need_quant : Bool
   mut need_nn : Bool
+  mut need_vecmath : Bool
   mut need_math : Bool
   mut need_f32_loader : Bool
   mut need_byte_loader : Bool
@@ -331,6 +332,7 @@ fn emit_arena_model(
     need_conv: false,
     need_quant: false,
     need_nn: false,
+    need_vecmath: false,
     need_math: false,
     need_f32_loader: false,
     need_byte_loader: false,
@@ -705,7 +707,8 @@ fn emit_arena_model(
     em.need_gemm ||
     em.need_conv ||
     em.need_quant ||
-    em.need_nn
+    em.need_nn ||
+    em.need_vecmath
   if has_any_import {
     pkg.write_string("import {\n")
     if em.need_math {
@@ -722,6 +725,9 @@ fn emit_arena_model(
     }
     if em.need_nn {
       pkg.write_string("  \"matrixlt/ml_kernels/nn\",\n")
+    }
+    if em.need_vecmath {
+      pkg.write_string("  \"matrixlt/ml_kernels/vecmath\",\n")
     }
     pkg.write_string("}\n")
   }

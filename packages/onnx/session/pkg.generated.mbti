@@ -68,11 +68,7 @@ pub fn RunProfile::format_table(Self) -> String
 pub struct Session {
   graph : @nn_ir.IrGraph
   backend : BackendKind
-  provider : &ExecutionProvider
-  release_plan : Array[Array[String]]
-  pinned_outputs : Array[Bool]
-  pool : @tensor.BufferPool
-  sub_sessions : Map[String, (Session, Session)]
+  // private fields
 }
 pub fn Session::backend(Self) -> BackendKind
 pub fn Session::clear_pool(Self) -> Unit

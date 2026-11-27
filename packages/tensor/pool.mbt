@@ -13,11 +13,11 @@ pub(all) struct PoolStats {
 /// 按精确元素/字节长度分桶缓存已归还的 `FixedArray[Float]` 与 `FixedArray[Byte]`，
 /// 避免每次前向推理反复分配大尺寸中间激活与 `im2col` 工作缓冲。
 pub struct BufferPool {
-  f32_buckets : Map[Int32, Array[FixedArray[Float]]]
-  byte_buckets : Map[Int32, Array[FixedArray[Byte]]]
-  mut hits : Int32
-  mut misses : Int32
-  max_per_bucket : Int32
+  priv f32_buckets : Map[Int32, Array[FixedArray[Float]]]
+  priv byte_buckets : Map[Int32, Array[FixedArray[Byte]]]
+  priv mut hits : Int32
+  priv mut misses : Int32
+  priv max_per_bucket : Int32
 }
 
 ///|

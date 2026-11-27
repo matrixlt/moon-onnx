@@ -34,11 +34,7 @@ pub impl Show for TensorError
 
 // Types and methods
 pub struct BufferPool {
-  f32_buckets : Map[Int32, Array[FixedArray[Float]]]
-  byte_buckets : Map[Int32, Array[FixedArray[Byte]]]
-  mut hits : Int32
-  mut misses : Int32
-  max_per_bucket : Int32
+  // private fields
 }
 pub fn BufferPool::acquire_bytes(Self, Int32) -> FixedArray[Byte]
 pub fn BufferPool::acquire_f32(Self, Int32) -> FixedArray[Float]
