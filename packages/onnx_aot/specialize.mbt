@@ -86,8 +86,13 @@ fn try_eval_const_node(
         match consts.get(ins[0]) {
           Some(x) => {
             let s_arr : Array[Int64] = if ins.length() >= 2 && ins[1] != "" {
-              let b = consts.get(ins[1]).unwrap().to_i64_buffer()
-              Array::makei(b.length(), fn(k) { b[k] })
+              match consts.get(ins[1]) {
+                Some(t) => {
+                  let b = t.to_i64_buffer()
+                  Array::makei(b.length(), fn(k) { b[k] })
+                }
+                None => return None
+              }
             } else {
               match starts {
                 Some(v) => Array::makei(v.length(), fn(k) { v[k].to_int64() })
@@ -95,8 +100,13 @@ fn try_eval_const_node(
               }
             }
             let e_arr : Array[Int64] = if ins.length() >= 3 && ins[2] != "" {
-              let b = consts.get(ins[2]).unwrap().to_i64_buffer()
-              Array::makei(b.length(), fn(k) { b[k] })
+              match consts.get(ins[2]) {
+                Some(t) => {
+                  let b = t.to_i64_buffer()
+                  Array::makei(b.length(), fn(k) { b[k] })
+                }
+                None => return None
+              }
             } else {
               match ends {
                 Some(v) => Array::makei(v.length(), fn(k) { v[k].to_int64() })
@@ -104,14 +114,24 @@ fn try_eval_const_node(
               }
             }
             let a_opt : Array[Int32]? = if ins.length() >= 4 && ins[3] != "" {
-              let b = consts.get(ins[3]).unwrap().to_i64_buffer()
-              Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+              match consts.get(ins[3]) {
+                Some(t) => {
+                  let b = t.to_i64_buffer()
+                  Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+                }
+                None => return None
+              }
             } else {
               axes
             }
             let st_opt : Array[Int32]? = if ins.length() >= 5 && ins[4] != "" {
-              let b = consts.get(ins[4]).unwrap().to_i64_buffer()
-              Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+              match consts.get(ins[4]) {
+                Some(t) => {
+                  let b = t.to_i64_buffer()
+                  Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
+                }
+                None => return None
+              }
             } else {
               steps
             }

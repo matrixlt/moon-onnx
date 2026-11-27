@@ -185,7 +185,12 @@ pub fn gqa_f32(
   rotary_interleaved~ : Int32 = 0,
   pool~ : @tensor.BufferPool? = None,
 ) -> Array[@tensor.Tensor] raise @tensor.TensorError {
-  let _ = (cos_cache, sin_cache, do_rotary, rotary_interleaved)
+  let _ = (cos_cache, sin_cache, rotary_interleaved)
+  if do_rotary != 0 {
+    raise @tensor.Unsupported(
+      "gqa_f32: inline do_rotary != 0 is not supported; apply RotaryEmbedding separately",
+    )
+  }
   let sq = query.shape()
   if sq.length() != 3 {
     raise @tensor.InvalidShape(

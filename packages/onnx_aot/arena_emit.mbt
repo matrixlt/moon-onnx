@@ -125,6 +125,130 @@ fn ArenaEmitter::resolve_byte_loc(
 }
 
 ///|
+/// 从静态形状表中安全查询指定张量形状，缺失时抛出 `ShapeError`。
+fn require_shape_from(
+  shapes : Map[String, Array[Int32]],
+  name : String,
+) -> Array[Int32] raise CodegenError {
+  match shapes.get(name) {
+    Some(sh) => sh
+    None => raise ShapeError("aot: missing static shape for '\{name}'")
+  }
+}
+
+///|
+/// 安全查询当前 Arena 上下文中指定张量的静态形状。
+fn ArenaEmitter::require_shape(
+  self : ArenaEmitter,
+  name : String,
+) -> Array[Int32] raise CodegenError {
+  require_shape_from(self.shapes, name)
+}
+
+///|
+/// 安全查询当前 Arena 上下文中指定张量的静态数据类型。
+fn ArenaEmitter::require_dtype(
+  self : ArenaEmitter,
+  name : String,
+) -> @tensor.DType raise CodegenError {
+  match self.dtypes.get(name) {
+    Some(dt) => dt
+    None => raise UnsupportedGraph("arena: missing static dtype for '\{name}'")
+  }
+}
+
+///|
+/// 安全查询图中的静态初始化器张量。
+fn ArenaEmitter::require_init(
+  self : ArenaEmitter,
+  name : String,
+) -> @tensor.Tensor raise CodegenError {
+  match self.graph.initializers.get(name) {
+    Some(t) => t
+    None => raise UnsupportedGraph("arena: missing initializer '\{name}'")
+  }
+}
+
+///|
+/// 安全读取标量 Float32 静态初始化器的第 0 个元素。
+fn ArenaEmitter::require_init_f32_scalar(
+  self : ArenaEmitter,
+  name : String,
+) -> Float raise CodegenError {
+  let t = self.require_init(name)
+  t.get_f32_flat(0) catch {
+    e => raise TensorErr("arena: invalid f32 scalar '\{name}': \{e}")
+  }
+}
+
+///|
+/// 安全读取 Int64 静态初始化器的一维缓冲。
+fn ArenaEmitter::require_init_i64_buf(
+  self : ArenaEmitter,
+  name : String,
+) -> FixedArray[Int64] raise CodegenError {
+  let t = self.require_init(name)
+  t.to_i64_buffer() catch {
+    e => raise TensorErr("arena: invalid i64 initializer '\{name}': \{e}")
+  }
+}
+
+///|
+/// 安全读取量化零点初始化器的单字节值（支持 Int8 / UInt8）。
+fn ArenaEmitter::require_init_zp_byte(
+  self : ArenaEmitter,
+  name : String,
+  is_i8 : Bool,
+) -> Byte raise CodegenError {
+  let t = self.require_init(name)
+  if is_i8 {
+    let buf = t.to_i8_buffer() catch {
+      e => raise TensorErr("arena: invalid i8 zero_point '\{name}': \{e}")
+    }
+    if buf.length() == 0 {
+      raise TensorErr("arena: empty i8 zero_point '\{name}'")
+    }
+    buf[0]
+  } else {
+    let buf = t.to_u8_buffer() catch {
+      e => raise TensorErr("arena: invalid u8 zero_point '\{name}': \{e}")
+    }
+    if buf.length() == 0 {
+      raise TensorErr("arena: empty u8 zero_point '\{name}'")
+    }
+    buf[0]
+  }
+}
+
+///|
+/// 安全查询图输入张量对应的生成函数形参名。
+fn ArenaEmitter::require_input_param(
+  self : ArenaEmitter,
+  name : String,
+) -> String raise CodegenError {
+  match self.input_param_of.get(name) {
+    Some(p) => p
+    None =>
+      raise UnsupportedGraph("arena: missing input parameter for '\{name}'")
+  }
+}
+
+///|
+/// 安全查询已与 `MatMulInteger` 融合的下游 `Cast` 输出名。
+fn ArenaEmitter::require_mmi_cast(
+  self : ArenaEmitter,
+  name : String,
+) -> String raise CodegenError {
+  match self.mmi_to_cast.get(name) {
+    Some(c) => c
+    None =>
+      raise UnsupportedGraph(
+        "arena: missing fused Cast output for MatMulInteger '\{name}'",
+      )
+  }
+}
+
+///|
 /// Arena 模式下生成零堆分配、零 `Tensor`、零 `BufferPool`、零 `onnx/ops` 依赖的极简高速 MoonBit 推理代码。
 /// 所有常见 NN 辅助算子（MaxPool/AvgPool/GAP/Erf/GELU/Softmax/LayerNorm/Reflect/ScalarConv）均直接调用
 /// 经过全四端类型检查与单测验证的 `matrixlt/ml_kernels/nn`，彻底消除字符串内联样板代码。
@@ -142,7 +266,7 @@ fn emit_arena_model(
   let in_shapes_arr : Array[(String, Array[Int32])] = []
   let in_lens : Array[Int32] = []
   for idx = 0; idx < in_names.length(); idx = idx + 1 {
-    let sh = shapes.get(in_names[idx]).unwrap()
+    let sh = require_shape_from(shapes, in_names[idx])
     in_shapes_arr.push((in_names[idx], sh))
     in_lens.push(
       @tensor.num_elements(sh) catch {
@@ -153,7 +277,7 @@ fn emit_arena_model(
   let out_shapes_arr : Array[(String, Array[Int32])] = []
   let out_lens : Array[Int32] = []
   for idx = 0; idx < out_names.length(); idx = idx + 1 {
-    let sh = shapes.get(out_names[idx]).unwrap()
+    let sh = require_shape_from(shapes, out_names[idx])
     out_shapes_arr.push((out_names[idx], sh))
     out_lens.push(
       @tensor.num_elements(sh) catch {
@@ -217,7 +341,7 @@ fn emit_arena_model(
   for i = 0; i < graph.nodes.length(); i = i + 1 {
     let node = graph.nodes[i]
     let out_n = node.outputs[0]
-    let out_sh = shapes.get(out_n).unwrap()
+    let out_sh = require_shape_from(shapes, out_n)
     let out_numel = @tensor.num_elements(out_sh) catch {
       e => raise ShapeError("\{e}")
     }

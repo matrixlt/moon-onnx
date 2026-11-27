@@ -4,6 +4,7 @@
 pub type PackedMatrixB = @gemm.PackedMatrixB
 
 ///|
+/// GEMM / Conv 寄存器级融合尾部激活类型别名（`NoEpilogue` / `Relu` / `Clip` / `Silu`）。
 pub type Epilogue = @gemm.Epilogue
 
 ///|
@@ -206,6 +207,7 @@ pub fn depthwise_conv2d_f32(
 }
 
 ///|
+/// 预打包有符号 `Int8` 右矩阵类型别名（列优先存储 + 离线列和零点补偿）。
 pub type PackedInt8MatrixB = @quant.PackedInt8MatrixB
 
 ///|

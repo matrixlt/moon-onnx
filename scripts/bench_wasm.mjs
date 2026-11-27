@@ -2,7 +2,16 @@
 // 在 Node.js V8 引擎中实测 moon-onnx 的 wasm 与 wasm-gc V128 SIMD 性能与产物体积。
 import fs from "node:fs";
 import zlib from "node:zlib";
+import { execFileSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
+
+if (!process.argv.includes("--no-build")) {
+  for (const target of ["wasm", "wasm-gc"]) {
+    execFileSync("moon", ["build", "--release", "--target", target, "apps/wasm_bench"], {
+      stdio: "inherit",
+    });
+  }
+}
 
 async function runSuite(label, wasmPath) {
   const bytes = fs.readFileSync(wasmPath);

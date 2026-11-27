@@ -16,8 +16,8 @@ fn ArenaEmitter::emit_nn_op(
       self.need_gemm = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
-      let sw = self.shapes.get(ins[1]).unwrap()
+      let sx = self.require_shape(ins[0])
+      let sw = self.require_shape(ins[1])
       let is_1d = sx.length() == 3
       let n_batch = sx[0]
       let c_in = sx[1]
@@ -115,7 +115,7 @@ fn ArenaEmitter::emit_nn_op(
       self.need_nn = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let (pt, pl, _pb, _pr) = resolve_2d_pads(
         sx[2],
         sx[3],
@@ -145,7 +145,7 @@ fn ArenaEmitter::emit_nn_op(
       self.need_nn = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let (pt, pl, _pb, _pr) = resolve_2d_pads(
         sx[2],
         sx[3],
@@ -168,7 +168,7 @@ fn ArenaEmitter::emit_nn_op(
       self.need_nn = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let mut spatial = 1
       for d = 2; d < sx.length(); d = d + 1 {
         spatial = spatial * sx[d]
@@ -181,7 +181,7 @@ fn ArenaEmitter::emit_nn_op(
       self.need_nn = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let is_linear = mode == "linear" || mode == "bilinear"
       self.body.write_string(
         "  @nn.resize_2d_f32(\{x_buf}, \{x_off}, \{y_buf}, \{y_off}, \{sx[0]}, \{sx[1]}, \{sx[2]}, \{sx[3]}, \{out_sh[2]}, \{out_sh[3]}, \{is_linear}, \"\{coordinate_transformation_mode}\", \"\{nearest_mode}\")\n",
@@ -191,8 +191,8 @@ fn ArenaEmitter::emit_nn_op(
       self.need_gemm = true
       let (a_buf, a_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sa = self.shapes.get(ins[0]).unwrap()
-      let sb = self.shapes.get(ins[1]).unwrap()
+      let sa = self.require_shape(ins[0])
+      let sb = self.require_shape(ins[1])
       if sb.length() == 2 && self.graph.initializers.contains(ins[1]) {
         // N-D × 2D 静态权重投影（[B, S, K] @ [K, N] -> [B*S, K] @ [K, N]）
         self.need_f32_loader = true
@@ -248,8 +248,8 @@ fn ArenaEmitter::emit_nn_op(
       self.need_f32_loader = true
       let (a_buf, a_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sa = self.shapes.get(ins[0]).unwrap()
-      let sb = self.shapes.get(ins[1]).unwrap()
+      let sa = self.require_shape(ins[0])
+      let sb = self.require_shape(ins[1])
       let m = if trans_a { sa[1] } else { sa[0] }
       let k = if trans_a { sa[0] } else { sa[1] }
       let n = if trans_b { sb[0] } else { sb[1] }
@@ -279,7 +279,7 @@ fn ArenaEmitter::emit_nn_op(
       }
       if ins.length() >= 3 && ins[2] != "" {
         let (c_buf, c_off) = self.resolve_f32_loc(ins[2])
-        let sc = self.shapes.get(ins[2]).unwrap()
+        let sc = self.require_shape(ins[2])
         let c_numel = @tensor.num_elements(sc) catch {
           e => raise ShapeError("\{e}")
         }
@@ -307,8 +307,8 @@ fn ArenaEmitter::emit_nn_op(
       let (a_buf, a_off) = self.resolve_f32_loc(ins[0])
       let (b_buf, b_off) = self.resolve_f32_loc(ins[1])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sa = self.shapes.get(ins[0]).unwrap()
-      let sb = self.shapes.get(ins[1]).unwrap()
+      let sa = self.require_shape(ins[0])
+      let sb = self.require_shape(ins[1])
       let a_numel = @tensor.num_elements(sa) catch {
         e => raise ShapeError("\{e}")
       }
@@ -411,20 +411,12 @@ fn ArenaEmitter::emit_nn_op(
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
       let lo_v : Float? = if ins.length() >= 2 && ins[1] != "" {
-        Some(
-          self.graph.initializers.get(ins[1]).unwrap().get_f32_flat(0) catch {
-            e => raise TensorErr("\{e}")
-          },
-        )
+        Some(self.require_init_f32_scalar(ins[1]))
       } else {
         min
       }
       let hi_v : Float? = if ins.length() >= 3 && ins[2] != "" {
-        Some(
-          self.graph.initializers.get(ins[2]).unwrap().get_f32_flat(0) catch {
-            e => raise TensorErr("\{e}")
-          },
-        )
+        Some(self.require_init_f32_scalar(ins[2]))
       } else {
         max
       }
@@ -575,17 +567,11 @@ fn ArenaEmitter::emit_nn_op(
       self.need_quant = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_byte_loc(out_n)
-      let sc = self.graph.initializers.get(ins[1]).unwrap().get_f32_flat(0) catch {
-          e => raise TensorErr("\{e}")
-        }
-      let out_dt = self.dtypes.get(out_n).unwrap()
+      let sc = self.require_init_f32_scalar(ins[1])
+      let out_dt = self.require_dtype(out_n)
       let zp_byte : Byte = if ins.length() >= 3 && ins[2] != "" {
-        let zt = self.graph.initializers.get(ins[2]).unwrap()
-        match zt.dtype() {
-          @tensor.Int8 =>
-            (zt.to_i8_buffer() catch { e => raise TensorErr("\{e}") })[0]
-          _ => (zt.to_u8_buffer() catch { e => raise TensorErr("\{e}") })[0]
-        }
+        let zt = self.require_init(ins[2])
+        self.require_init_zp_byte(ins[2], zt.dtype() == @tensor.Int8)
       } else {
         b'\x00'
       }
@@ -601,17 +587,11 @@ fn ArenaEmitter::emit_nn_op(
       self.need_quant = true
       let (x_buf, x_off) = self.resolve_byte_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sc = self.graph.initializers.get(ins[1]).unwrap().get_f32_flat(0) catch {
-          e => raise TensorErr("\{e}")
-        }
-      let in_dt = self.dtypes.get(ins[0]).unwrap()
+      let sc = self.require_init_f32_scalar(ins[1])
+      let in_dt = self.require_dtype(ins[0])
       let zp_byte : Byte = if ins.length() >= 3 && ins[2] != "" {
-        let zt = self.graph.initializers.get(ins[2]).unwrap()
-        match zt.dtype() {
-          @tensor.Int8 =>
-            (zt.to_i8_buffer() catch { e => raise TensorErr("\{e}") })[0]
-          _ => (zt.to_u8_buffer() catch { e => raise TensorErr("\{e}") })[0]
-        }
+        let zt = self.require_init(ins[2])
+        self.require_init_zp_byte(ins[2], zt.dtype() == @tensor.Int8)
       } else {
         b'\x00'
       }
@@ -628,51 +608,19 @@ fn ArenaEmitter::emit_nn_op(
       self.need_byte_loader = true
       let (a_buf, a_off) = self.resolve_byte_loc(ins[0])
       let (y_buf, y_off) = self.resolve_byte_loc(out_n)
-      let sa = self.shapes.get(ins[0]).unwrap()
-      let sb = self.shapes.get(ins[3]).unwrap()
+      let sa = self.require_shape(ins[0])
+      let sb = self.require_shape(ins[3])
       let m = sa[0]
       let k = sa[1]
       let n = sb[1]
-      let a_dt = self.dtypes.get(ins[0]).unwrap()
-      let a_sc = self.graph.initializers.get(ins[1]).unwrap().get_f32_flat(0) catch {
-          e => raise TensorErr("\{e}")
-        }
-      let b_sc = self.graph.initializers.get(ins[4]).unwrap().get_f32_flat(0) catch {
-          e => raise TensorErr("\{e}")
-        }
-      let y_sc = self.graph.initializers.get(ins[6]).unwrap().get_f32_flat(0) catch {
-          e => raise TensorErr("\{e}")
-        }
-      let a_zp : Int32 = match a_dt {
-        @tensor.Int8 =>
-          (self.graph.initializers.get(ins[2]).unwrap().to_i8_buffer() catch {
-            e => raise TensorErr("\{e}")
-          })[0].to_int()
-        _ =>
-          (self.graph.initializers.get(ins[2]).unwrap().to_u8_buffer() catch {
-            e => raise TensorErr("\{e}")
-          })[0].to_int()
-      }
-      let b_zp : Int32 = match a_dt {
-        @tensor.Int8 =>
-          (self.graph.initializers.get(ins[5]).unwrap().to_i8_buffer() catch {
-            e => raise TensorErr("\{e}")
-          })[0].to_int()
-        _ =>
-          (self.graph.initializers.get(ins[5]).unwrap().to_u8_buffer() catch {
-            e => raise TensorErr("\{e}")
-          })[0].to_int()
-      }
-      let y_zp : Int32 = match a_dt {
-        @tensor.Int8 =>
-          (self.graph.initializers.get(ins[7]).unwrap().to_i8_buffer() catch {
-            e => raise TensorErr("\{e}")
-          })[0].to_int()
-        _ =>
-          (self.graph.initializers.get(ins[7]).unwrap().to_u8_buffer() catch {
-            e => raise TensorErr("\{e}")
-          })[0].to_int()
-      }
+      let a_dt = self.require_dtype(ins[0])
+      let is_i8 = a_dt == @tensor.Int8
+      let a_sc = self.require_init_f32_scalar(ins[1])
+      let b_sc = self.require_init_f32_scalar(ins[4])
+      let y_sc = self.require_init_f32_scalar(ins[6])
+      let a_zp = self.require_init_zp_byte(ins[2], is_i8).to_int()
+      let b_zp = self.require_init_zp_byte(ins[5], is_i8).to_int()
+      let y_zp = self.require_init_zp_byte(ins[7], is_i8).to_int()
       if self.use_quant_simd {
         let wf = self.reg_weight(ins[3], RawBytes(trans_b=true))
         let qmm_fn = match a_dt {
@@ -709,9 +657,9 @@ fn ArenaEmitter::emit_nn_op(
       self.need_quant = true
       self.need_byte_loader = true
       let (a_buf, a_off) = self.resolve_byte_loc(ins[0])
-      let cast_out = self.mmi_to_cast.get(out_n).unwrap()
+      let cast_out = self.require_mmi_cast(out_n)
       let (y_buf, y_off) = self.resolve_f32_loc(cast_out)
-      let sa = self.shapes.get(ins[0]).unwrap()
+      let sa = self.require_shape(ins[0])
       let mut m_tot = 1
       for d = 0; d < sa.length() - 1; d = d + 1 {
         m_tot = m_tot * sa[d]
@@ -724,7 +672,7 @@ fn ArenaEmitter::emit_nn_op(
         "b'\\x00'"
       }
       let b_zp_expr = if ins.length() >= 4 && ins[3] != "" {
-        let bzt = self.graph.initializers.get(ins[3]).unwrap()
+        let bzt = self.require_init(ins[3])
         let bzb = bzt.to_i8_buffer() catch { e => raise TensorErr("\{e}") }
         let mut any_nz = false
         for bi = 0; bi < bzb.length(); bi = bi + 1 {
@@ -810,10 +758,10 @@ fn ArenaEmitter::emit_nn_op(
       self.need_f32_loader = true
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let pos_param = self.input_param_of.get(ins[1]).unwrap()
+      let pos_param = self.require_input_param(ins[1])
       let cos_f = self.reg_weight(ins[2], RawF32)
       let sin_f = self.reg_weight(ins[3], RawF32)
-      let cs = self.shapes.get(ins[2]).unwrap()
+      let cs = self.require_shape(ins[2])
       let cache_half = cs[1]
       let is_bhsd = out_sh.length() == 4
       let batch = out_sh[0]
@@ -831,7 +779,7 @@ fn ArenaEmitter::emit_nn_op(
       } else {
         cache_half * 2
       }
-      let pos_sh = self.shapes.get(ins[1]).unwrap()
+      let pos_sh = self.require_shape(ins[1])
       let pos_numel = @tensor.num_elements(pos_sh) catch {
         e => raise ShapeError("\{e}")
       }
@@ -846,7 +794,7 @@ fn ArenaEmitter::emit_nn_op(
       self.need_f32_loader = true
       let (a_buf, a_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sa = self.shapes.get(ins[0]).unwrap()
+      let sa = self.require_shape(ins[0])
       let mut m_tot = 1
       for d = 0; d < sa.length() - 1; d = d + 1 {
         m_tot = m_tot * sa[d]
@@ -855,12 +803,12 @@ fn ArenaEmitter::emit_nn_op(
       let eff_n = if out_n_dim > 0 {
         out_n_dim
       } else {
-        self.shapes.get(ins[1]).unwrap()[0]
+        self.require_shape(ins[1])[0]
       }
       let wf = self.reg_weight(ins[1], RawBytes(trans_b=false))
       let sf = self.reg_weight(ins[2], RawF32)
       let (zp_b_expr, zp_f_expr) = if ins.length() >= 4 && ins[3] != "" {
-        let zt = self.graph.initializers.get(ins[3]).unwrap()
+        let zt = self.require_init(ins[3])
         match zt.dtype() {
           @tensor.UInt8 => {
             let zf = self.reg_weight(ins[3], RawBytes(trans_b=false))

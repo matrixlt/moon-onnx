@@ -25,6 +25,7 @@ pub(all) struct OptStats {
   pretransposed_gemm_weights : Int32
   eliminated_dead_nodes : Int32
 }
+pub fn OptStats::format_summary(Self) -> String
 
 // Type aliases
 

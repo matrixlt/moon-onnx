@@ -141,8 +141,8 @@ pub fn dequantize_linear_op(
       }
     }
     @tensor.Int32 => {
-      // ONNX 规范允许 Int32 偏置反量化（零点恒为 0）
-      let src = x.to_i64_buffer()
+      // ONNX 规范允许 Int32 偏置反量化（零点恒为 0），直接零拷贝读取 Int32 缓冲
+      let src = x.to_i32_buffer()
       if scales.length() == 1 {
         let s = scales[0].to_double()
         for i = 0; i < n; i = i + 1 {

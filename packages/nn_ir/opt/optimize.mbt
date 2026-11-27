@@ -15,6 +15,12 @@ pub(all) struct OptStats {
 }
 
 ///|
+/// 将图优化统计结果格式化为单行人类可读摘要，便于 CLI 日志与文档示例输出。
+pub fn OptStats::format_summary(self : OptStats) -> String {
+  "OptStats(const=\{self.lifted_constants}, id=\{self.eliminated_identities}, conv_bn=\{self.folded_conv_bn}, conv_bias=\{self.folded_conv_bias}, conv_act=\{self.folded_conv_activation}, ln=\{self.folded_layernorm}, silu=\{self.folded_silu}, gelu=\{self.folded_gelu}, pretrans_gemm=\{self.pretransposed_gemm_weights}, dce=\{self.eliminated_dead_nodes})"
+}
+
+///|
 /// 复制 Initializer 字典，确保图优化为纯变换，不修改输入 IrGraph。
 fn clone_initializers(
   src : Map[String, @tensor.Tensor],

@@ -188,7 +188,13 @@ fn emit_tensor_model(
     let node = graph.nodes[i]
     let ins = node.inputs
     let out_name = node.outputs[0]
-    let out_var = var_of.get(out_name).unwrap()
+    let out_var = match var_of.get(out_name) {
+      Some(v) => v
+      None =>
+        raise UnsupportedGraph(
+          "tensor_emit: missing var name for '\{out_name}'",
+        )
+    }
     let out_root = match root_of.get(out_name) {
       Some(r) => r
       None => out_name
@@ -349,7 +355,7 @@ fn emit_tensor_model(
       }
       @nn_ir.Reshape(allowzero~) => {
         let x = resolve_expr(ins[0])
-        let sh = shapes.get(out_name).unwrap()
+        let sh = require_shape_from(shapes, out_name)
         body.write_string(
           "  let \{out_var} = \{x}.reshape(\{fmt_int_array(sh)}, allowzero=\{allowzero})\n",
         )
@@ -362,7 +368,7 @@ fn emit_tensor_model(
       }
       @nn_ir.Squeeze(axes~) => {
         let x = resolve_expr(ins[0])
-        let sh = shapes.get(out_name).unwrap()
+        let sh = require_shape_from(shapes, out_name)
         let _ = axes
         body.write_string(
           "  let \{out_var} = \{x}.reshape(\{fmt_int_array(sh)})\n",
@@ -370,7 +376,7 @@ fn emit_tensor_model(
       }
       @nn_ir.Unsqueeze(axes~) => {
         let x = resolve_expr(ins[0])
-        let sh = shapes.get(out_name).unwrap()
+        let sh = require_shape_from(shapes, out_name)
         let _ = axes
         body.write_string(
           "  let \{out_var} = \{x}.reshape(\{fmt_int_array(sh)})\n",
@@ -378,7 +384,7 @@ fn emit_tensor_model(
       }
       @nn_ir.MatMul => {
         let a = resolve_expr(ins[0])
-        let a_sh = shapes.get(ins[0]).unwrap()
+        let a_sh = require_shape_from(shapes, ins[0])
         if config.use_simd &&
           a_sh.length() == 2 &&
           graph.initializers.contains(ins[1]) {
@@ -700,7 +706,7 @@ fn emit_tensor_model(
 
   // 单输入单输出时额外生成面向 Wasm/FFI 的平坦 FixedArray[Float] 快捷入口
   if graph.inputs.length() == 1 && graph.outputs.length() == 1 {
-    let in_sh = shapes.get(graph.inputs[0]).unwrap()
+    let in_sh = require_shape_from(shapes, graph.inputs[0])
     src.write_string("\n///|\n")
     src.write_string(
       "/// 平坦 `FixedArray[Float]` 快捷前向入口（输入形状固定为 \{@tensor.format_shape(in_sh)}）。\n",
@@ -745,14 +751,16 @@ fn emit_tensor_model(
     emit_embedded_weights_section(src, sname, weights_bin, true)
   }
 
-  let in_sh_list = Array::makei(graph.inputs.length(), fn(i) {
+  let in_sh_list : Array[(String, Array[Int32])] = []
+  for i = 0; i < graph.inputs.length(); i = i + 1 {
     let name = graph.inputs[i]
-    (name, shapes.get(name).unwrap())
-  })
-  let out_sh_list = Array::makei(graph.outputs.length(), fn(i) {
+    in_sh_list.push((name, require_shape_from(shapes, name)))
+  }
+  let out_sh_list : Array[(String, Array[Int32])] = []
+  for i = 0; i < graph.outputs.length(); i = i + 1 {
     let name = graph.outputs[i]
-    (name, shapes.get(name).unwrap())
-  })
+    out_sh_list.push((name, require_shape_from(shapes, name)))
+  }
 
   {
     mbt_source: src.to_string(),

@@ -411,3 +411,45 @@ pub fn Tensor::argmax_f32(self : Tensor) -> (Int32, Float) raise TensorError {
 pub fn Tensor::summary(self : Tensor) -> String {
   "Tensor(\{self.dtype.short_name()}, shape=\{format_shape(self.shape)}, numel=\{self.numel()})"
 }
+
+///|
+/// 从小端序原始字节流直接构造 Float32 张量（与 ONNX `raw_data` 及 SIMD 字节缓冲格式一致）。
+pub fn Tensor::from_f32_bytes_le(
+  shape : Array[Int32],
+  raw : Bytes,
+) -> Tensor raise TensorError {
+  let expected = num_elements(shape)
+  if raw.length() != expected * 4 {
+    raise ShapeMismatch(
+      "from_f32_bytes_le: shape \{format_shape(shape)} requires \{expected * 4} bytes, got \{raw.length()}",
+    )
+  }
+  let buf = FixedArray::makei(expected, fn(i) {
+    let off = i * 4
+    let bits = raw[off].to_uint() |
+      (raw[off + 1].to_uint() << 8) |
+      (raw[off + 2].to_uint() << 16) |
+      (raw[off + 3].to_uint() << 24)
+    Float::reinterpret_from_uint(bits)
+  })
+  Tensor::from_f32(shape, buf)
+}
+
+///|
+/// 将 Float32 张量导出为小端序 `FixedArray[Byte]`，便于直接传入 `ml_kernels/vecmath` 字节级 SIMD 内核。
+pub fn Tensor::to_f32_bytes_le(
+  self : Tensor,
+) -> FixedArray[Byte] raise TensorError {
+  let buf = self.to_f32_buffer()
+  let n = buf.length()
+  let out = FixedArray::make(n * 4, b'\x00')
+  for i = 0; i < n; i = i + 1 {
+    let bits = buf[i].reinterpret_as_uint()
+    let off = i * 4
+    out[off] = (bits & 0xFFU).to_byte()
+    out[off + 1] = ((bits >> 8) & 0xFFU).to_byte()
+    out[off + 2] = ((bits >> 16) & 0xFFU).to_byte()
+    out[off + 3] = ((bits >> 24) & 0xFFU).to_byte()
+  }
+  out
+}

@@ -320,8 +320,16 @@ pub fn plan_static_arenas(
       let numel = @tensor.num_elements(sh) catch {
         e => raise ShapeError("planner: \{e}")
       }
-      let b = birth_of.get(out_name).unwrap()
-      let d = death_of.get(out_name).unwrap()
+      let b = match birth_of.get(out_name) {
+        Some(v) => v
+        None =>
+          raise ShapeError("planner: missing birth step for '\{out_name}'")
+      }
+      let d = match death_of.get(out_name) {
+        Some(v) => v
+        None =>
+          raise ShapeError("planner: missing death step for '\{out_name}'")
+      }
       let dt = match dtypes.get(out_name) {
         Some(t) => t
         None => @tensor.Float32

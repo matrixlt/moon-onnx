@@ -36,6 +36,7 @@ pub(all) enum CodegenTarget {
 }
 
 ///|
+/// 将代码生成目标枚举格式化为 CLI 目标名字符串（`wasm` / `wasm-gc` / `native`）。
 pub impl Show for CodegenTarget with fn output(self, logger) {
   match self {
     TargetWasm => logger.write_string("wasm")
@@ -55,6 +56,7 @@ pub(all) enum CodegenMode {
 }
 
 ///|
+/// 将代码生成模式枚举格式化为 CLI 模式名字符串（`arena` / `tensor`）。
 pub impl Show for CodegenMode with fn output(self, logger) {
   match self {
     Arena => logger.write_string("arena")

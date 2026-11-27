@@ -8,13 +8,12 @@ fn ArenaEmitter::emit_tensor_op(
   out_numel : Int32,
 ) -> Unit raise CodegenError {
   let ins = node.inputs
-  let _ = out_numel
   match node.op {
     @nn_ir.Pow => {
       let (a_buf, a_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sa = self.shapes.get(ins[0]).unwrap()
-      let sb = self.shapes.get(ins[1]).unwrap()
+      let sa = self.require_shape(ins[0])
+      let sb = self.require_shape(ins[1])
       let mut emitted_sq = false
       if sb.length() == 0 || (sb.length() == 1 && sb[0] == 1) {
         match self.graph.initializers.get(ins[1]) {
@@ -60,21 +59,20 @@ fn ArenaEmitter::emit_tensor_op(
     @nn_ir.Pad(mode~, pads~, constant_value~) => {
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let rank = sx.length()
       let raw_pads : Array[Int32] = if ins.length() >= 2 && ins[1] != "" {
-        let b = self.graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
-            e => raise TensorErr("\{e}")
-          }
+        let b = self.require_init_i64_buf(ins[1])
         Array::makei(b.length(), fn(k) { b[k].to_int() })
       } else {
-        pads.unwrap()
+        match pads {
+          Some(p) => p
+          None => raise UnsupportedGraph("arena Pad: missing pads")
+        }
       }
       let pb = Array::make(rank, 0)
       if ins.length() >= 4 && ins[3] != "" {
-        let ab = self.graph.initializers.get(ins[3]).unwrap().to_i64_buffer() catch {
-            e => raise TensorErr("\{e}")
-          }
+        let ab = self.require_init_i64_buf(ins[3])
         let k_ax = ab.length()
         for k = 0; k < k_ax; k = k + 1 {
           let ax = ab[k].to_int()
@@ -87,9 +85,7 @@ fn ArenaEmitter::emit_tensor_op(
         }
       }
       let cval : Float = if ins.length() >= 3 && ins[2] != "" {
-        self.graph.initializers.get(ins[2]).unwrap().get_f32_flat(0) catch {
-          e => raise TensorErr("\{e}")
-        }
+        self.require_init_f32_scalar(ins[2])
       } else {
         match constant_value {
           Some(v) => v
@@ -160,29 +156,25 @@ fn ArenaEmitter::emit_tensor_op(
     @nn_ir.Slice(starts~, ends~, axes~, steps~) => {
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let rank = sx.length()
       let s_arr : Array[Int64] = if ins.length() >= 2 && ins[1] != "" {
-        let b = self.graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
-            e => raise TensorErr("\{e}")
-          }
+        let b = self.require_init_i64_buf(ins[1])
         Array::makei(b.length(), fn(k) { b[k] })
       } else {
-        let v = starts.unwrap()
-        Array::makei(v.length(), fn(k) { v[k].to_int64() })
+        match starts {
+          Some(v) => Array::makei(v.length(), fn(k) { v[k].to_int64() })
+          None => raise UnsupportedGraph("arena Slice: missing starts")
+        }
       }
       let a_opt : Array[Int32]? = if ins.length() >= 4 && ins[3] != "" {
-        let b = self.graph.initializers.get(ins[3]).unwrap().to_i64_buffer() catch {
-            e => raise TensorErr("\{e}")
-          }
+        let b = self.require_init_i64_buf(ins[3])
         Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
       } else {
         axes
       }
       let st_opt : Array[Int32]? = if ins.length() >= 5 && ins[4] != "" {
-        let b = self.graph.initializers.get(ins[4]).unwrap().to_i64_buffer() catch {
-            e => raise TensorErr("\{e}")
-          }
+        let b = self.require_init_i64_buf(ins[4])
         Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
       } else {
         steps
@@ -234,7 +226,7 @@ fn ArenaEmitter::emit_tensor_op(
     @nn_ir.Transpose(perm~) => {
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let rank = sx.length()
       let eff_perm = if perm.length() == rank {
         perm
@@ -271,7 +263,7 @@ fn ArenaEmitter::emit_tensor_op(
           "  // fused directly into MatMulInteger output\n",
         )
       } else {
-        let in_param = self.input_param_of.get(ins[0]).unwrap()
+        let in_param = self.require_input_param(ins[0])
         let (y_buf, y_off) = self.resolve_f32_loc(out_n)
         self.body.write_string(
           "  for k_i = 0; k_i < \{out_numel}; k_i = k_i + 1 { \{y_buf}[\{y_off} + k_i] = Float::from_int(\{in_param}[k_i].to_int()) }\n",
@@ -293,7 +285,7 @@ fn ArenaEmitter::emit_tensor_op(
       } else {
         self.resolve_f32_loc(out_n)
       }
-      let sd = self.shapes.get(ins[0]).unwrap()
+      let sd = self.require_shape(ins[0])
       let rank = sd.length()
       let ax = if axis < 0 { axis + rank } else { axis }
       let axis_dim = sd[ax]
@@ -327,8 +319,8 @@ fn ArenaEmitter::emit_tensor_op(
         }
         None => {
           // 动态 Int64 输入索引查表（如 Transformer Embedding 表查表）
-          let idx_param = self.input_param_of.get(ins[1]).unwrap()
-          let idx_sh = self.shapes.get(ins[1]).unwrap()
+          let idx_param = self.require_input_param(ins[1])
+          let idx_sh = self.require_shape(ins[1])
           let idx_len = @tensor.num_elements(idx_sh) catch {
             e => raise ShapeError("\{e}")
           }
@@ -346,7 +338,7 @@ fn ArenaEmitter::emit_tensor_op(
     }
     @nn_ir.Split(axis~, ..) => {
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let rank = sx.length()
       let ax = if axis < 0 { axis + rank } else { axis }
       let axis_dim = sx[ax]
@@ -364,7 +356,7 @@ fn ArenaEmitter::emit_tensor_op(
         if pn == "" {
           continue
         }
-        let psh = self.shapes.get(pn).unwrap()
+        let psh = self.require_shape(pn)
         let part_dim = psh[ax]
         let part_inner = part_dim * inner
         let (p_buf, p_off) = self.resolve_f32_loc(pn)
@@ -382,7 +374,7 @@ fn ArenaEmitter::emit_tensor_op(
     }
     @nn_ir.Concat(axis~) => {
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let s0 = self.shapes.get(ins[0]).unwrap()
+      let s0 = self.require_shape(ins[0])
       let rank = s0.length()
       let ax = if axis < 0 { axis + rank } else { axis }
       let total_axis = out_sh[ax]
@@ -397,7 +389,7 @@ fn ArenaEmitter::emit_tensor_op(
       let mut dst_axis_off = 0
       for t_idx = 0; t_idx < ins.length(); t_idx = t_idx + 1 {
         let (s_buf, s_off) = self.resolve_f32_loc(ins[t_idx])
-        let ts = self.shapes.get(ins[t_idx]).unwrap()
+        let ts = self.require_shape(ins[t_idx])
         let chunk = ts[ax] * inner
         if outer == 1 {
           self.body.write_string(
@@ -414,12 +406,10 @@ fn ArenaEmitter::emit_tensor_op(
     @nn_ir.ReduceMean(axes~, ..) => {
       let (x_buf, x_off) = self.resolve_f32_loc(ins[0])
       let (y_buf, y_off) = self.resolve_f32_loc(out_n)
-      let sx = self.shapes.get(ins[0]).unwrap()
+      let sx = self.require_shape(ins[0])
       let rank = sx.length()
       let ax_opt : Array[Int32]? = if ins.length() >= 2 && ins[1] != "" {
-        let b = self.graph.initializers.get(ins[1]).unwrap().to_i64_buffer() catch {
-            e => raise TensorErr("\{e}")
-          }
+        let b = self.require_init_i64_buf(ins[1])
         Some(Array::makei(b.length(), fn(k) { b[k].to_int() }))
       } else {
         axes
